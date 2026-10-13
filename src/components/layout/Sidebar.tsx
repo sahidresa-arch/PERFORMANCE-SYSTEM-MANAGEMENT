@@ -21,6 +21,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Users,
+  PackageSearch,
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -534,18 +535,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       <DollarSign className="w-3.5 h-3.5 shrink-0" />
                       <span className="truncate">BOPO</span>
                     </button>
-
-                    <button
-                      onClick={() => setActiveMenu('accounting_admin')}
-                      className={`w-full h-[36px] flex items-center space-x-2.5 px-3 rounded-lg text-left transition-colors cursor-pointer text-[12px] ${
-                        activeMenu === 'accounting_admin'
-                          ? 'bg-[#F3E8FF] text-[#6D28D9] border-l-[2px] border-[#7C3AED] font-semibold'
-                          : 'text-[#374151] hover:bg-[#F3E8FF]/50 hover:text-[#6D28D9]'
-                      }`}
-                    >
-                      <FileSpreadsheet className="w-3.5 h-3.5 shrink-0" />
-                      <span className="truncate">Administrasi Outlet</span>
-                    </button>
                   </div>
                 </div>
               )}
@@ -619,6 +608,24 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   </div>
                 </div>
               )}
+            </div>
+
+            {/* 6. LOST N FOUND STANDALONE MENU */}
+            <div>
+              <button
+                onClick={() => setActiveMenu('lost_and_found')}
+                title="Lost N Found"
+                className={`w-full h-[42px] px-3.5 flex items-center rounded-lg transition-colors cursor-pointer text-left ${
+                  collapsed ? 'justify-center px-0' : 'space-x-3'
+                } ${
+                  activeMenu === 'lost_and_found'
+                    ? 'bg-[#3D1A5E] text-white border-l-[3px] border-[#FACC15] font-semibold'
+                    : 'text-[#374151] hover:bg-[#F3E8FF]/60 hover:text-[#4A1D6A]'
+                }`}
+              >
+                <PackageSearch className="w-4 h-4 shrink-0" />
+                {!collapsed && <span className="truncate">Lost N Found</span>}
+              </button>
             </div>
 
             {/* Admin Management */}

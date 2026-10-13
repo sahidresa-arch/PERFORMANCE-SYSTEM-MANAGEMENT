@@ -21,6 +21,20 @@ import {
   Clock,
   ArrowRight,
   ShieldAlert,
+  Wind,
+  Layers,
+  Box,
+  DoorClosed,
+  Trash2,
+  Bath,
+  Droplet,
+  Droplets,
+  Wrench,
+  Lightbulb,
+  Filter,
+  Cpu,
+  Leaf,
+  CheckSquare,
 } from 'lucide-react';
 
 interface ToiletInspectionProps {
@@ -29,6 +43,28 @@ interface ToiletInspectionProps {
   onDateChange: (date: string) => void;
   initialMode?: 'dashboard' | 'form';
 }
+
+const getChecklistIcon = (key: string) => {
+  switch (key) {
+    case 'bau': return <Wind className="w-4 h-4 text-amber-600" />;
+    case 'lantai': return <Layers className="w-4 h-4 text-blue-600" />;
+    case 'dinding': return <Box className="w-4 h-4 text-slate-600" />;
+    case 'pintu': return <DoorClosed className="w-4 h-4 text-amber-700" />;
+    case 'tSampah': return <Trash2 className="w-4 h-4 text-rose-600" />;
+    case 'cermin': return <Sparkles className="w-4 h-4 text-cyan-600" />;
+    case 'closet': return <Bath className="w-4 h-4 text-indigo-600" />;
+    case 'urinoir': return <Droplet className="w-4 h-4 text-teal-600" />;
+    case 'tissu': return <FileText className="w-4 h-4 text-orange-600" />;
+    case 'wastafel': return <Bath className="w-4 h-4 text-sky-600" />;
+    case 'soap': return <Droplets className="w-4 h-4 text-pink-600" />;
+    case 'janitor': return <Wrench className="w-4 h-4 text-slate-700" />;
+    case 'lampu': return <Lightbulb className="w-4 h-4 text-yellow-500" />;
+    case 'floorDrain': return <Filter className="w-4 h-4 text-purple-600" />;
+    case 'calmatic': return <Cpu className="w-4 h-4 text-emerald-600" />;
+    case 'calfresh': return <Leaf className="w-4 h-4 text-green-600" />;
+    default: return <CheckSquare className="w-4 h-4 text-slate-500" />;
+  }
+};
 
 const DEFAULT_CHECKLIST: ToiletChecklist = {
   bau: '',
@@ -76,7 +112,7 @@ export const ToiletInspection: React.FC<ToiletInspectionProps> = ({
   const [formOutletId, setFormOutletId] = useState<string>(defaultOutletId);
   const [formToiletType, setFormToiletType] = useState<'Pria' | 'Wanita'>('Pria');
   const [formShowNumber, setFormShowNumber] = useState<number>(1);
-  const [inspectorName, setInspectorName] = useState(currentUser?.name || '');
+  const [inspectorName, setInspectorName] = useState('');
   const [notes, setNotes] = useState('');
   const [statusMessage, setStatusMessage] = useState('');
 
@@ -115,10 +151,11 @@ export const ToiletInspection: React.FC<ToiletInspectionProps> = ({
   useEffect(() => {
     if (existingRecord) {
       setChecklist(existingRecord.checklist || DEFAULT_CHECKLIST);
-      setInspectorName(existingRecord.inspectorName || currentUser?.name || '');
+      setInspectorName(existingRecord.inspectorName || '');
       setNotes(existingRecord.notes || '');
     } else {
       setChecklist(DEFAULT_CHECKLIST);
+      setInspectorName('');
       setNotes('');
     }
   }, [formOutletId, selectedDate, formToiletType, formShowNumber]);
@@ -538,11 +575,16 @@ export const ToiletInspection: React.FC<ToiletInspectionProps> = ({
                         }`}
                       >
                         <div>
-                          <span className="text-[10px] font-black text-slate-400 block mb-0.5">
-                            #{idx + 1}
-                          </span>
-                          <h4 className="text-xs font-black text-slate-900 leading-tight mb-2 truncate">
-                            {item.label}
+                          <div className="flex items-center justify-center mb-1.5">
+                            <span className="p-1.5 rounded-xl bg-white border border-slate-200/80 shadow-2xs shrink-0 flex items-center justify-center">
+                              {getChecklistIcon(item.key)}
+                            </span>
+                          </div>
+                          <h4
+                            className="text-xs font-black text-slate-900 leading-tight mb-2 truncate"
+                            title={item.key === 'urinoir' && formToiletType === 'Wanita' ? 'Dispenser FHU' : item.label}
+                          >
+                            {item.key === 'urinoir' && formToiletType === 'Wanita' ? 'Dispenser FHU' : item.label}
                           </h4>
                         </div>
 
@@ -928,7 +970,7 @@ export const ToiletInspection: React.FC<ToiletInspectionProps> = ({
                   const outletName = outlets.find((o) => o.id === rRecord.outletId)?.name || rRecord.outletId;
                   const damagedItems = CHECKLIST_ITEMS.filter(
                     (ci) => rRecord.checklist?.[ci.key as keyof ToiletChecklist] === 'R'
-                  ).map((ci) => ci.label);
+                  ).map((ci) => (ci.key === 'urinoir' && rRecord.type === 'Wanita' ? 'Dispenser FHU' : ci.label));
 
                   return (
                     <div

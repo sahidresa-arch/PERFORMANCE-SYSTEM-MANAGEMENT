@@ -57,13 +57,18 @@ export const Header: React.FC<HeaderProps> = ({
         </div>
       </div>
 
-      {/* Tengah: Header visi di tengah top bar */}
-      <div className="hidden lg:flex flex-col text-center px-4 py-1">
-        <p className="text-[11px] font-semibold text-[#374151] leading-tight">
-          <span className="font-bold text-[#4A1D6A]">Visi Cinema XXI:</span> Menjadi jejaring bioskop terbaik di dunia, dan menjadi kebanggaan Indonesia.
-        </p>
-        <p className="text-[9px] tracking-widest uppercase font-semibold text-[#6B7280] mt-0.5">
-          UNCOMPROMISED QUALITY, AFFORDABLE ENTERTAINMENT, FOREVER BETTER
+      {/* Tengah: Header Visi & Values Cinema XXI */}
+      <div className="hidden lg:flex flex-col items-center justify-center text-center px-4 py-1">
+        <div className="flex items-center space-x-2">
+          <span className="px-2 py-0.5 rounded-md bg-[#581c87] text-[#FEF08A] font-black text-[10px] tracking-wider uppercase shrink-0">
+            VISI CINEMA XXI
+          </span>
+          <span className="text-xs font-extrabold text-slate-900 leading-tight">
+            Menjadi jejaring bioskop terbaik di dunia, dan menjadi kebanggaan Indonesia.
+          </span>
+        </div>
+        <p className="text-[10px] tracking-[0.2em] uppercase font-black text-[#B45309] mt-0.5">
+          UNCOMPROMISED QUALITY &bull; AFFORDABLE ENTERTAINMENT &bull; FOREVER BETTER
         </p>
       </div>
 

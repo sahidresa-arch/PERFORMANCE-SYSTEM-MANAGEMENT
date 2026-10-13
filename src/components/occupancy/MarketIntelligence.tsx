@@ -20,7 +20,15 @@ interface MarketIntelligenceProps {
 export const MarketIntelligence: React.FC<MarketIntelligenceProps> = ({
   currentUser,
 }) => {
-  const outlets = useMemo(() => StorageService.getOutlets(), []);
+  const rawOutlets = useMemo(() => StorageService.getOutlets(), []);
+  const isManagerOrCleaner = (currentUser?.role === 'manager' || currentUser?.role === 'cleaner') && currentUser?.outletId;
+  const outlets = useMemo(() => {
+    if (isManagerOrCleaner) {
+      return rawOutlets.filter((o) => o.id === currentUser.outletId);
+    }
+    return rawOutlets;
+  }, [rawOutlets, isManagerOrCleaner, currentUser?.outletId]);
+
   const defaultOutletId =
     currentUser?.outletId || (outlets.length > 0 ? outlets[0].id : '');
   const [selectedOutletId, setSelectedOutletId] = useState<string>(defaultOutletId);
@@ -248,7 +256,8 @@ export const MarketIntelligence: React.FC<MarketIntelligenceProps> = ({
             <select
               value={selectedOutletId}
               onChange={(e) => setSelectedOutletId(e.target.value)}
-              className="text-xs font-bold px-3 py-1.5 rounded-xl border border-slate-300 bg-white text-slate-800 shadow-2xs focus:border-amber-400"
+              disabled={Boolean(isManagerOrCleaner)}
+              className="text-xs font-bold px-3 py-1.5 rounded-xl border border-slate-300 bg-white text-slate-800 shadow-2xs focus:border-amber-400 disabled:bg-slate-100 disabled:text-slate-500 disabled:cursor-not-allowed"
             >
               {outlets.map((o) => (
                 <option key={o.id} value={o.id}>

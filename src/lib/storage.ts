@@ -14,6 +14,7 @@ import {
   BopoRecord,
   Employee,
   EmployeeKpiRecord,
+  LostAndFoundRecord,
 } from '../types';
 import {
   INITIAL_AREAS,
@@ -41,6 +42,7 @@ const KEYS = {
   BOPO: 'cinema_xxi_bopo_records',
   EMPLOYEES: 'cinema_xxi_employees',
   EMPLOYEE_KPIS: 'cinema_xxi_employee_kpis',
+  LOST_FOUND: 'cinema_xxi_lost_and_found',
 };
 
 // Helper perbandingan teks & regex yang aman
@@ -2169,6 +2171,88 @@ export const StorageService = {
   saveEmployeeKpis(records: EmployeeKpiRecord[]) {
     localStorage.setItem(KEYS.EMPLOYEE_KPIS, JSON.stringify(records));
     this.broadcastChange('employee-kpis');
+  },
+
+  // Lost & Found
+  getLostAndFoundRecords(): LostAndFoundRecord[] {
+    const raw = localStorage.getItem(KEYS.LOST_FOUND);
+    if (!raw) {
+      const defaults: LostAndFoundRecord[] = [
+        {
+          id: 'laf_1',
+          outletId: 'the-park-sawangan-xxi',
+          date: '2026-10-13',
+          time: '14:30',
+          location: 'Studio 1 Row H',
+          showNumber: 2,
+          category: 'Elektronik/HP',
+          itemName: 'iPhone 15 Pro Dark Blue',
+          description: 'Casing hitam bening, ada stiker XXI, kondisi layar mati.',
+          finderName: 'Cleaner Sawangan',
+          status: 'Tersimpan',
+          notes: 'Disimpan di brankas security office.',
+        },
+        {
+          id: 'laf_2',
+          outletId: 'margo-city-xxi',
+          date: '2026-10-12',
+          time: '19:15',
+          location: 'Toilet Wanita',
+          showNumber: 4,
+          category: 'Dompet/Dokumen',
+          itemName: 'Dompet Kulit Cokelat Charles & Keith',
+          description: 'Berisi KTP a.n Budi Santoso, 2 kartu kredit, cash Rp 250rb.',
+          finderName: 'Cleaner Margo',
+          status: 'Dikembalikan',
+          claimedBy: 'Budi Santoso',
+          claimedPhone: '081298765432',
+          claimedIdentity: '3276012345670001',
+          claimedDate: '2026-10-12 21:00',
+          notes: 'Diserahkan langsung oleh Shift Supervisor.',
+        },
+        {
+          id: 'laf_3',
+          outletId: 'aeon-sentul-xxi',
+          date: '2026-10-11',
+          time: '16:00',
+          location: 'Cafe XXI Table 4',
+          showNumber: 0,
+          category: 'Kunci',
+          itemName: 'Kunci Mobil Honda dengan Gantungan XXI',
+          description: 'Kunci smartkey Honda HRV warna hitam.',
+          finderName: 'Asep Supriatna',
+          status: 'Tersimpan',
+          notes: 'Disimpan di Laci Kasir Cafe.',
+        },
+      ];
+      localStorage.setItem(KEYS.LOST_FOUND, JSON.stringify(defaults));
+      return defaults;
+    }
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return [];
+    }
+  },
+
+  saveLostAndFoundRecord(rec: LostAndFoundRecord): LostAndFoundRecord[] {
+    const list = this.getLostAndFoundRecords();
+    const idx = list.findIndex((item) => item.id === rec.id);
+    if (idx >= 0) {
+      list[idx] = rec;
+    } else {
+      list.unshift(rec);
+    }
+    localStorage.setItem(KEYS.LOST_FOUND, JSON.stringify(list));
+    this.broadcastChange('lost-found');
+    return list;
+  },
+
+  deleteLostAndFoundRecord(id: string): LostAndFoundRecord[] {
+    const list = this.getLostAndFoundRecords().filter((item) => item.id !== id);
+    localStorage.setItem(KEYS.LOST_FOUND, JSON.stringify(list));
+    this.broadcastChange('lost-found');
+    return list;
   },
 };
 

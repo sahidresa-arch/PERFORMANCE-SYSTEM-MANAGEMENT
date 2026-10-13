@@ -16,10 +16,10 @@ import { MarketIntelligence } from './components/occupancy/MarketIntelligence';
 import { HistoryRekapFilm } from './components/occupancy/HistoryRekapFilm';
 import { ToiletInspection } from './components/inspection/ToiletInspection';
 import { BopoView } from './components/accounting/BopoView';
-import { OutletAdministrationView } from './components/accounting/OutletAdministrationView';
 import { UserOutletManagement } from './components/admin/UserOutletManagement';
 import { EmployeesView } from './components/hc/EmployeesView';
 import { KpiKaryawanView } from './components/hc/KpiKaryawanView';
+import { LostAndFoundView } from './components/lost_found/LostAndFoundView';
 import { SettingsModal } from './components/settings/SettingsModal';
 
 function getTodayDateString(): string {
@@ -286,13 +286,6 @@ export default function App() {
               />
             )}
 
-            {activeMenu === 'accounting_admin' && (
-              <OutletAdministrationView
-                currentUser={currentUser}
-                selectedDate={selectedDate}
-              />
-            )}
-
             {/* HC Area Submenus */}
             {activeMenu === 'hc_employees' && (
               <EmployeesView
@@ -303,6 +296,13 @@ export default function App() {
 
             {activeMenu === 'hc_kpi' && (
               <KpiKaryawanView
+                currentUser={currentUser}
+                selectedDate={selectedDate}
+              />
+            )}
+
+            {activeMenu === 'lost_and_found' && (
+              <LostAndFoundView
                 currentUser={currentUser}
                 selectedDate={selectedDate}
               />

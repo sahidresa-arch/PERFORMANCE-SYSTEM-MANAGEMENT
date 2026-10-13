@@ -534,6 +534,7 @@ export const InputDataSales: React.FC<InputDataSalesProps> = ({
               <div className="relative">
                 <input
                   type="number"
+                  inputMode="numeric"
                   min="0"
                   disabled={isLocked}
                   readOnly={isLocked}
@@ -556,6 +557,7 @@ export const InputDataSales: React.FC<InputDataSalesProps> = ({
               <div className="relative">
                 <input
                   type="number"
+                  inputMode="numeric"
                   min="0"
                   disabled={isLocked}
                   readOnly={isLocked}

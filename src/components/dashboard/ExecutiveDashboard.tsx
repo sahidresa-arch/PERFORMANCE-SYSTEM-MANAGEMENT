@@ -259,6 +259,30 @@ export const ExecutiveDashboard: React.FC<ExecutiveDashboardProps> = ({
         </div>
       </div>
 
+      {/* Corporate Vision & Values Banner */}
+      <div className="p-4 sm:p-5 rounded-2xl bg-gradient-to-r from-amber-950 via-slate-900 to-amber-900 text-white shadow-md border border-amber-500/30 flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div className="space-y-1">
+          <div className="flex items-center space-x-2">
+            <span className="px-2.5 py-0.5 rounded-md bg-amber-500 text-slate-950 font-black text-[10px] tracking-wider uppercase">
+              VISI CINEMA XXI
+            </span>
+            <span className="text-xs font-semibold text-amber-200">Corporate Vision &amp; Commitment</span>
+          </div>
+          <h2 className="text-sm sm:text-base font-extrabold text-white tracking-tight leading-snug">
+            &ldquo;Menjadi jejaring bioskop terbaik di dunia, dan menjadi kebanggaan Indonesia.&rdquo;
+          </h2>
+        </div>
+
+        <div className="p-3 rounded-xl bg-black/40 border border-amber-400/25 backdrop-blur-sm text-center shrink-0">
+          <span className="text-[9px] uppercase font-bold text-amber-300/80 tracking-widest block mb-0.5">
+            OUR THREE PILLARS
+          </span>
+          <p className="text-xs sm:text-sm font-black tracking-widest text-amber-300 uppercase">
+            UNCOMPROMISED QUALITY &bull; AFFORDABLE ENTERTAINMENT &bull; FOREVER BETTER
+          </p>
+        </div>
+      </div>
+
       {/* 2. 5-Show Showtime Realtime Status Bar */}
       <div className="p-3 rounded-2xl bg-white border border-slate-200/90 shadow-2xs">
         <div className="flex items-center justify-between mb-2">

@@ -195,3 +195,22 @@ export interface EmployeeKpiRecord {
   gradedBy: string;
 }
 
+export interface LostAndFoundRecord {
+  id: string;
+  outletId: string;
+  date: string; // YYYY-MM-DD
+  time: string; // HH:mm
+  location: string;
+  showNumber?: number;
+  category: 'Elektronik/HP' | 'Dompet/Dokumen' | 'Kunci' | 'Pakaian/Aksesoris' | 'Kacamata' | 'Lainnya';
+  itemName: string;
+  description: string;
+  finderName: string;
+  status: 'Tersimpan' | 'Dikembalikan' | 'Disposal';
+  claimedBy?: string;
+  claimedPhone?: string;
+  claimedIdentity?: string;
+  claimedDate?: string;
+  notes?: string;
+}
+

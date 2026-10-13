@@ -72,8 +72,8 @@ export const BopoView: React.FC<BopoViewProps> = ({ currentUser, selectedDate })
     (e) => e.divisi === 'F&B' || e.divisi === 'Kasir' || e.divisi === 'Cleaning' || e.divisi === 'Admin'
   );
 
-  const countCinema = Math.max(1, cinemaEmployees.length);
-  const countFnb = Math.max(1, fnbEmployees.length);
+  const countCinema = cinemaEmployees.length;
+  const countFnb = fnbEmployees.length;
 
   const gajiCinema = countCinema * outletUmr;
   const gajiFnb = countFnb * outletUmr;
