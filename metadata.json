@@ -1,0 +1,6 @@
+{
+  "name": "Cinema XXI Sales & Performance Management System",
+  "description": "Sistem monitoring penjualan pershow bioskop Cinema XXI Area Bogor 1 & Depok dan Area Bogor 2 dengan fitur analitik sales, rekap okupansi, monitoring baking, kartu inspeksi toilet, dan perbandingan KPI.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

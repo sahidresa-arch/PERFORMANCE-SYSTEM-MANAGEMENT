@@ -1,0 +1,57 @@
+@import "tailwindcss";
+
+@layer utilities {
+  .font-cinema-script {
+    font-family: 'Alex Brush', 'Satisfy', 'Great Vibes', cursive;
+  }
+  .font-cinema-serif {
+    font-family: 'Cinzel', 'Times New Roman', Georgia, serif;
+  }
+  .font-cinema-cursive {
+    font-family: 'Alex Brush', 'Great Vibes', 'Satisfy', cursive;
+  }
+}
+
+@keyframes slideInRight {
+  from {
+    transform: translateX(110%);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+.animate-slide-in {
+  animation: slideInRight 0.35s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+body {
+  font-family: 'Inter', 'Poppins', sans-serif;
+  font-size: 12px;
+  font-weight: 500;
+  color: #374151;
+  background-color: #F8F9FC;
+  overflow-x: hidden;
+}
+
+/* Custom Scrollbars for Zoomed Displays & Wide Tables */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f1f5f9;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
