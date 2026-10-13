@@ -73,10 +73,10 @@ export function getSupabase(): SupabaseClient | null {
     return null;
   }
 
-  const clientKey = `${url}___${key}`;
+  const clientKey = `${url.trim()}___${key.trim()}`;
   if (!supabaseInstance || currentClientKey !== clientKey) {
     try {
-      supabaseInstance = createClient(url, key, {
+      supabaseInstance = createClient(url.trim(), key.trim(), {
         auth: { persistSession: true },
       });
       currentClientKey = clientKey;
@@ -272,6 +272,153 @@ export async function fetchOccupancyFromSupabase(
 }
 
 /**
+ * Merges remote sales records from Supabase into local storage and notifies UI components
+ */
+export async function mergeRemoteSalesToLocal(): Promise<boolean> {
+  const remoteSales = await fetchSalesFromSupabase();
+  if (!remoteSales || remoteSales.length === 0) return false;
+
+  const currentLocal = StorageService.getDailySales();
+  let updated = false;
+
+  remoteSales.forEach((remote) => {
+    const idx = currentLocal.findIndex(
+      (s) => s.outletId === remote.outletId && s.date === remote.date
+    );
+    if (idx >= 0) {
+      const localStr = JSON.stringify(currentLocal[idx].shows || []);
+      const remoteStr = JSON.stringify(remote.shows || []);
+      if (localStr !== remoteStr) {
+        currentLocal[idx] = remote;
+        updated = true;
+      }
+    } else {
+      currentLocal.push(remote);
+      updated = true;
+    }
+  });
+
+  if (updated) {
+    localStorage.setItem('cinema_xxi_daily_sales', JSON.stringify(currentLocal));
+    StorageService.broadcastChange('sales');
+  }
+
+  return updated;
+}
+
+/**
+ * Merges remote occupancy records from Supabase into local storage and notifies UI components
+ */
+export async function mergeRemoteOccupancyToLocal(): Promise<boolean> {
+  const remoteOcc = await fetchOccupancyFromSupabase();
+  if (!remoteOcc || remoteOcc.length === 0) return false;
+
+  let updated = false;
+  remoteOcc.forEach((row: any) => {
+    const outletId = row.outlet_id;
+    const date = row.date;
+    const rows = Array.isArray(row.rows) ? row.rows : [];
+    if (outletId && date && rows.length > 0) {
+      const key = `cinema_xxi_occupancy_${outletId}_${date}`;
+      const existingRaw = localStorage.getItem(key);
+      const newRaw = JSON.stringify(rows);
+      if (existingRaw !== newRaw) {
+        localStorage.setItem(key, newRaw);
+        updated = true;
+      }
+    }
+  });
+
+  if (updated) {
+    StorageService.broadcastChange('occupancy');
+  }
+
+  return updated;
+}
+
+/**
+ * Setup Realtime channel listener and periodic sync for Supabase database changes
+ */
+export function setupSupabaseRealtimeSync(): () => void {
+  const client = getSupabase();
+  if (!client) {
+    return () => {};
+  }
+
+  // Initial pull on load
+  mergeRemoteSalesToLocal();
+  mergeRemoteOccupancyToLocal();
+
+  // Setup Supabase Realtime channel subscription
+  try {
+    const channel = client
+      .channel('cinema_xxi_realtime_changes')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'cinema_sales' },
+        (payload: any) => {
+          if (payload.new && payload.new.outlet_id && payload.new.date) {
+            const remoteRecord: DailySalesRecord = {
+              id: payload.new.id,
+              outletId: payload.new.outlet_id,
+              date: payload.new.date,
+              shows: Array.isArray(payload.new.shows) ? payload.new.shows : [],
+            };
+            const currentLocal = StorageService.getDailySales();
+            const idx = currentLocal.findIndex(
+              (s) => s.outletId === remoteRecord.outletId && s.date === remoteRecord.date
+            );
+            if (idx >= 0) {
+              currentLocal[idx] = remoteRecord;
+            } else {
+              currentLocal.push(remoteRecord);
+            }
+            localStorage.setItem('cinema_xxi_daily_sales', JSON.stringify(currentLocal));
+            StorageService.broadcastChange('sales');
+          }
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'cinema_occupancy' },
+        (payload: any) => {
+          if (payload.new && payload.new.outlet_id && payload.new.date) {
+            const outletId = payload.new.outlet_id;
+            const date = payload.new.date;
+            const rows = Array.isArray(payload.new.rows) ? payload.new.rows : [];
+            const key = `cinema_xxi_occupancy_${outletId}_${date}`;
+            localStorage.setItem(key, JSON.stringify(rows));
+            StorageService.broadcastChange('occupancy');
+          }
+        }
+      )
+      .subscribe();
+
+    // Lightweight 5-second polling fallback in case Realtime WebSockets are restricted
+    const intervalId = setInterval(() => {
+      mergeRemoteSalesToLocal();
+      mergeRemoteOccupancyToLocal();
+    }, 5000);
+
+    return () => {
+      try {
+        client.removeChannel(channel);
+      } catch {
+        // ignore
+      }
+      clearInterval(intervalId);
+    };
+  } catch (e) {
+    console.warn('Realtime subscription error:', e);
+    const intervalId = setInterval(() => {
+      mergeRemoteSalesToLocal();
+      mergeRemoteOccupancyToLocal();
+    }, 5000);
+    return () => clearInterval(intervalId);
+  }
+}
+
+/**
  * Push Semua Data Local ke Supabase
  */
 export async function uploadAllLocalToSupabase(): Promise<{
@@ -305,7 +452,6 @@ export async function uploadAllLocalToSupabase(): Promise<{
 
     for (const key of occupancyKeys) {
       const parts = key.replace('cinema_xxi_occupancy_', '').split('_');
-      // Format: {outletId}_{date}
       const date = parts.pop() || '';
       const outletId = parts.join('_');
       const raw = localStorage.getItem(key);

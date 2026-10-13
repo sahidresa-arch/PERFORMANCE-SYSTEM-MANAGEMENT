@@ -110,7 +110,7 @@ export default function App() {
     }
   }, []);
 
-  // Sync listener across windows / components
+  // Sync listener across windows / components & Supabase Realtime
   useEffect(() => {
     const handleStorageUpdate = (e: any) => {
       const type = e.detail?.type;
@@ -119,8 +119,15 @@ export default function App() {
       }
     };
     window.addEventListener('cinema-xxi-storage-update', handleStorageUpdate);
+
+    let cleanupSupabase: (() => void) | null = null;
+    import('./lib/supabase').then((m) => {
+      cleanupSupabase = m.setupSupabaseRealtimeSync();
+    });
+
     return () => {
       window.removeEventListener('cinema-xxi-storage-update', handleStorageUpdate);
+      if (cleanupSupabase) cleanupSupabase();
     };
   }, []);
 
