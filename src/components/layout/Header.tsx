@@ -3,7 +3,6 @@ import { User } from '../../types';
 import {
   Calendar,
   LogOut,
-  Film,
   Database,
 } from 'lucide-react';
 
@@ -27,9 +26,9 @@ export const Header: React.FC<HeaderProps> = ({
   onToggleSidebar,
 }) => {
   return (
-    <header className="sticky top-0 z-30 h-[56px] px-4 flex items-center justify-between bg-[#FFFFFF] border-b border-[#E5E7EB]">
-      {/* Kiri: Posisi logo di pojok kiri atas dengan gradient #4A1D6A ke #5E2B97 */}
-      <div className={`flex items-center space-x-2.5 transition-all duration-300 ${collapsed ? 'w-[72px]' : 'w-[250px]'} shrink-0`}>
+    <header className="sticky top-0 z-30 min-h-[60px] px-3 sm:px-4 py-1.5 flex items-center justify-between bg-[#FFFFFF] border-b border-[#E5E7EB] shadow-2xs gap-2">
+      {/* 1. Kiri: Logo Cinema XXI & Toggle Sidebar */}
+      <div className={`flex items-center space-x-2 transition-all duration-300 ${collapsed ? 'w-[72px]' : 'w-[200px] xl:w-[230px]'} shrink-0`}>
         {onToggleSidebar && (
           <button
             onClick={onToggleSidebar}
@@ -42,14 +41,14 @@ export const Header: React.FC<HeaderProps> = ({
             </svg>
           </button>
         )}
-        <div className="flex items-center space-x-2 px-3 py-1 rounded-xl bg-[#581c87] text-white shadow-xs overflow-hidden">
+        <div className="flex items-center space-x-2 px-2.5 py-1 rounded-xl bg-[#581c87] text-white shadow-xs overflow-hidden shrink-0">
           <span className="text-xl shrink-0 leading-none select-none">🎬</span>
           {!collapsed && (
-            <div className="flex items-baseline space-x-1.5 select-none whitespace-nowrap">
-              <span className="font-cinema-script text-2xl font-normal text-[#FEF08A] leading-none">
+            <div className="flex items-baseline space-x-1 select-none whitespace-nowrap">
+              <span className="font-cinema-script text-xl font-normal text-[#FEF08A] leading-none">
                 Cinema
               </span>
-              <span className="font-cinema-serif text-base font-black text-[#FACC15] tracking-wider leading-none">
+              <span className="font-cinema-serif text-sm font-black text-[#FACC15] tracking-wider leading-none">
                 XXI
               </span>
             </div>
@@ -57,29 +56,40 @@ export const Header: React.FC<HeaderProps> = ({
         </div>
       </div>
 
-      {/* Kanan: Role admin di kanan atas & controls */}
-      <div className="flex items-center space-x-2.5">
+      {/* 2. Tengah: Visi Cinema XXI & Three Pillars (Sesuai Gambar visi misi.png) */}
+      <div className="hidden lg:flex flex-col justify-center text-left mx-auto shrink min-w-0 overflow-hidden px-2">
+        <div className="text-xs sm:text-[13px] leading-snug truncate">
+          <span className="font-bold text-amber-600">Visi Cinema XXI:</span>{' '}
+          <span className="font-medium text-[#1d4ed8]">Menjadi jejaring bioskop terbaik di dunia, dan menjadi kebanggaan Indonesia.</span>
+        </div>
+        <p className="text-[10px] font-bold tracking-wide text-slate-500 uppercase mt-0.5 truncate">
+          UNCOMPROMISED QUALITY, AFFORDABLE ENTERTAINMENT, FOREVER BETTER
+        </p>
+      </div>
+
+      {/* 3. Kanan: Controls Group (Role Admin, Date Picker, Cloud & OCR, Logout) */}
+      <div className="flex items-center space-x-2 shrink-0">
         {/* Role Admin Badge */}
-        <div className="flex items-center space-x-2 px-2.5 py-1 rounded-full border border-[#E5E7EB] bg-[#F8F9FC] text-[#374151] text-xs">
+        <div className="flex items-center space-x-1.5 px-2.5 py-1 rounded-full border border-[#E5E7EB] bg-[#F8F9FC] text-[#374151] text-xs shrink-0">
           <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
           <div className="leading-tight text-left">
-            <span className="text-[9px] uppercase font-bold text-[#6D28D9] tracking-wider block">
+            <span className="text-[8px] uppercase font-bold text-[#6D28D9] tracking-wider block">
               ROLE: {currentUser?.role?.toUpperCase() || 'ADMIN'}
             </span>
-            <span className="text-[11px] font-bold text-[#111827] truncate max-w-[120px] block">
+            <span className="text-[10px] font-bold text-[#111827] truncate max-w-[100px] block">
               {currentUser?.name || 'Administrator'}
             </span>
           </div>
         </div>
 
         {/* Date Picker Button & Quick Today Reset */}
-        <div className="flex items-center space-x-1.5 px-2 py-1 rounded-lg border border-[#E5E7EB] bg-[#FFFFFF] text-[#374151] text-xs">
+        <div className="flex items-center space-x-1 px-2 py-1 rounded-lg border border-[#E5E7EB] bg-[#FFFFFF] text-[#374151] text-xs shrink-0">
           <Calendar className="w-3.5 h-3.5 text-[#6D28D9] shrink-0" />
           <input
             type="date"
             value={selectedDate}
             onChange={(e) => onDateChange(e.target.value)}
-            className="bg-transparent text-[11px] font-medium cursor-pointer outline-hidden focus:ring-0 p-0 text-[#111827]"
+            className="bg-transparent text-[10px] font-medium cursor-pointer outline-hidden focus:ring-0 p-0 text-[#111827]"
           />
           <button
             onClick={() => {
@@ -90,7 +100,7 @@ export const Header: React.FC<HeaderProps> = ({
               onDateChange(`${y}-${m}-${d}`);
             }}
             title="Kembali ke Tanggal Hari Ini"
-            className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-[#F3E8FF] text-[#6D28D9] hover:bg-[#E9D5FF] transition cursor-pointer"
+            className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-[#F3E8FF] text-[#6D28D9] hover:bg-[#E9D5FF] transition cursor-pointer"
           >
             Today
           </button>
@@ -100,20 +110,20 @@ export const Header: React.FC<HeaderProps> = ({
         <button
           onClick={onOpenSettings}
           title="Pengaturan Database Supabase & Mistral OCR"
-          className="flex items-center space-x-1.5 px-2.5 py-1 rounded-lg border border-[#E5E7EB] bg-[#FFFFFF] hover:bg-[#F3E8FF] text-[#6D28D9] transition cursor-pointer text-xs font-semibold"
+          className="flex items-center space-x-1 px-2.5 py-1 rounded-lg border border-[#E5E7EB] bg-[#FFFFFF] hover:bg-[#F3E8FF] text-[#6D28D9] transition cursor-pointer text-xs font-semibold shrink-0"
         >
           <Database className="w-3.5 h-3.5 text-[#6D28D9]" />
-          <span className="hidden md:inline text-[11px] text-[#4B5563]">Cloud &amp; OCR</span>
+          <span className="hidden md:inline text-[10px] text-[#4B5563]">Cloud &amp; OCR</span>
         </button>
 
         {/* Logout Button */}
         <button
           onClick={onLogout}
           title="Keluar dari Sistem"
-          className="flex items-center space-x-1 px-2.5 py-1 rounded-lg border border-red-200 bg-red-50 text-red-600 hover:bg-red-100 text-xs font-semibold transition cursor-pointer"
+          className="flex items-center space-x-1 px-2.5 py-1 rounded-lg border border-red-200 bg-red-50 text-red-600 hover:bg-red-100 text-xs font-semibold transition cursor-pointer shrink-0"
         >
           <LogOut className="w-3.5 h-3.5" />
-          <span className="hidden sm:inline text-[11px]">Keluar</span>
+          <span className="hidden sm:inline text-[10px]">Keluar</span>
         </button>
       </div>
     </header>
