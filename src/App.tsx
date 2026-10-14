@@ -16,6 +16,7 @@ import { MarketIntelligence } from './components/occupancy/MarketIntelligence';
 import { HistoryRekapFilm } from './components/occupancy/HistoryRekapFilm';
 import { ToiletInspection } from './components/inspection/ToiletInspection';
 import { BopoView } from './components/accounting/BopoView';
+import { WarehouseStockView } from './components/accounting/WarehouseStockView';
 import { UserOutletManagement } from './components/admin/UserOutletManagement';
 import { EmployeesView } from './components/hc/EmployeesView';
 import { KpiKaryawanView } from './components/hc/KpiKaryawanView';
@@ -32,18 +33,7 @@ function getTodayDateString(): string {
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(() => {
-    const stored = StorageService.getCurrentUser();
-    if (stored) return stored;
-    const isVisited = localStorage.getItem('cinema_xxi_visited');
-    if (!isVisited) {
-      localStorage.setItem('cinema_xxi_visited', 'true');
-      const admin = StorageService.getUsersList()[0];
-      if (admin) {
-        StorageService.setCurrentUser(admin);
-        return admin;
-      }
-    }
-    return null;
+    return StorageService.getCurrentUser();
   });
   const [selectedDate, setSelectedDate] = useState(() => getTodayDateString());
   const [activeMenu, setActiveMenu] = useState('dashboard');
@@ -281,6 +271,13 @@ export default function App() {
             {/* Accounting Submenus */}
             {activeMenu === 'accounting_bopo' && (
               <BopoView
+                currentUser={currentUser}
+                selectedDate={selectedDate}
+              />
+            )}
+
+            {activeMenu === 'accounting_inventory' && (
+              <WarehouseStockView
                 currentUser={currentUser}
                 selectedDate={selectedDate}
               />

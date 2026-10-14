@@ -348,6 +348,7 @@ export function setupSupabaseRealtimeSync(): () => void {
   // Initial pull on load
   mergeRemoteSalesToLocal();
   mergeRemoteOccupancyToLocal();
+  mergeRemoteConfigToLocal();
 
   // Setup Supabase Realtime channel subscription
   try {
@@ -482,4 +483,71 @@ export async function uploadAllLocalToSupabase(): Promise<{
       error: err.message,
     };
   }
+}
+
+/**
+ * Sinkronisasi Global System Config (API Keys & Settings) ke Supabase
+ */
+export async function syncConfigToSupabase(config: any): Promise<boolean> {
+  const client = getSupabase();
+  if (!client) return false;
+
+  try {
+    const { error } = await client
+      .from('cinema_config')
+      .upsert({ id: 'global', config, updated_at: new Date().toISOString() }, { onConflict: 'id' });
+    if (error) {
+      console.warn('Sync config to Supabase warning:', error);
+      return false;
+    }
+    return true;
+  } catch (e) {
+    console.warn('Supabase config sync error:', e);
+    return false;
+  }
+}
+
+/**
+ * Tarik Global Config dari Supabase dan simpan ke Local Storage jika ada API Key baru
+ */
+export async function mergeRemoteConfigToLocal(): Promise<boolean> {
+  const client = getSupabase();
+  if (!client) return false;
+
+  try {
+    const { data, error } = await client
+      .from('cinema_config')
+      .select('config')
+      .eq('id', 'global')
+      .single();
+
+    if (!error && data && data.config) {
+      const remoteConfig = data.config;
+      const currentConfig = StorageService.getConfig();
+
+      // Jika remote config punya mistralApiKey atau supabase key yang belum ada di local, sinkronkan
+      let changed = false;
+      if (remoteConfig.mistralApiKey && remoteConfig.mistralApiKey !== currentConfig.mistralApiKey) {
+        currentConfig.mistralApiKey = remoteConfig.mistralApiKey;
+        currentConfig.ocrProvider = 'mistral';
+        changed = true;
+      }
+
+      if (remoteConfig.supabaseUrl && !currentConfig.supabaseUrl) {
+        currentConfig.supabaseUrl = remoteConfig.supabaseUrl;
+        currentConfig.supabaseAnonKey = remoteConfig.supabaseAnonKey;
+        currentConfig.supabaseConnected = true;
+        changed = true;
+      }
+
+      if (changed) {
+        localStorage.setItem('cinema_xxi_config', JSON.stringify(currentConfig));
+        StorageService.broadcastChange('config');
+      }
+      return true;
+    }
+  } catch (e) {
+    console.warn('Fetch remote config error:', e);
+  }
+  return false;
 }

@@ -22,6 +22,7 @@ import {
   ChevronRight,
   Users,
   PackageSearch,
+  Boxes,
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -534,6 +535,18 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     >
                       <DollarSign className="w-3.5 h-3.5 shrink-0" />
                       <span className="truncate">BOPO</span>
+                    </button>
+
+                    <button
+                      onClick={() => setActiveMenu('accounting_inventory')}
+                      className={`w-full h-[36px] flex items-center space-x-2.5 px-3 rounded-lg text-left transition-colors cursor-pointer text-[12px] ${
+                        activeMenu === 'accounting_inventory'
+                          ? 'bg-[#F3E8FF] text-[#6D28D9] border-l-[2px] border-[#7C3AED] font-semibold'
+                          : 'text-[#374151] hover:bg-[#F3E8FF]/50 hover:text-[#6D28D9]'
+                      }`}
+                    >
+                      <Boxes className="w-3.5 h-3.5 shrink-0" />
+                      <span className="truncate">Stok Gudang &amp; Opname</span>
                     </button>
                   </div>
                 </div>

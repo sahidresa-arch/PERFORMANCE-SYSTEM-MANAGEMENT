@@ -90,8 +90,8 @@ export const OcrService = {
       }
     }
 
-    // TAHAP 2: Mistral OCR (Jika user secara eksplisit memilih Mistral & memasukkan API Key)
-    if (effectiveProvider === 'mistral' && effectiveMistralKey) {
+    // TAHAP 2: Mistral OCR (Otomatis diprioritaskan jika API Key Mistral tersedia)
+    if (effectiveMistralKey) {
       try {
         const mistralResult = await MistralService.processOccupancy(
           base64Image,
@@ -107,7 +107,7 @@ export const OcrService = {
           return mistralResult;
         }
       } catch (err) {
-        console.warn('Mistral Occupancy OCR error, falling back to Gemini Vision:', err);
+        console.warn('Mistral Occupancy OCR error, falling back to Gemini Vision / PDF parser:', err);
       }
     }
 

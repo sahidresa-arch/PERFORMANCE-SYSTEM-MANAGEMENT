@@ -15,6 +15,9 @@ import {
   Employee,
   EmployeeKpiRecord,
   LostAndFoundRecord,
+  WarehouseItem,
+  StockTransaction,
+  StockOpnameHistory,
 } from '../types';
 import {
   INITIAL_AREAS,
@@ -43,6 +46,9 @@ const KEYS = {
   EMPLOYEES: 'cinema_xxi_employees',
   EMPLOYEE_KPIS: 'cinema_xxi_employee_kpis',
   LOST_FOUND: 'cinema_xxi_lost_and_found',
+  WAREHOUSE_ITEMS: 'cinema_xxi_warehouse_items',
+  STOCK_TRANSACTIONS: 'cinema_xxi_stock_transactions',
+  STOCK_OPNAME_HISTORY: 'cinema_xxi_stock_opname_history',
 };
 
 // Helper perbandingan teks & regex yang aman
@@ -539,37 +545,42 @@ export const StorageService = {
   // Config
   getConfig(): SystemConfig {
     const raw = localStorage.getItem(KEYS.CONFIG);
-    if (!raw) {
-      const def: SystemConfig = {
-        supabaseUrl: '',
-        supabaseAnonKey: '',
-        supabaseConnected: false,
-        mistralApiKey: '',
-        ocrProvider: 'gemini',
-        activeTheme: 'gold_dark',
-      };
-      localStorage.setItem(KEYS.CONFIG, JSON.stringify(def));
-      return def;
+    let config: SystemConfig = {
+      supabaseUrl: '',
+      supabaseAnonKey: '',
+      supabaseConnected: false,
+      mistralApiKey: '',
+      ocrProvider: 'mistral',
+      activeTheme: 'gold_dark',
+    };
+    if (raw) {
+      try {
+        const parsed = JSON.parse(raw);
+        config = { ...config, ...parsed };
+      } catch {
+        // use default
+      }
     }
-    try {
-      return JSON.parse(raw);
-    } catch {
-      return {
-        supabaseUrl: '',
-        supabaseAnonKey: '',
-        supabaseConnected: false,
-        mistralApiKey: '',
-        ocrProvider: 'gemini',
-        activeTheme: 'gold_dark',
-      };
+    if (config.mistralApiKey && config.mistralApiKey.trim()) {
+      config.ocrProvider = 'mistral';
     }
+    return config;
   },
 
   saveConfig(conf: Partial<SystemConfig>): SystemConfig {
     const current = this.getConfig();
     const updated = { ...current, ...conf };
+    if (updated.mistralApiKey && updated.mistralApiKey.trim()) {
+      updated.ocrProvider = 'mistral';
+    }
     localStorage.setItem(KEYS.CONFIG, JSON.stringify(updated));
     this.broadcastChange('config');
+
+    // Sync global config to Supabase if connected
+    import('./supabase')
+      .then((m) => m.syncConfigToSupabase(updated))
+      .catch(() => {});
+
     return updated;
   },
 
@@ -2177,59 +2188,16 @@ export const StorageService = {
   getLostAndFoundRecords(): LostAndFoundRecord[] {
     const raw = localStorage.getItem(KEYS.LOST_FOUND);
     if (!raw) {
-      const defaults: LostAndFoundRecord[] = [
-        {
-          id: 'laf_1',
-          outletId: 'the-park-sawangan-xxi',
-          date: '2026-10-13',
-          time: '14:30',
-          location: 'Studio 1 Row H',
-          showNumber: 2,
-          category: 'Elektronik/HP',
-          itemName: 'iPhone 15 Pro Dark Blue',
-          description: 'Casing hitam bening, ada stiker XXI, kondisi layar mati.',
-          finderName: 'Cleaner Sawangan',
-          status: 'Tersimpan',
-          notes: 'Disimpan di brankas security office.',
-        },
-        {
-          id: 'laf_2',
-          outletId: 'margo-city-xxi',
-          date: '2026-10-12',
-          time: '19:15',
-          location: 'Toilet Wanita',
-          showNumber: 4,
-          category: 'Dompet/Dokumen',
-          itemName: 'Dompet Kulit Cokelat Charles & Keith',
-          description: 'Berisi KTP a.n Budi Santoso, 2 kartu kredit, cash Rp 250rb.',
-          finderName: 'Cleaner Margo',
-          status: 'Dikembalikan',
-          claimedBy: 'Budi Santoso',
-          claimedPhone: '081298765432',
-          claimedIdentity: '3276012345670001',
-          claimedDate: '2026-10-12 21:00',
-          notes: 'Diserahkan langsung oleh Shift Supervisor.',
-        },
-        {
-          id: 'laf_3',
-          outletId: 'aeon-sentul-xxi',
-          date: '2026-10-11',
-          time: '16:00',
-          location: 'Cafe XXI Table 4',
-          showNumber: 0,
-          category: 'Kunci',
-          itemName: 'Kunci Mobil Honda dengan Gantungan XXI',
-          description: 'Kunci smartkey Honda HRV warna hitam.',
-          finderName: 'Asep Supriatna',
-          status: 'Tersimpan',
-          notes: 'Disimpan di Laci Kasir Cafe.',
-        },
-      ];
-      localStorage.setItem(KEYS.LOST_FOUND, JSON.stringify(defaults));
-      return defaults;
+      return [];
     }
     try {
-      return JSON.parse(raw);
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.some((item: any) => item.id === 'laf_1')) {
+        const cleaned = parsed.filter((item: any) => !['laf_1', 'laf_2', 'laf_3'].includes(item.id));
+        localStorage.setItem(KEYS.LOST_FOUND, JSON.stringify(cleaned));
+        return cleaned;
+      }
+      return parsed;
     } catch {
       return [];
     }
@@ -2252,6 +2220,133 @@ export const StorageService = {
     const list = this.getLostAndFoundRecords().filter((item) => item.id !== id);
     localStorage.setItem(KEYS.LOST_FOUND, JSON.stringify(list));
     this.broadcastChange('lost-found');
+    return list;
+  },
+
+  // Warehouse & Inventory Management
+  getWarehouseItems(): WarehouseItem[] {
+    const raw = localStorage.getItem(KEYS.WAREHOUSE_ITEMS);
+    if (!raw) {
+      const defaultItems: WarehouseItem[] = [
+        { id: 'wh_1', outletId: 'the-park-sawangan-xxi', name: 'Popcorn Bucket 46oz XXI', unit: 'Pcs', initialStock: 500, minStock: 100, category: 'Kemasan Cafe' },
+        { id: 'wh_2', outletId: 'the-park-sawangan-xxi', name: 'Cup Cold XXI 16oz', unit: 'Pcs', initialStock: 800, minStock: 200, category: 'Kemasan Cafe' },
+        { id: 'wh_3', outletId: 'the-park-sawangan-xxi', name: 'Sedotan Steril XXI', unit: 'Pack', initialStock: 50, minStock: 10, category: 'Kemasan Cafe' },
+        { id: 'wh_4', outletId: 'the-park-sawangan-xxi', name: 'Jagung Popcorn Kernel (25kg)', unit: 'Bag', initialStock: 15, minStock: 3, category: 'Bahan Baku' },
+        { id: 'wh_5', outletId: 'the-park-sawangan-xxi', name: 'Minyak Mentega Popcorn', unit: 'Kanister', initialStock: 20, minStock: 5, category: 'Bahan Baku' },
+        { id: 'wh_6', outletId: 'the-park-sawangan-xxi', name: 'Tisu Toilet Jumbo Roll', unit: 'Roll', initialStock: 60, minStock: 15, category: 'Sanitasi' },
+        { id: 'wh_7', outletId: 'the-park-sawangan-xxi', name: 'Sabun Cuci Tangan Liquid 5L', unit: 'Gallon', initialStock: 8, minStock: 2, category: 'Sanitasi' },
+
+        { id: 'wh_8', outletId: 'margo-city-xxi', name: 'Popcorn Bucket 46oz XXI', unit: 'Pcs', initialStock: 1000, minStock: 200, category: 'Kemasan Cafe' },
+        { id: 'wh_9', outletId: 'margo-city-xxi', name: 'Cup Cold XXI 16oz', unit: 'Pcs', initialStock: 1500, minStock: 300, category: 'Kemasan Cafe' },
+        { id: 'wh_10', outletId: 'margo-city-xxi', name: 'Tisu Toilet Jumbo Roll', unit: 'Roll', initialStock: 100, minStock: 20, category: 'Sanitasi' },
+
+        { id: 'wh_11', outletId: 'aeon-sentul-xxi', name: 'Popcorn Bucket 46oz XXI', unit: 'Pcs', initialStock: 800, minStock: 150, category: 'Kemasan Cafe' },
+        { id: 'wh_12', outletId: 'aeon-sentul-xxi', name: 'Cup Cold XXI 16oz', unit: 'Pcs', initialStock: 1200, minStock: 250, category: 'Kemasan Cafe' },
+      ];
+      localStorage.setItem(KEYS.WAREHOUSE_ITEMS, JSON.stringify(defaultItems));
+      return defaultItems;
+    }
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return [];
+    }
+  },
+
+  saveWarehouseItem(item: WarehouseItem): WarehouseItem[] {
+    const list = this.getWarehouseItems();
+    const idx = list.findIndex((i) => i.id === item.id);
+    if (idx >= 0) {
+      list[idx] = item;
+    } else {
+      list.unshift(item);
+    }
+    localStorage.setItem(KEYS.WAREHOUSE_ITEMS, JSON.stringify(list));
+    this.broadcastChange('warehouse-items');
+    return list;
+  },
+
+  deleteWarehouseItem(id: string): WarehouseItem[] {
+    const list = this.getWarehouseItems().filter((i) => i.id !== id);
+    localStorage.setItem(KEYS.WAREHOUSE_ITEMS, JSON.stringify(list));
+    this.broadcastChange('warehouse-items');
+    return list;
+  },
+
+  getStockTransactions(): StockTransaction[] {
+    const raw = localStorage.getItem(KEYS.STOCK_TRANSACTIONS);
+    if (!raw) {
+      const defaultTx: StockTransaction[] = [
+        {
+          id: 'tx_1',
+          outletId: 'the-park-sawangan-xxi',
+          itemId: 'wh_1',
+          date: new Date().toISOString().substring(0, 10),
+          time: '09:00',
+          type: 'IN',
+          qty: 200,
+          notes: 'Terima kiriman dari HO Pusat',
+          createdBy: 'Manager Sawangan',
+        },
+        {
+          id: 'tx_2',
+          outletId: 'the-park-sawangan-xxi',
+          itemId: 'wh_1',
+          date: new Date().toISOString().substring(0, 10),
+          time: '18:00',
+          type: 'OUT',
+          qty: 150,
+          notes: 'Pemakaian Operasional Cafe XXI',
+          createdBy: 'Cleaner Sawangan',
+        },
+      ];
+      localStorage.setItem(KEYS.STOCK_TRANSACTIONS, JSON.stringify(defaultTx));
+      return defaultTx;
+    }
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return [];
+    }
+  },
+
+  saveStockTransaction(tx: StockTransaction): StockTransaction[] {
+    const list = this.getStockTransactions();
+    const idx = list.findIndex((t) => t.id === tx.id);
+    if (idx >= 0) {
+      list[idx] = tx;
+    } else {
+      list.unshift(tx);
+    }
+    localStorage.setItem(KEYS.STOCK_TRANSACTIONS, JSON.stringify(list));
+    this.broadcastChange('stock-transactions');
+    return list;
+  },
+
+  deleteStockTransaction(id: string): StockTransaction[] {
+    const list = this.getStockTransactions().filter((t) => t.id !== id);
+    localStorage.setItem(KEYS.STOCK_TRANSACTIONS, JSON.stringify(list));
+    this.broadcastChange('stock-transactions');
+    return list;
+  },
+
+  getStockOpnameHistory(): StockOpnameHistory[] {
+    const raw = localStorage.getItem(KEYS.STOCK_OPNAME_HISTORY);
+    if (!raw) {
+      return [];
+    }
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return [];
+    }
+  },
+
+  saveStockOpnameHistory(history: StockOpnameHistory): StockOpnameHistory[] {
+    const list = this.getStockOpnameHistory();
+    list.unshift(history);
+    localStorage.setItem(KEYS.STOCK_OPNAME_HISTORY, JSON.stringify(list));
+    this.broadcastChange('stock-opname');
     return list;
   },
 };

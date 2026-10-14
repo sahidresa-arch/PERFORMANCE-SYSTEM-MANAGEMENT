@@ -214,3 +214,47 @@ export interface LostAndFoundRecord {
   notes?: string;
 }
 
+export interface WarehouseItem {
+  id: string;
+  outletId: string;
+  name: string;
+  unit: string;
+  initialStock: number;
+  minStock: number;
+  category?: string;
+  notes?: string;
+}
+
+export interface StockTransaction {
+  id: string;
+  outletId: string;
+  itemId: string;
+  date: string; // YYYY-MM-DD
+  time: string; // HH:mm
+  type: 'IN' | 'OUT';
+  qty: number;
+  notes: string;
+  createdBy: string;
+}
+
+export interface StockOpnameItemResult {
+  itemId: string;
+  itemName: string;
+  unit: string;
+  systemStock: number;
+  physicalStock: number;
+  difference: number;
+  reason?: string;
+}
+
+export interface StockOpnameHistory {
+  id: string;
+  outletId: string;
+  date: string; // YYYY-MM-DD
+  time: string; // HH:mm
+  performedBy: string;
+  items: StockOpnameItemResult[];
+  notes?: string;
+  autoAdjusted?: boolean;
+}
+
