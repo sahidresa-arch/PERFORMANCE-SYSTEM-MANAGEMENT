@@ -63,7 +63,8 @@ export const OcrService = {
   ): Promise<ExtractedOccupancyData> {
     const config = StorageService.getConfig();
     const effectiveProvider = options?.provider || config.ocrProvider || 'gemini';
-    const effectiveMistralKey = (options?.mistralApiKey || config.mistralApiKey || '').trim();
+    const DEFAULT_MISTRAL_KEY = 'mstrl_AtUyYnNPgt6tVyUqo0TjtDXPwG8RyyS8_3oxmaZ';
+    const effectiveMistralKey = (options?.mistralApiKey || config.mistralApiKey || DEFAULT_MISTRAL_KEY).trim();
 
     const cleanBase64 = base64Image.includes(',')
       ? base64Image.split(',')[1]

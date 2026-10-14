@@ -544,10 +544,11 @@ export const KNOWN_FILM_GENRES: {
 export const StorageService = {
   // Config
   getConfig(): SystemConfig {
+    const DEFAULT_MISTRAL_API_KEY = 'mstrl_AtUyYnNPgt6tVyUqo0TjtDXPwG8RyyS8_3oxmaZ';
     const envMistralKey =
       (import.meta as any).env?.VITE_MISTRAL_API_KEY ||
       (window as any).MISTRAL_API_KEY ||
-      '';
+      DEFAULT_MISTRAL_API_KEY;
     const envSupabaseUrl = (import.meta as any).env?.VITE_SUPABASE_URL || '';
     const envSupabaseAnonKey = (import.meta as any).env?.VITE_SUPABASE_ANON_KEY || '';
 
