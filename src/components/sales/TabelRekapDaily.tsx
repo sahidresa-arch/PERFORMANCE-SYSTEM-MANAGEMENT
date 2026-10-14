@@ -48,25 +48,54 @@ export const TabelRekapDaily: React.FC<TabelRekapDailyProps> = ({
     };
   }, []);
 
-  const [selectedAreaId, setSelectedAreaId] = useState<string>(areas[0]?.id || '');
+  const [selectedAreaId, setSelectedAreaId] = useState<string>(
+    currentUser?.areaId || (isManagerOrCleaner ? (outlets[0]?.areaId || areas[0]?.id || '') : areas[0]?.id || 'all')
+  );
   const [achievementFilter, setAchievementFilter] = useState<'all' | 'achieved' | 'unachieved'>('all');
   const [expandedOutletId, setExpandedOutletId] = useState<string | null>(null);
   const [achSortOrder, setAchSortOrder] = useState<'desc' | 'asc'>('desc');
 
-  const selectedArea = areas.find((a) => a.id === selectedAreaId) || areas[0];
+  const selectedArea = areas.find((a) => a.id === selectedAreaId);
+  const selectedAreaName =
+    selectedAreaId === 'all' || !selectedAreaId
+      ? 'SEMUA WILAYAH'
+      : selectedArea?.name || 'SEMUA WILAYAH';
+
+  // Target SPH from database (targetArea for area / national, targetHead for manager's outlet)
+  let targetArea = 24359; // Default Cinema XXI All Areas benchmark
+  if (isManagerOrCleaner && currentUser?.outletId) {
+    const userOutlet = rawOutlets.find((o) => o.id === currentUser.outletId);
+    if (userOutlet && userOutlet.targetHead > 0) {
+      targetArea = userOutlet.targetHead;
+    }
+  } else if (selectedAreaId === 'all' || !selectedAreaId) {
+    targetArea = 24359;
+  } else if (selectedArea?.targetArea && selectedArea.targetArea > 0) {
+    targetArea = selectedArea.targetArea;
+  } else if (selectedAreaId === 'area-bogor-1-depok') {
+    targetArea = 25504;
+  } else if (selectedAreaId === 'area-bogor-2') {
+    targetArea = 22375;
+  }
 
   // Filter outlets by area and user role
-  const areaOutlets = outlets.filter((o) => (isManagerOrCleaner ? true : selectedAreaId ? o.areaId === selectedAreaId : true));
+  const areaOutlets = outlets.filter((o) => {
+    if (isManagerOrCleaner) return true;
+    if (selectedAreaId === 'all' || !selectedAreaId) return true;
+    return o.areaId === selectedAreaId;
+  });
 
-  // Compute daily totals for each outlet in selected area
+  const [refYear, refMonth] = selectedDate.split('-');
+  const monthPrefix = `${refYear}-${refMonth}`;
+
+  // Compute daily totals and real MTD for each outlet in selected area
   const outletRows = areaOutlets.map((outlet) => {
-    const [refYear, refMonth] = selectedDate.split('-');
     const saleRecord = dailySales.find(
       (s) => s.outletId === outlet.id && s.date === selectedDate
     );
 
     const shows = saleRecord?.shows || [];
-    const filledShows = shows.filter((s) => s.isFilled || s.omsetCinema > 0 || s.omsetFnB > 0);
+    const filledShows = shows.filter((s) => s.isFilled || (s.omsetCinema || 0) > 0 || (s.omsetFnB || 0) > 0 || (s.penonton || 0) > 0 || (s.bill || 0) > 0);
 
     const dayTotals = StorageService.getLatestShowTotals(shows);
     const sumCinema = dayTotals.omsetCinema;
@@ -82,6 +111,34 @@ export const TabelRekapDaily: React.FC<TabelRekapDailyProps> = ({
       outlet.targetHead
     );
 
+    // Outlet MTD (Tanggal 1 s.d. selectedDate pada bulan yang sama)
+    const outletMtdSales = dailySales.filter(
+      (s) =>
+        s.outletId === outlet.id &&
+        s.date.startsWith(monthPrefix) &&
+        s.date <= selectedDate
+    );
+    let mtdCinema = 0;
+    let mtdFnB = 0;
+    let mtdBill = 0;
+    let mtdPenonton = 0;
+
+    outletMtdSales.forEach((rec) => {
+      const recTotals = StorageService.getLatestShowTotals(rec.shows);
+      mtdCinema += recTotals.omsetCinema;
+      mtdFnB += recTotals.omsetFnB;
+      mtdBill += recTotals.bill;
+      mtdPenonton += recTotals.penonton;
+    });
+
+    const mtdMetrics = StorageService.calculateMetrics(
+      mtdCinema,
+      mtdFnB,
+      mtdBill,
+      mtdPenonton,
+      outlet.targetHead
+    );
+
     const lastUpdated = shows.filter((s) => s.updatedAt).pop()?.updatedAt || '-';
 
     return {
@@ -93,6 +150,11 @@ export const TabelRekapDaily: React.FC<TabelRekapDailyProps> = ({
       sumBill,
       sumPenonton,
       metrics,
+      mtdCinema,
+      mtdFnB,
+      mtdBill,
+      mtdPenonton,
+      mtdMetrics,
       lastUpdated,
     };
   });
@@ -110,27 +172,46 @@ export const TabelRekapDaily: React.FC<TabelRekapDailyProps> = ({
         : a.metrics.achievement - b.metrics.achievement;
     });
 
-  // Calculate Area Totals
+  // Calculate Area Daily Totals
   const areaCinema = outletRows.reduce((acc, r) => acc + r.sumCinema, 0);
   const areaFnB = outletRows.reduce((acc, r) => acc + r.sumFnB, 0);
   const areaBill = outletRows.reduce((acc, r) => acc + r.sumBill, 0);
   const areaPenonton = outletRows.reduce((acc, r) => acc + r.sumPenonton, 0);
-  const targetArea =
-    areaPenonton > 0
-      ? Math.round(
-          outletRows.reduce((acc, r) => acc + r.outlet.targetHead * r.sumPenonton, 0) /
-            areaPenonton
-        )
-      : Math.round(
-          areaOutlets.reduce((acc, o) => acc + (o.targetHead || 0), 0) /
-            (areaOutlets.length || 1)
-        );
 
   const areaMetrics = StorageService.calculateMetrics(
     areaCinema,
     areaFnB,
     areaBill,
     areaPenonton,
+    targetArea
+  );
+
+  // Calculate Area Real MTD Totals (Tanggal 1 s.d. selectedDate bulan ini)
+  const areaMtdSales = dailySales.filter(
+    (s) =>
+      areaOutlets.some((o) => o.id === s.outletId) &&
+      s.date.startsWith(monthPrefix) &&
+      s.date <= selectedDate
+  );
+
+  let areaMtdCinema = 0;
+  let areaMtdFnB = 0;
+  let areaMtdBill = 0;
+  let areaMtdPenonton = 0;
+
+  areaMtdSales.forEach((rec) => {
+    const recTotals = StorageService.getLatestShowTotals(rec.shows);
+    areaMtdCinema += recTotals.omsetCinema;
+    areaMtdFnB += recTotals.omsetFnB;
+    areaMtdBill += recTotals.bill;
+    areaMtdPenonton += recTotals.penonton;
+  });
+
+  const areaMtdMetrics = StorageService.calculateMetrics(
+    areaMtdCinema,
+    areaMtdFnB,
+    areaMtdBill,
+    areaMtdPenonton,
     targetArea
   );
 
@@ -148,6 +229,8 @@ export const TabelRekapDaily: React.FC<TabelRekapDailyProps> = ({
       'ACV (%)',
       'AT',
       'Selisih',
+      'Head MTD',
+      'ACV MTD (%)',
       'Status Show',
       'Jam Input',
     ];
@@ -164,6 +247,8 @@ export const TabelRekapDaily: React.FC<TabelRekapDailyProps> = ({
       `${r.metrics.achievement}%`,
       r.metrics.at,
       r.metrics.selisih,
+      r.mtdMetrics.head,
+      `${r.mtdMetrics.achievement}%`,
       `${r.filledCount}/5`,
       r.lastUpdated,
     ]);
@@ -194,11 +279,15 @@ export const TabelRekapDaily: React.FC<TabelRekapDailyProps> = ({
             <select
               value={selectedAreaId}
               onChange={(e) => setSelectedAreaId(e.target.value)}
-              className="w-full text-xs font-semibold px-3 py-2 rounded-lg border border-[#E5E7EB] bg-white text-[#111827] focus:outline-none focus:border-[#7C3AED] transition-colors"
+              disabled={Boolean(isManagerOrCleaner)}
+              className="w-full text-xs font-semibold px-3 py-2 rounded-lg border border-[#E5E7EB] bg-white text-[#111827] focus:outline-none focus:border-[#7C3AED] transition-colors disabled:bg-[#F3F4F6] disabled:text-[#9CA3AF]"
             >
+              {!isManagerOrCleaner && (
+                <option value="all">SEMUA WILAYAH (Target: Rp 24.359)</option>
+              )}
               {areas.map((a) => (
                 <option key={a.id} value={a.id}>
-                  {a.name}
+                  {a.name} (Target: Rp {a.targetArea.toLocaleString('id-ID')})
                 </option>
               ))}
             </select>
@@ -269,7 +358,10 @@ export const TabelRekapDaily: React.FC<TabelRekapDailyProps> = ({
               Selected Area
             </span>
             <span className="font-bold text-sm uppercase text-[#111827]">
-              Area Dashboard Performance ({selectedArea?.name})
+              Area Dashboard Performance ({selectedAreaName})
+            </span>
+            <span className="text-xs text-[#6B7280] font-medium hidden sm:inline-block">
+              &bull; Target SPH: <strong>Rp {targetArea.toLocaleString('id-ID')}</strong>
             </span>
           </div>
 
@@ -294,7 +386,9 @@ export const TabelRekapDaily: React.FC<TabelRekapDailyProps> = ({
             <p className="text-[14px] font-bold text-[#111827] leading-tight truncate">
               {targetArea.toLocaleString('id-ID')}
             </p>
-            <span className="text-[10px] text-[#9CA3AF] leading-none truncate">Target Wilayah</span>
+            <span className="text-[10px] text-[#9CA3AF] leading-none truncate">
+              {isManagerOrCleaner ? 'Target Outlet' : selectedAreaId === 'all' ? 'Target Nasional' : `Target ${selectedAreaName}`}
+            </span>
           </div>
 
           {/* 2 HEAD DAILY: bg #F5F0FF */}
@@ -304,9 +398,11 @@ export const TabelRekapDaily: React.FC<TabelRekapDailyProps> = ({
               <span>Head Daily</span>
             </span>
             <p className="text-[14px] font-bold text-[#6D28D9] leading-tight truncate">
-              {areaMetrics.head.toLocaleString('id-ID')}
+              {areaPenonton > 0 ? areaMetrics.head.toLocaleString('id-ID') : '0'}
             </p>
-            <span className="text-[10px] text-[#9CA3AF] leading-none truncate">SPH Hari Ini</span>
+            <span className="text-[10px] text-[#9CA3AF] leading-none truncate">
+              SPH Hari Ini ({areaPenonton.toLocaleString('id-ID')} Pnt)
+            </span>
           </div>
 
           {/* 3 ACHIEVEMENT: bg #FFF8E1 */}
@@ -320,9 +416,11 @@ export const TabelRekapDaily: React.FC<TabelRekapDailyProps> = ({
                 areaMetrics.achievement >= 100 ? 'text-[#15803D]' : 'text-[#B45309]'
               }`}
             >
-              {areaMetrics.achievement}%
+              {areaPenonton > 0 && targetArea > 0 ? `${areaMetrics.achievement}%` : '0%'}
             </p>
-            <span className="text-[10px] text-[#9CA3AF] leading-none truncate">Pencapaian Target</span>
+            <span className="text-[10px] text-[#9CA3AF] leading-none truncate">
+              {areaMetrics.achievement >= 100 ? 'Target Tercapai' : 'Belum Tercapai'}
+            </span>
           </div>
 
           {/* 4 PENONTON: bg #E8F6FF */}
@@ -344,7 +442,7 @@ export const TabelRekapDaily: React.FC<TabelRekapDailyProps> = ({
               <span>Daya Serap (%)</span>
             </span>
             <p className="text-[14px] font-bold text-[#BE123C] leading-tight truncate">
-              {areaMetrics.dayaSerap}%
+              {areaPenonton > 0 ? `${areaMetrics.dayaSerap}%` : '0%'}
             </p>
             <span className="text-[10px] text-[#9CA3AF] leading-none truncate">Food Pack Ratio</span>
           </div>
@@ -356,7 +454,7 @@ export const TabelRekapDaily: React.FC<TabelRekapDailyProps> = ({
               <span>AT</span>
             </span>
             <p className="text-[14px] font-bold text-[#111827] leading-tight truncate">
-              {areaMetrics.at.toLocaleString('id-ID')}
+              {areaBill > 0 ? areaMetrics.at.toLocaleString('id-ID') : '0'}
             </p>
             <span className="text-[10px] text-[#9CA3AF] leading-none truncate">Rata-rata Transaksi</span>
           </div>
@@ -367,10 +465,16 @@ export const TabelRekapDaily: React.FC<TabelRekapDailyProps> = ({
               <TrendingUp className="w-3 h-3 text-[#059669] shrink-0" />
               <span>Head MTD</span>
             </span>
-            <p className="text-[14px] font-bold text-[#047857] leading-tight truncate">
-              {Math.round(areaMetrics.head * 1.08).toLocaleString('id-ID')}
+            <p className={`text-[14px] font-bold leading-tight truncate ${
+              areaMtdMetrics.achievement >= 100 ? 'text-[#047857]' : 'text-[#B45309]'
+            }`}>
+              {areaMtdPenonton > 0 ? areaMtdMetrics.head.toLocaleString('id-ID') : '0'}
             </p>
-            <span className="text-[10px] text-[#059669] font-bold leading-none truncate">113.4% MTD</span>
+            <span className={`text-[10px] font-bold leading-none truncate ${
+              areaMtdMetrics.achievement >= 100 ? 'text-[#059669]' : 'text-[#B45309]'
+            }`}>
+              {areaMtdPenonton > 0 && targetArea > 0 ? `${areaMtdMetrics.achievement}% MTD` : '0% MTD'}
+            </span>
           </div>
         </div>
       </div>
@@ -500,7 +604,7 @@ export const TabelRekapDaily: React.FC<TabelRekapDailyProps> = ({
 
                       {/* Column 9: ACV % (Pill badge) */}
                       <td className="py-3 px-3 text-center">
-                        {row.sumPenonton > 0 ? (
+                        {row.sumPenonton > 0 && row.outlet.targetHead > 0 ? (
                           <span
                             className={`inline-flex items-center px-2 py-0.5 rounded-full font-bold text-[10px] ${
                               row.metrics.achievement >= 100
@@ -511,7 +615,7 @@ export const TabelRekapDaily: React.FC<TabelRekapDailyProps> = ({
                             {row.metrics.achievement}%
                           </span>
                         ) : (
-                          '-'
+                          <span className="text-[#9CA3AF]">-</span>
                         )}
                       </td>
 
@@ -522,7 +626,7 @@ export const TabelRekapDaily: React.FC<TabelRekapDailyProps> = ({
 
                       {/* Column 11: SELISIH (formatted, no Rp, +/- color) */}
                       <td className="py-3 px-3 text-right font-semibold">
-                        {row.sumPenonton > 0 ? (
+                        {row.sumPenonton > 0 && row.outlet.targetHead > 0 ? (
                           <span
                             className={
                               row.metrics.selisih >= 0
@@ -534,7 +638,7 @@ export const TabelRekapDaily: React.FC<TabelRekapDailyProps> = ({
                             {row.metrics.selisih.toLocaleString('id-ID')}
                           </span>
                         ) : (
-                          '0'
+                          <span className="text-[#9CA3AF]">0</span>
                         )}
                       </td>
 
@@ -559,138 +663,205 @@ export const TabelRekapDaily: React.FC<TabelRekapDailyProps> = ({
                       </td>
                     </tr>
 
-                    {/* EXPANDABLE INLINE SHOW ROWS (SHOW 1 S/D SHOW 5) - Exactly as daily rekap.png */}
-                    {isExpanded &&
-                      [1, 2, 3, 4, 5].map((sNum) => {
-                        const s = row.shows.find((item) => item.showNumber === sNum);
-                        const sMet = StorageService.calculateMetrics(
-                          s?.omsetCinema || 0,
-                          s?.omsetFnB || 0,
-                          s?.bill || 0,
-                          s?.penonton || 0,
-                          row.outlet.targetHead
-                        );
-                        const hasData = (s?.penonton || 0) > 0 || (s?.omsetFnB || 0) > 0 || (s?.bill || 0) > 0;
-                        const isCapai = sMet.head >= row.outlet.targetHead;
+                    {/* EXPANDABLE INLINE SHOW ROWS (SHOW 1 S/D SHOW 5) + MTD SUMMARY */}
+                    {isExpanded && (
+                      <>
+                        {[1, 2, 3, 4, 5].map((sNum) => {
+                          const s = row.shows.find((item) => item.showNumber === sNum);
+                          const sMet = StorageService.calculateMetrics(
+                            s?.omsetCinema || 0,
+                            s?.omsetFnB || 0,
+                            s?.bill || 0,
+                            s?.penonton || 0,
+                            row.outlet.targetHead
+                          );
+                          const hasData = (s?.penonton || 0) > 0 || (s?.omsetFnB || 0) > 0 || (s?.bill || 0) > 0;
+                          const isCapai = row.outlet.targetHead > 0 && sMet.head >= row.outlet.targetHead;
 
-                        return (
-                          <tr
-                            key={`show-${row.outlet.id}-${sNum}`}
-                            className="bg-[#FAF5FF]/50 hover:bg-[#F3E8FF]/60 border-b border-[#F3F4F6] transition-colors"
-                          >
-                            {/* Column 1: Indented tree branch + Show badge */}
-                            <td className="py-2 px-3 pl-8">
-                              <div className="flex items-center space-x-2">
-                                <span className="text-[#A78BFA] font-mono text-xs select-none">↳</span>
-                                <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold bg-[#EDE9FE] text-[#6D28D9]">
-                                  Show {sNum}
-                                </span>
-                              </div>
-                            </td>
+                          return (
+                            <tr
+                              key={`show-${row.outlet.id}-${sNum}`}
+                              className="bg-[#FAF5FF]/50 hover:bg-[#F3E8FF]/60 border-b border-[#F3F4F6] transition-colors"
+                            >
+                              {/* Column 1: Indented tree branch + Show badge */}
+                              <td className="py-2 px-3 pl-8">
+                                <div className="flex items-center space-x-2">
+                                  <span className="text-[#A78BFA] font-mono text-xs select-none">↳</span>
+                                  <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold bg-[#EDE9FE] text-[#6D28D9]">
+                                    Show {sNum}
+                                  </span>
+                                </div>
+                              </td>
 
-                            {/* Column 2: Omset Cinema */}
-                            <td className="py-2 px-3 text-right text-[11px] text-[#4B5563]">
-                              {(s?.omsetCinema || 0) > 0
-                                ? (s?.omsetCinema || 0).toLocaleString('id-ID')
-                                : '-'}
-                            </td>
+                              {/* Column 2: Omset Cinema */}
+                              <td className="py-2 px-3 text-right text-[11px] text-[#4B5563]">
+                                {(s?.omsetCinema || 0) > 0
+                                  ? (s?.omsetCinema || 0).toLocaleString('id-ID')
+                                  : '-'}
+                              </td>
 
-                            {/* Column 3: Omset FnB */}
-                            <td className="py-2 px-3 text-right text-[11px] font-bold text-[#059669]">
-                              {(s?.omsetFnB || 0) > 0
-                                ? (s?.omsetFnB || 0).toLocaleString('id-ID')
-                                : '-'}
-                            </td>
+                              {/* Column 3: Omset FnB */}
+                              <td className="py-2 px-3 text-right text-[11px] font-bold text-[#059669]">
+                                {(s?.omsetFnB || 0) > 0
+                                  ? (s?.omsetFnB || 0).toLocaleString('id-ID')
+                                  : '-'}
+                              </td>
 
-                            {/* Column 4: Total Bill */}
-                            <td className="py-2 px-3 text-center text-[11px] text-[#4B5563]">
-                              {s?.bill || '-'}
-                            </td>
+                              {/* Column 4: Total Bill */}
+                              <td className="py-2 px-3 text-center text-[11px] text-[#4B5563]">
+                                {s?.bill || '-'}
+                              </td>
 
-                            {/* Column 5: Penonton */}
-                            <td className="py-2 px-3 text-center text-[11px] text-[#4B5563]">
-                              {s?.penonton || '-'}
-                            </td>
+                              {/* Column 5: Penonton */}
+                              <td className="py-2 px-3 text-center text-[11px] text-[#4B5563]">
+                                {s?.penonton || '-'}
+                              </td>
 
-                            {/* Column 6: Daya Serap */}
-                            <td className="py-2 px-3 text-center text-[11px] text-[#4B5563]">
-                              {hasData ? `${sMet.dayaSerap}%` : '-'}
-                            </td>
+                              {/* Column 6: Daya Serap */}
+                              <td className="py-2 px-3 text-center text-[11px] text-[#4B5563]">
+                                {hasData ? `${sMet.dayaSerap}%` : '-'}
+                              </td>
 
-                            {/* Column 7: Target SPH */}
-                            <td className="py-2 px-3 text-right text-[11px] text-[#9CA3AF]">
-                              {hasData && row.outlet.targetHead > 0
-                                ? row.outlet.targetHead.toLocaleString('id-ID')
-                                : '-'}
-                            </td>
+                              {/* Column 7: Target SPH */}
+                              <td className="py-2 px-3 text-right text-[11px] text-[#9CA3AF]">
+                                {hasData && row.outlet.targetHead > 0
+                                  ? row.outlet.targetHead.toLocaleString('id-ID')
+                                  : '-'}
+                              </td>
 
-                            {/* Column 8: SPH (HEAD) */}
-                            <td className="py-2 px-3 text-right text-[11px] font-bold text-[#0284C7]">
-                              {hasData ? sMet.head.toLocaleString('id-ID') : '-'}
-                            </td>
+                              {/* Column 8: SPH (HEAD) */}
+                              <td className="py-2 px-3 text-right text-[11px] font-bold text-[#0284C7]">
+                                {hasData ? sMet.head.toLocaleString('id-ID') : '-'}
+                              </td>
 
-                            {/* Column 9: ACV % */}
-                            <td className="py-2 px-3 text-center">
-                              {hasData ? (
-                                <span
-                                  className={`inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold ${
-                                    sMet.achievement >= 100
-                                      ? 'bg-[#DCFCE7] text-[#15803D]'
-                                      : 'bg-[#FEE2E2] text-[#B91C1C]'
-                                  }`}
-                                >
-                                  {sMet.achievement}%
-                                </span>
-                              ) : (
-                                '-'
-                              )}
-                            </td>
+                              {/* Column 9: ACV % */}
+                              <td className="py-2 px-3 text-center">
+                                {hasData && row.outlet.targetHead > 0 ? (
+                                  <span
+                                    className={`inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold ${
+                                      sMet.achievement >= 100
+                                        ? 'bg-[#DCFCE7] text-[#15803D]'
+                                        : 'bg-[#FEE2E2] text-[#B91C1C]'
+                                    }`}
+                                  >
+                                    {sMet.achievement}%
+                                  </span>
+                                ) : (
+                                  <span className="text-[#9CA3AF]">-</span>
+                                )}
+                              </td>
 
-                            {/* Column 10: AT */}
-                            <td className="py-2 px-3 text-right text-[11px] text-[#4B5563]">
-                              {(s?.bill || 0) > 0 ? sMet.at.toLocaleString('id-ID') : '-'}
-                            </td>
+                              {/* Column 10: AT */}
+                              <td className="py-2 px-3 text-right text-[11px] text-[#4B5563]">
+                                {(s?.bill || 0) > 0 ? sMet.at.toLocaleString('id-ID') : '-'}
+                              </td>
 
-                            {/* Column 11: Selisih */}
-                            <td className="py-2 px-3 text-right text-[11px] font-semibold">
-                              {hasData ? (
-                                <span
-                                  className={
-                                    sMet.selisih >= 0 ? 'text-[#15803D]' : 'text-[#B91C1C]'
-                                  }
-                                >
-                                  {sMet.selisih >= 0 ? '+' : ''}
-                                  {sMet.selisih.toLocaleString('id-ID')}
-                                </span>
-                              ) : (
-                                '-'
-                              )}
-                            </td>
+                              {/* Column 11: Selisih */}
+                              <td className="py-2 px-3 text-right text-[11px] font-semibold">
+                                {hasData && row.outlet.targetHead > 0 ? (
+                                  <span
+                                    className={
+                                      sMet.selisih >= 0 ? 'text-[#15803D]' : 'text-[#B91C1C]'
+                                    }
+                                  >
+                                    {sMet.selisih >= 0 ? '+' : ''}
+                                    {sMet.selisih.toLocaleString('id-ID')}
+                                  </span>
+                                ) : (
+                                  <span className="text-[#9CA3AF]">-</span>
+                                )}
+                              </td>
 
-                            {/* Column 12: Status Show (Capai / Tidak Capai) */}
-                            <td className="py-2 px-3 text-center">
-                              {hasData ? (
-                                <span
-                                  className={`inline-flex items-center px-2 py-0.5 rounded-full text-[9px] font-bold ${
-                                    isCapai
-                                      ? 'bg-[#DCFCE7] text-[#15803D] border border-[#86EFAC]'
-                                      : 'bg-[#FEE2E2] text-[#B91C1C] border border-[#FCA5A5]'
-                                  }`}
-                                >
-                                  {isCapai ? 'Capai' : 'Tidak Capai'}
-                                </span>
-                              ) : (
-                                <span className="text-[#9CA3AF] text-[10px]">-</span>
-                              )}
-                            </td>
+                              {/* Column 12: Status Show (Capai / Tidak Capai) */}
+                              <td className="py-2 px-3 text-center">
+                                {hasData && row.outlet.targetHead > 0 ? (
+                                  <span
+                                    className={`inline-flex items-center px-2 py-0.5 rounded-full text-[9px] font-bold ${
+                                      isCapai
+                                        ? 'bg-[#DCFCE7] text-[#15803D] border border-[#86EFAC]'
+                                        : 'bg-[#FEE2E2] text-[#B91C1C] border border-[#FCA5A5]'
+                                    }`}
+                                  >
+                                    {isCapai ? 'Capai' : 'Tidak Capai'}
+                                  </span>
+                                ) : (
+                                  <span className="text-[#9CA3AF] text-[10px]">-</span>
+                                )}
+                              </td>
 
-                            {/* Column 13: Jam Input */}
-                            <td className="py-2 px-3 text-center text-[10px] text-[#9CA3AF]">
-                              {s?.updatedAt || '-'}
-                            </td>
-                          </tr>
-                        );
-                      })}
+                              {/* Column 13: Jam Input */}
+                              <td className="py-2 px-3 text-center text-[10px] text-[#9CA3AF]">
+                                {s?.updatedAt || '-'}
+                              </td>
+                            </tr>
+                          );
+                        })}
+
+                        {/* Outlet MTD Row */}
+                        <tr className="bg-[#ECFDF5]/70 hover:bg-[#D1FAE5]/60 border-b border-[#A7F3D0] transition-colors font-medium">
+                          <td className="py-2 px-3 pl-8">
+                            <div className="flex items-center space-x-2">
+                              <span className="text-[#059669] font-mono text-xs select-none">↳</span>
+                              <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-extrabold bg-[#D1FAE5] text-[#065F46] border border-[#A7F3D0]">
+                                MTD (1 s.d. {selectedDate.split('-')[2]})
+                              </span>
+                            </div>
+                          </td>
+                          <td className="py-2 px-3 text-right text-[11px] text-[#065F46]">
+                            {row.mtdCinema > 0 ? row.mtdCinema.toLocaleString('id-ID') : '0'}
+                          </td>
+                          <td className="py-2 px-3 text-right text-[11px] font-extrabold text-[#059669]">
+                            {row.mtdFnB > 0 ? row.mtdFnB.toLocaleString('id-ID') : '0'}
+                          </td>
+                          <td className="py-2 px-3 text-center text-[11px] text-[#065F46]">
+                            {row.mtdBill}
+                          </td>
+                          <td className="py-2 px-3 text-center text-[11px] font-semibold text-[#065F46]">
+                            {row.mtdPenonton.toLocaleString('id-ID')}
+                          </td>
+                          <td className="py-2 px-3 text-center text-[11px] text-[#065F46]">
+                            {row.mtdPenonton > 0 ? `${row.mtdMetrics.dayaSerap}%` : '-'}
+                          </td>
+                          <td className="py-2 px-3 text-right text-[11px] text-[#6B7280]">
+                            {row.outlet.targetHead > 0 ? row.outlet.targetHead.toLocaleString('id-ID') : '0'}
+                          </td>
+                          <td className="py-2 px-3 text-right text-[11px] font-extrabold text-[#0284C7]">
+                            {row.mtdPenonton > 0 ? row.mtdMetrics.head.toLocaleString('id-ID') : '0'}
+                          </td>
+                          <td className="py-2 px-3 text-center">
+                            {row.mtdPenonton > 0 && row.outlet.targetHead > 0 ? (
+                              <span
+                                className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-[9px] font-bold ${
+                                  row.mtdMetrics.achievement >= 100
+                                    ? 'bg-[#DCFCE7] text-[#15803D] border border-[#86EFAC]'
+                                    : 'bg-[#FEE2E2] text-[#B91C1C] border border-[#FCA5A5]'
+                                }`}
+                              >
+                                {row.mtdMetrics.achievement}%
+                              </span>
+                            ) : (
+                              <span className="text-[#9CA3AF]">-</span>
+                            )}
+                          </td>
+                          <td className="py-2 px-3 text-right text-[11px] text-[#065F46]">
+                            {row.mtdBill > 0 ? row.mtdMetrics.at.toLocaleString('id-ID') : '0'}
+                          </td>
+                          <td className="py-2 px-3 text-right text-[11px] font-bold">
+                            {row.mtdPenonton > 0 && row.outlet.targetHead > 0 ? (
+                              <span className={row.mtdMetrics.selisih >= 0 ? 'text-[#15803D]' : 'text-[#B91C1C]'}>
+                                {row.mtdMetrics.selisih >= 0 ? '+' : ''}
+                                {row.mtdMetrics.selisih.toLocaleString('id-ID')}
+                              </span>
+                            ) : (
+                              <span className="text-[#9CA3AF]">0</span>
+                            )}
+                          </td>
+                          <td className="py-2 px-3 text-center text-[#065F46] font-semibold text-[10px]" colSpan={2}>
+                            Rekap Bulan Berjalan
+                          </td>
+                        </tr>
+                      </>
+                    )}
                   </React.Fragment>
                 );
               })}
@@ -698,7 +869,7 @@ export const TabelRekapDaily: React.FC<TabelRekapDailyProps> = ({
               {/* AREA TOTAL ROW (NO 'Rp', pure formatted numbers) */}
               <tr className="bg-[#F8F9FC] font-bold text-[#111827] border-t-2 border-[#E5E7EB]">
                 <td className="py-3.5 px-3 font-extrabold text-[#111827]">
-                  TOTAL {selectedArea?.name || 'AREA'}
+                  TOTAL {selectedAreaName}
                 </td>
                 <td className="py-3.5 px-3 text-right text-[#111827] font-semibold">
                   {areaCinema.toLocaleString('id-ID')}
@@ -708,38 +879,48 @@ export const TabelRekapDaily: React.FC<TabelRekapDailyProps> = ({
                 </td>
                 <td className="py-3.5 px-3 text-center">{areaBill}</td>
                 <td className="py-3.5 px-3 text-center">{areaPenonton.toLocaleString('id-ID')}</td>
-                <td className="py-3.5 px-3 text-center">{areaMetrics.dayaSerap}%</td>
+                <td className="py-3.5 px-3 text-center">
+                  {areaPenonton > 0 ? `${areaMetrics.dayaSerap}%` : '0%'}
+                </td>
                 <td className="py-3.5 px-3 text-right text-[#6B7280]">
                   {targetArea.toLocaleString('id-ID')}
                 </td>
                 <td className="py-3.5 px-3 text-right text-[#0284C7] font-extrabold">
-                  {areaMetrics.head.toLocaleString('id-ID')}
+                  {areaPenonton > 0 ? areaMetrics.head.toLocaleString('id-ID') : '0'}
                 </td>
                 <td className="py-3.5 px-3 text-center">
-                  <span
-                    className={`inline-flex items-center px-2 py-0.5 rounded-full font-bold text-[10px] ${
-                      areaMetrics.achievement >= 100
-                        ? 'bg-[#DCFCE7] text-[#15803D] border border-[#86EFAC]'
-                        : 'bg-[#FEE2E2] text-[#B91C1C] border border-[#FCA5A5]'
-                    }`}
-                  >
-                    {areaMetrics.achievement}%
-                  </span>
+                  {areaPenonton > 0 && targetArea > 0 ? (
+                    <span
+                      className={`inline-flex items-center px-2 py-0.5 rounded-full font-bold text-[10px] ${
+                        areaMetrics.achievement >= 100
+                          ? 'bg-[#DCFCE7] text-[#15803D] border border-[#86EFAC]'
+                          : 'bg-[#FEE2E2] text-[#B91C1C] border border-[#FCA5A5]'
+                      }`}
+                    >
+                      {areaMetrics.achievement}%
+                    </span>
+                  ) : (
+                    <span className="text-[#9CA3AF]">-</span>
+                  )}
                 </td>
                 <td className="py-3.5 px-3 text-right text-[#111827]">
-                  {areaMetrics.at.toLocaleString('id-ID')}
+                  {areaBill > 0 ? areaMetrics.at.toLocaleString('id-ID') : '0'}
                 </td>
                 <td className="py-3.5 px-3 text-right">
-                  <span
-                    className={
-                      areaMetrics.selisih >= 0
-                        ? 'text-[#15803D] font-bold'
-                        : 'text-[#B91C1C] font-bold'
-                    }
-                  >
-                    {areaMetrics.selisih >= 0 ? '+' : ''}
-                    {areaMetrics.selisih.toLocaleString('id-ID')}
-                  </span>
+                  {areaPenonton > 0 && targetArea > 0 ? (
+                    <span
+                      className={
+                        areaMetrics.selisih >= 0
+                          ? 'text-[#15803D] font-bold'
+                          : 'text-[#B91C1C] font-bold'
+                      }
+                    >
+                      {areaMetrics.selisih >= 0 ? '+' : ''}
+                      {areaMetrics.selisih.toLocaleString('id-ID')}
+                    </span>
+                  ) : (
+                    <span className="text-[#9CA3AF]">0</span>
+                  )}
                 </td>
                 <td className="py-3.5 px-3 text-center" colSpan={2}>
                   <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-[#EDE9FE] text-[#6D28D9] border border-[#DDD6FE]">

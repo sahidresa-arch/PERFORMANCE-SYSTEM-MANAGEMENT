@@ -77,24 +77,10 @@ export default function App() {
     }
   }, [currentUser, activeMenu]);
 
-  // One-time cleanup of legacy dummy seed data jika belum pernah dibersihkan
+  // Safe initialization
   useEffect(() => {
     try {
-      const isCleaned = localStorage.getItem('cinema_xxi_clean_v1');
-      if (!isCleaned) {
-        localStorage.removeItem('cinema_xxi_daily_sales');
-        localStorage.removeItem('cinema_xxi_baking_sales');
-        localStorage.removeItem('cinema_xxi_toilet_inspections');
-        localStorage.removeItem('cinema_xxi_movies_history');
-        // Bersihkan seluruh occupancy lama
-        Object.keys(localStorage).forEach((k) => {
-          if (k.startsWith('cinema_xxi_occupancy_')) {
-            localStorage.removeItem(k);
-          }
-        });
-        localStorage.setItem('cinema_xxi_clean_v1', 'true');
-        StorageService.broadcastChange('all-reset');
-      }
+      localStorage.setItem('cinema_xxi_clean_v1', 'true');
     } catch {
       // ignore
     }

@@ -136,6 +136,18 @@ export const ToiletInspection: React.FC<ToiletInspectionProps> = ({
 
   useEffect(() => {
     reloadInspections();
+
+    const handleStorageUpdate = (e: any) => {
+      const type = e?.detail?.type;
+      if (!type || type === 'inspection' || type === 'all-reset') {
+        reloadInspections();
+      }
+    };
+
+    window.addEventListener('cinema-xxi-storage-update', handleStorageUpdate);
+    return () => {
+      window.removeEventListener('cinema-xxi-storage-update', handleStorageUpdate);
+    };
   }, [selectedDate]);
 
   // Guard Check: Check if an inspection already exists for this exact combination

@@ -81,15 +81,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     }
 
     setIsUploadingSupabase(true);
-    setUploadStatus('Mengunggah data sales & okupansi lokal ke Supabase...');
+    setUploadStatus('Mengunggah data sales, okupansi & inspection lokal ke Supabase...');
     try {
       const res = await uploadAllLocalToSupabase();
       if (res.success) {
         setUploadStatus(
-          `Berhasil upload! ${res.salesCount} data sales & ${res.occupancyCount} rekap okupansi tersinkron ke Supabase.`
+          `Berhasil upload! ${res.salesCount} sales, ${res.occupancyCount} okupansi, & ${res.inspectionCount} card inspection tersinkron ke Supabase.`
         );
       } else {
-        setUploadStatus(`Upload gagal: ${res.error || 'Periksa tabel cinema_sales & cinema_occupancy'}`);
+        setUploadStatus(`Upload gagal: ${res.error || 'Periksa tabel di Supabase'}`);
       }
     } catch (e: any) {
       setUploadStatus(`Upload gagal: ${e.message}`);

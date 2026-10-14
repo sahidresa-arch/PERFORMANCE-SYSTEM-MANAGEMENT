@@ -1,6 +1,6 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { StorageService } from './storage';
-import { DailySalesRecord } from '../types';
+import { DailySalesRecord, ToiletInspectionRecord } from '../types';
 
 let supabaseInstance: SupabaseClient | null = null;
 let currentClientKey = '';
@@ -44,14 +44,32 @@ CREATE TABLE IF NOT EXISTS public.cinema_baking (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
--- 4. Indeks performa pencarian query
+-- 4. Tabel Card Inspection Toilet (Happy Room Care)
+CREATE TABLE IF NOT EXISTS public.cinema_inspections (
+    id TEXT PRIMARY KEY,
+    outlet_id TEXT NOT NULL,
+    date DATE NOT NULL,
+    show_number INT NOT NULL,
+    type TEXT NOT NULL,
+    inspector_name TEXT NOT NULL,
+    time TEXT DEFAULT '',
+    notes TEXT DEFAULT '',
+    checklist JSONB NOT NULL DEFAULT '{}'::jsonb,
+    status TEXT DEFAULT 'Sudah Lapor',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- 5. Indeks performa pencarian query
 CREATE INDEX IF NOT EXISTS idx_cinema_sales_outlet_date ON public.cinema_sales(outlet_id, date);
 CREATE INDEX IF NOT EXISTS idx_cinema_occupancy_outlet_date ON public.cinema_occupancy(outlet_id, date);
+CREATE INDEX IF NOT EXISTS idx_cinema_inspections_outlet_date ON public.cinema_inspections(outlet_id, date);
 
--- 5. Aktifkan Row Level Security (RLS) dengan Policy Akses Anon
+-- 6. Aktifkan Row Level Security (RLS) dengan Policy Akses Anon
 ALTER TABLE public.cinema_sales ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.cinema_occupancy ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.cinema_baking ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.cinema_inspections ENABLE ROW LEVEL SECURITY;
 
 -- Policy untuk public / anon user
 DROP POLICY IF EXISTS "Allow anon all on cinema_sales" ON public.cinema_sales;
@@ -62,6 +80,9 @@ CREATE POLICY "Allow anon all on cinema_occupancy" ON public.cinema_occupancy FO
 
 DROP POLICY IF EXISTS "Allow anon all on cinema_baking" ON public.cinema_baking;
 CREATE POLICY "Allow anon all on cinema_baking" ON public.cinema_baking FOR ALL USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Allow anon all on cinema_inspections" ON public.cinema_inspections;
+CREATE POLICY "Allow anon all on cinema_inspections" ON public.cinema_inspections FOR ALL USING (true) WITH CHECK (true);
 `;
 
 export function getSupabase(): SupabaseClient | null {
@@ -319,11 +340,25 @@ export async function mergeRemoteOccupancyToLocal(): Promise<boolean> {
     const date = row.date;
     const rows = Array.isArray(row.rows) ? row.rows : [];
     if (outletId && date && rows.length > 0) {
-      const key = `cinema_xxi_occupancy_${outletId}_${date}`;
-      const existingRaw = localStorage.getItem(key);
+      const key1 = `cinema_xxi_occupancy_records_${outletId}_${date}`;
+      const key2 = `cinema_xxi_occupancy_${outletId}_${date}`;
+      const existingRaw = localStorage.getItem(key1) || localStorage.getItem(key2);
       const newRaw = JSON.stringify(rows);
       if (existingRaw !== newRaw) {
-        localStorage.setItem(key, newRaw);
+        localStorage.setItem(key1, newRaw);
+        localStorage.setItem(key2, newRaw);
+        try {
+          const manRaw = localStorage.getItem('cinema_xxi_occupancy_manifest');
+          const man = manRaw ? JSON.parse(manRaw) : {};
+          if (!man[outletId]) man[outletId] = [];
+          if (!man[outletId].includes(date)) {
+            man[outletId].push(date);
+            localStorage.setItem('cinema_xxi_occupancy_manifest', JSON.stringify(man));
+          }
+        } catch {
+          // ignore
+        }
+        StorageService.syncOccupancyToMovieHistory(outletId, date, rows);
         updated = true;
       }
     }
@@ -331,6 +366,115 @@ export async function mergeRemoteOccupancyToLocal(): Promise<boolean> {
 
   if (updated) {
     StorageService.broadcastChange('occupancy');
+    StorageService.broadcastChange('movies');
+  }
+
+  return updated;
+}
+
+/**
+ * Sinkronisasi Satu Record Card Inspection ke Supabase
+ */
+export async function syncInspectionToSupabase(record: ToiletInspectionRecord): Promise<boolean> {
+  const client = getSupabase();
+  if (!client || !record) return false;
+
+  try {
+    const payload = {
+      id: record.id,
+      outlet_id: record.outletId,
+      date: record.date,
+      show_number: record.showNumber,
+      type: record.type,
+      inspector_name: record.inspectorName,
+      time: record.time || '',
+      notes: record.notes || '',
+      checklist: record.checklist || {},
+      status: record.status || 'Sudah Lapor',
+      updated_at: new Date().toISOString(),
+    };
+
+    const { error } = await client
+      .from('cinema_inspections')
+      .upsert(payload, { onConflict: 'id' });
+
+    if (error) {
+      console.warn('Sync inspection to Supabase warning:', error);
+      return false;
+    }
+    return true;
+  } catch (e) {
+    console.warn('Supabase inspection sync error:', e);
+    return false;
+  }
+}
+
+/**
+ * Ambil Rekap Card Inspection dari Supabase
+ */
+export async function fetchInspectionsFromSupabase(
+  outletId?: string,
+  date?: string
+): Promise<ToiletInspectionRecord[] | null> {
+  const client = getSupabase();
+  if (!client) return null;
+
+  try {
+    let query = client
+      .from('cinema_inspections')
+      .select('*')
+      .order('date', { ascending: false });
+
+    if (outletId) query = query.eq('outlet_id', outletId);
+    if (date) query = query.eq('date', date);
+
+    const { data, error } = await query;
+    if (error || !data) return null;
+
+    return data.map((row: any) => ({
+      id: row.id,
+      outletId: row.outlet_id,
+      date: row.date,
+      showNumber: row.show_number,
+      type: row.type,
+      inspectorName: row.inspector_name,
+      time: row.time || '',
+      notes: row.notes || '',
+      checklist: row.checklist || {},
+      status: row.status || 'Sudah Lapor',
+    }));
+  } catch (e) {
+    console.warn('Supabase fetch inspections error:', e);
+    return null;
+  }
+}
+
+/**
+ * Merges remote inspection records from Supabase into local storage and notifies UI components
+ */
+export async function mergeRemoteInspectionsToLocal(): Promise<boolean> {
+  const remoteInspections = await fetchInspectionsFromSupabase();
+  if (!remoteInspections || remoteInspections.length === 0) return false;
+
+  const currentLocal = StorageService.getInspections();
+  let updated = false;
+
+  remoteInspections.forEach((remote) => {
+    const idx = currentLocal.findIndex((i) => i.id === remote.id);
+    if (idx >= 0) {
+      if (JSON.stringify(currentLocal[idx]) !== JSON.stringify(remote)) {
+        currentLocal[idx] = remote;
+        updated = true;
+      }
+    } else {
+      currentLocal.unshift(remote);
+      updated = true;
+    }
+  });
+
+  if (updated) {
+    localStorage.setItem('cinema_xxi_toilet_inspections', JSON.stringify(currentLocal));
+    StorageService.broadcastChange('inspection');
   }
 
   return updated;
@@ -348,6 +492,7 @@ export function setupSupabaseRealtimeSync(): () => void {
   // Initial pull on load
   mergeRemoteSalesToLocal();
   mergeRemoteOccupancyToLocal();
+  mergeRemoteInspectionsToLocal();
   mergeRemoteConfigToLocal();
 
   // Setup Supabase Realtime channel subscription
@@ -387,9 +532,53 @@ export function setupSupabaseRealtimeSync(): () => void {
             const outletId = payload.new.outlet_id;
             const date = payload.new.date;
             const rows = Array.isArray(payload.new.rows) ? payload.new.rows : [];
-            const key = `cinema_xxi_occupancy_${outletId}_${date}`;
-            localStorage.setItem(key, JSON.stringify(rows));
+            const key1 = `cinema_xxi_occupancy_records_${outletId}_${date}`;
+            const key2 = `cinema_xxi_occupancy_${outletId}_${date}`;
+            localStorage.setItem(key1, JSON.stringify(rows));
+            localStorage.setItem(key2, JSON.stringify(rows));
+            try {
+              const manRaw = localStorage.getItem('cinema_xxi_occupancy_manifest');
+              const man = manRaw ? JSON.parse(manRaw) : {};
+              if (!man[outletId]) man[outletId] = [];
+              if (!man[outletId].includes(date)) {
+                man[outletId].push(date);
+                localStorage.setItem('cinema_xxi_occupancy_manifest', JSON.stringify(man));
+              }
+            } catch {
+              // ignore
+            }
+            StorageService.syncOccupancyToMovieHistory(outletId, date, rows);
             StorageService.broadcastChange('occupancy');
+            StorageService.broadcastChange('movies');
+          }
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'cinema_inspections' },
+        (payload: any) => {
+          if (payload.new && payload.new.id) {
+            const remoteRecord: ToiletInspectionRecord = {
+              id: payload.new.id,
+              outletId: payload.new.outlet_id,
+              date: payload.new.date,
+              showNumber: payload.new.show_number,
+              type: payload.new.type,
+              inspectorName: payload.new.inspector_name,
+              time: payload.new.time || '',
+              notes: payload.new.notes || '',
+              checklist: payload.new.checklist || {},
+              status: payload.new.status || 'Sudah Lapor',
+            };
+            const currentLocal = StorageService.getInspections();
+            const idx = currentLocal.findIndex((i) => i.id === remoteRecord.id);
+            if (idx >= 0) {
+              currentLocal[idx] = remoteRecord;
+            } else {
+              currentLocal.unshift(remoteRecord);
+            }
+            localStorage.setItem('cinema_xxi_toilet_inspections', JSON.stringify(currentLocal));
+            StorageService.broadcastChange('inspection');
           }
         }
       )
@@ -399,6 +588,7 @@ export function setupSupabaseRealtimeSync(): () => void {
     const intervalId = setInterval(() => {
       mergeRemoteSalesToLocal();
       mergeRemoteOccupancyToLocal();
+      mergeRemoteInspectionsToLocal();
     }, 5000);
 
     return () => {
@@ -414,6 +604,7 @@ export function setupSupabaseRealtimeSync(): () => void {
     const intervalId = setInterval(() => {
       mergeRemoteSalesToLocal();
       mergeRemoteOccupancyToLocal();
+      mergeRemoteInspectionsToLocal();
     }, 5000);
     return () => clearInterval(intervalId);
   }
@@ -426,11 +617,12 @@ export async function uploadAllLocalToSupabase(): Promise<{
   success: boolean;
   salesCount: number;
   occupancyCount: number;
+  inspectionCount: number;
   error?: string;
 }> {
   const client = getSupabase();
   if (!client) {
-    return { success: false, salesCount: 0, occupancyCount: 0, error: 'Supabase belum terhubung.' };
+    return { success: false, salesCount: 0, occupancyCount: 0, inspectionCount: 0, error: 'Supabase belum terhubung.' };
   }
 
   try {
@@ -470,16 +662,28 @@ export async function uploadAllLocalToSupabase(): Promise<{
       }
     }
 
+    // Ambil dan upload inspections
+    let inspectionCount = 0;
+    const inspections = StorageService.getInspections();
+    if (inspections.length > 0) {
+      for (const ins of inspections) {
+        const ok = await syncInspectionToSupabase(ins);
+        if (ok) inspectionCount++;
+      }
+    }
+
     return {
       success: true,
       salesCount,
       occupancyCount,
+      inspectionCount,
     };
   } catch (err: any) {
     return {
       success: false,
       salesCount: 0,
       occupancyCount: 0,
+      inspectionCount: 0,
       error: err.message,
     };
   }

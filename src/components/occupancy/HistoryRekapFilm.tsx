@@ -33,7 +33,7 @@ export const HistoryRekapFilm: React.FC<HistoryRekapFilmProps> = ({
   const [isScanModalOpen, setIsScanModalOpen] = useState(false);
 
   // Date Filter State
-  const [dateMode, setDateMode] = useState<'month' | 'today' | 'custom'>('month');
+  const [dateMode, setDateMode] = useState<'all' | 'month' | 'today' | 'custom'>('all');
   const [customStartDate, setCustomStartDate] = useState(() => {
     const now = new Date();
     const y = now.getFullYear();
@@ -77,6 +77,10 @@ export const HistoryRekapFilm: React.FC<HistoryRekapFilmProps> = ({
   ) => {
     StorageService.saveOccupancyRecord(outletId, date, studioRows);
     setMovies(StorageService.getAllUploadedMovies());
+    if (selectedOutletId !== outletId && selectedOutletId !== 'all') {
+      setSelectedOutletId(outletId);
+    }
+    setDateMode('all');
     setIsScanModalOpen(false);
   };
 
@@ -88,7 +92,7 @@ export const HistoryRekapFilm: React.FC<HistoryRekapFilmProps> = ({
 
     return movies.filter((m) => {
       // 1. Outlet Filter
-      if (selectedOutletId && m.outletId !== selectedOutletId) return false;
+      if (selectedOutletId && selectedOutletId !== 'all' && m.outletId !== selectedOutletId) return false;
 
       // 2. Date Filter
       if (dateMode === 'today') {
@@ -98,6 +102,7 @@ export const HistoryRekapFilm: React.FC<HistoryRekapFilmProps> = ({
       } else if (dateMode === 'custom') {
         if (!m.date || m.date < customStartDate || m.date > customEndDate) return false;
       }
+      // dateMode === 'all' includes all records without restriction!
 
       // 3. Search Query
       if (searchQuery.trim()) {
@@ -274,6 +279,16 @@ export const HistoryRekapFilm: React.FC<HistoryRekapFilmProps> = ({
             </span>
 
             <div className="flex rounded-xl overflow-hidden border border-slate-200 p-0.5 bg-slate-100 shadow-2xs text-xs">
+              <button
+                onClick={() => setDateMode('all')}
+                className={`px-3 py-1 font-bold rounded-lg transition cursor-pointer ${
+                  dateMode === 'all'
+                    ? 'bg-amber-500 text-white shadow-2xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                Semua Periode
+              </button>
               <button
                 onClick={() => setDateMode('month')}
                 className={`px-3 py-1 font-bold rounded-lg transition cursor-pointer ${

@@ -549,8 +549,12 @@ export const StorageService = {
       (import.meta as any).env?.VITE_MISTRAL_API_KEY ||
       (window as any).MISTRAL_API_KEY ||
       DEFAULT_MISTRAL_API_KEY;
-    const envSupabaseUrl = (import.meta as any).env?.VITE_SUPABASE_URL || '';
-    const envSupabaseAnonKey = (import.meta as any).env?.VITE_SUPABASE_ANON_KEY || '';
+    const envSupabaseUrl =
+      (import.meta as any).env?.VITE_SUPABASE_URL ||
+      'https://ctwzvxjjorrczwtcbote.supabase.co';
+    const envSupabaseAnonKey =
+      (import.meta as any).env?.VITE_SUPABASE_ANON_KEY ||
+      'sb_publishable_2UV0MOXUy0C5NqWsXaxhtg_LRO76v0v';
 
     const raw = localStorage.getItem(KEYS.CONFIG);
     let config: SystemConfig = {
@@ -830,6 +834,7 @@ export const StorageService = {
         if (init) {
           return {
             ...so,
+            targetHead: so.targetHead !== undefined ? so.targetHead : init.targetHead,
             studios: init.studios || so.studios,
             umr: init.umr,
           };
@@ -1101,6 +1106,12 @@ export const StorageService = {
     }
     localStorage.setItem(KEYS.INSPECTION, JSON.stringify(list));
     this.broadcastChange('inspection');
+
+    // Asynchronous background sync ke Supabase jika terhubung
+    import('./supabase')
+      .then((m) => m.syncInspectionToSupabase(record))
+      .catch(() => {});
+
     return record;
   },
 
@@ -1793,33 +1804,40 @@ export const StorageService = {
     }>
   ) {
     if (!Array.isArray(rows) || rows.length === 0) return;
+    const normDate = this.normalizeDateStr(date);
     const existingList = this.getMovieHistory();
 
     // Hapus data lama untuk outlet & tanggal ini agar jika di-upload/scan 2x dalam 1 tanggal,
     // tetap pakai data TERBARU saja (mencegah duplikat/double)
     const filteredList = existingList.filter(
-      (m) => !(m.outletId === outletId && m.date === date)
+      (m) => !(m.outletId === outletId && (m.date === date || m.date === normDate))
     );
 
     const newRecords: MovieScreeningRecord[] = [];
 
     rows.forEach((row, idx) => {
-      const title = (row.filmTitle || row.notes || '').trim();
-      if (!title) return;
+      const rawTitle = (row.filmTitle || row.notes || '').trim();
+      const title = rawTitle || (row.studioName ? `${row.studioName}` : `Studio ${idx + 1}`);
 
-      const recordId = `rec_${outletId}_${date}_${row.studioName.replace(/\s+/g, '_')}_${idx}`;
-      const genre = this.resolveFilmGenre(title, row.genre);
-      const capacity = row.capacity || 200;
+      const titles = title.includes(';')
+        ? title.split(';').map((t: string) => t.trim()).filter(Boolean)
+        : [title];
 
-      newRecords.push({
-        id: recordId,
-        outletId,
-        date,
-        studioName: row.studioName,
-        movieTitle: title,
-        genre,
-        capacity,
-        shows: row.shows || {},
+      titles.forEach((singleTitle, tIdx) => {
+        const recordId = `rec_${outletId}_${normDate}_${(row.studioName || `studio_${idx}`).replace(/\s+/g, '_')}_${idx}_${tIdx}`;
+        const genre = this.resolveFilmGenre(singleTitle, row.genre);
+        const capacity = row.capacity || 200;
+
+        newRecords.push({
+          id: recordId,
+          outletId,
+          date: normDate,
+          studioName: row.studioName || `Studio ${idx + 1}`,
+          movieTitle: singleTitle,
+          genre,
+          capacity,
+          shows: tIdx === 0 ? (row.shows || {}) : { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0, 7: 0 },
+        });
       });
     });
 
@@ -1833,49 +1851,68 @@ export const StorageService = {
     const movieMap = new Map<string, MovieScreeningRecord>();
     const handledDatesSet = new Set<string>();
 
+    const processRows = (outId: string, d: string, rows: any[]) => {
+      const normD = this.normalizeDateStr(d);
+      handledDatesSet.add(`${outId}_${normD}`);
+      handledDatesSet.add(`${outId}_${d}`);
+
+      rows.forEach((r, idx) => {
+        const rawTitle = (r.filmTitle || r.notes || '').trim();
+        const title = rawTitle || (r.studioName ? `${r.studioName}` : `Studio ${idx + 1}`);
+        if (!title) return;
+
+        const titles = title.includes(';')
+          ? title.split(';').map((t: string) => t.trim()).filter(Boolean)
+          : [title];
+
+        titles.forEach((singleTitle: string, tIdx: number) => {
+          const studioKey = (r.studioName || `Studio_${idx}`).toLowerCase();
+          const cleanTitle = cleanTitleForCompare(singleTitle);
+          // Map key unik per outlet, tanggal, studio, dan judul film
+          const mapKey = `${outId}_${normD}_${studioKey}_${cleanTitle}_${idx}_${tIdx}`;
+          if (!movieMap.has(mapKey)) {
+            movieMap.set(mapKey, {
+              id: `agg_${outId}_${normD}_${idx}_${tIdx}`,
+              outletId: outId,
+              date: normD,
+              studioName: r.studioName || 'Studio',
+              movieTitle: singleTitle,
+              genre: this.resolveFilmGenre(singleTitle, r.genre),
+              capacity: r.capacity || 200,
+              shows: tIdx === 0 ? (r.shows || {}) : { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0, 7: 0 },
+            });
+          }
+        });
+      });
+    };
+
     // 1. Scan seluruh record okupansi di localStorage TERLEBIH DAHULU (data scan / edit TERBARU)
     try {
       const keys = Object.keys(localStorage);
       keys.forEach((k) => {
-        if (k.startsWith('cinema_xxi_occupancy_records_')) {
-          // Format key: cinema_xxi_occupancy_records_<outletId>_<date>
-          const keyBody = k.replace('cinema_xxi_occupancy_records_', '');
+        if (
+          k.startsWith('cinema_xxi_occupancy_records_') ||
+          (k.startsWith('cinema_xxi_occupancy_') &&
+            !k.startsWith('cinema_xxi_occupancy_manifest') &&
+            !k.startsWith('cinema_xxi_occupancy_records_'))
+        ) {
+          const prefix = k.startsWith('cinema_xxi_occupancy_records_')
+            ? 'cinema_xxi_occupancy_records_'
+            : 'cinema_xxi_occupancy_';
+          const keyBody = k.replace(prefix, '');
           const underscoreIdx = keyBody.lastIndexOf('_');
           if (underscoreIdx > 0) {
             const outletId = keyBody.substring(0, underscoreIdx);
             const date = keyBody.substring(underscoreIdx + 1);
-            handledDatesSet.add(`${outletId}_${date}`);
 
             const raw = localStorage.getItem(k);
             if (raw) {
               try {
                 const parsed = JSON.parse(raw);
                 const rows: any[] = Array.isArray(parsed) ? parsed : parsed?.rows || [];
-                rows.forEach((r, idx) => {
-                  const title = (r.filmTitle || r.notes || '').trim();
-                  if (title) {
-                    const titles = title.includes(';')
-                      ? title.split(';').map((t: string) => t.trim()).filter(Boolean)
-                      : [title];
-
-                    titles.forEach((singleTitle: string, tIdx: number) => {
-                      const studioKey = (r.studioName || `Studio_${idx}`).toLowerCase();
-                      const mapKey = `${outletId}_${date}_${studioKey}_${cleanTitleForCompare(singleTitle)}`;
-                      if (!movieMap.has(mapKey)) {
-                        movieMap.set(mapKey, {
-                          id: `agg_${outletId}_${date}_${idx}_${tIdx}`,
-                          outletId,
-                          date,
-                          studioName: r.studioName || 'Studio',
-                          movieTitle: singleTitle,
-                          genre: this.resolveFilmGenre(singleTitle, r.genre),
-                          capacity: r.capacity || 200,
-                          shows: tIdx === 0 ? (r.shows || {}) : { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0, 7: 0 },
-                        });
-                      }
-                    });
-                  }
-                });
+                if (rows.length > 0) {
+                  processRows(outletId, date, rows);
+                }
               } catch {
                 // ignore
               }
@@ -1887,46 +1924,55 @@ export const StorageService = {
       // ignore
     }
 
-    // 2. Tambahkan dari MIGRATED_OCCUPANCY_RECORDS untuk outlet & date yang belum tersimpan di localStorage
-    MIGRATED_OCCUPANCY_RECORDS.forEach((migrated) => {
-      const handledKey = `${migrated.outletId}_${migrated.date}`;
-      if (!handledDatesSet.has(handledKey)) {
-        migrated.rows.forEach((r, idx) => {
-          const title = (r.filmTitle || r.notes || '').trim();
-          if (title) {
-            const titles = title.includes(';')
-              ? title.split(';').map((t: string) => t.trim()).filter(Boolean)
-              : [title];
-
-            titles.forEach((singleTitle: string, tIdx: number) => {
-              const studioKey = (r.studioName || `Studio_${idx}`).toLowerCase();
-              const mapKey = `${migrated.outletId}_${migrated.date}_${studioKey}_${cleanTitleForCompare(singleTitle)}`;
-              if (!movieMap.has(mapKey)) {
-                movieMap.set(mapKey, {
-                  id: `migrated_${migrated.outletId}_${migrated.date}_${idx}_${tIdx}`,
-                  outletId: migrated.outletId,
-                  date: migrated.date,
-                  studioName: r.studioName || 'Studio',
-                  movieTitle: singleTitle,
-                  genre: this.resolveFilmGenre(singleTitle, r.genre),
-                  capacity: r.capacity || 200,
-                  shows: tIdx === 0 ? (r.shows || {}) : { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0, 7: 0 },
-                });
-              }
-            });
+    // 2. Scan dari persistent manifest catalog
+    try {
+      const manifestRaw = localStorage.getItem('cinema_xxi_occupancy_manifest');
+      if (manifestRaw) {
+        const manifest = JSON.parse(manifestRaw);
+        Object.values(manifest).forEach((entry: any) => {
+          if (entry && entry.outletId && entry.date) {
+            const rows: any[] = Array.isArray(entry.data)
+              ? entry.data
+              : Array.isArray(entry.rows)
+              ? entry.rows
+              : [];
+            if (rows.length > 0) {
+              processRows(entry.outletId, entry.date, rows);
+            }
           }
         });
       }
+    } catch {
+      // ignore
+    }
+
+    // 3. Tambahkan dari MIGRATED_OCCUPANCY_RECORDS untuk outlet & date yang belum tersimpan di localStorage
+    MIGRATED_OCCUPANCY_RECORDS.forEach((migrated) => {
+      const normD = this.normalizeDateStr(migrated.date);
+      const handledKey = `${migrated.outletId}_${normD}`;
+      if (!handledDatesSet.has(handledKey) && !handledDatesSet.has(`${migrated.outletId}_${migrated.date}`)) {
+        processRows(migrated.outletId, migrated.date, migrated.rows);
+      }
     });
 
-    // 3. Tambahkan dari getMovieHistory() HANYA jika tanggal+outlet+studio+title tersebut belum ada
+    // 4. Tambahkan dari getMovieHistory() HANYA jika tanggal+outlet+studio+title tersebut belum ada
     const fromMovies = this.getMovieHistory();
     fromMovies.forEach((m) => {
       const studioKey = (m.studioName || '').toLowerCase();
-      const mapKey = `${m.outletId}_${m.date}_${studioKey}_${cleanTitleForCompare(m.movieTitle)}`;
-      if (!movieMap.has(mapKey)) {
+      const normD = this.normalizeDateStr(m.date);
+      const cleanTitle = cleanTitleForCompare(m.movieTitle);
+      const mapKey = `${m.outletId}_${normD}_${studioKey}_${cleanTitle}`;
+      let exists = false;
+      for (const key of movieMap.keys()) {
+        if (key.startsWith(`${m.outletId}_${normD}_${studioKey}_${cleanTitle}`)) {
+          exists = true;
+          break;
+        }
+      }
+      if (!exists) {
         movieMap.set(mapKey, {
           ...m,
+          date: normD,
           genre: this.resolveFilmGenre(m.movieTitle, m.genre),
         });
       }
@@ -1945,31 +1991,42 @@ export const StorageService = {
     shows: { [showNum: number]: number };
     notes: string;
   }> | null {
-    const normalizeDateStr = (d: string) => {
-      if (!d) return '';
-      const parts = d.split(/[-/]/);
-      if (parts.length === 3) {
-        if (parts[0].length === 4) {
-          return `${parts[0]}-${parts[1].padStart(2, '0')}-${parts[2].padStart(2, '0')}`;
-        } else if (parts[2].length === 4) {
-          return `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
-        }
-      }
-      return d;
-    };
-
-    const normTargetDate = normalizeDateStr(date);
-    const key = `${KEYS.OCCUPANCY}_${outletId}_${normTargetDate}`;
-    let raw = localStorage.getItem(key);
+    const normTargetDate = this.normalizeDateStr(date);
+    let raw = localStorage.getItem(`${KEYS.OCCUPANCY}_${outletId}_${normTargetDate}`);
     if (!raw) {
       raw = localStorage.getItem(`${KEYS.OCCUPANCY}_${outletId}_${date}`);
+    }
+    // Check with older prefix if not found
+    if (!raw) {
+      raw = localStorage.getItem(`cinema_xxi_occupancy_${outletId}_${normTargetDate}`);
+      if (!raw) {
+        raw = localStorage.getItem(`cinema_xxi_occupancy_${outletId}_${date}`);
+      }
+    }
+
+    // Check persistent manifest backup
+    if (!raw) {
+      try {
+        const manifestRaw = localStorage.getItem('cinema_xxi_occupancy_manifest');
+        if (manifestRaw) {
+          const manifest = JSON.parse(manifestRaw);
+          const entry =
+            manifest[`${outletId}_${normTargetDate}`] ||
+            manifest[`${outletId}_${date}`];
+          if (entry && (entry.data || entry.rows)) {
+            raw = JSON.stringify(entry.data || entry.rows);
+          }
+        }
+      } catch {
+        // ignore
+      }
     }
 
     if (!raw) {
       const migrated = MIGRATED_OCCUPANCY_RECORDS.find(
         (m) =>
           m.outletId === outletId &&
-          (m.date === date || normalizeDateStr(m.date) === normTargetDate)
+          (m.date === date || this.normalizeDateStr(m.date) === normTargetDate)
       );
       if (migrated) {
         this.saveOccupancyRecord(outletId, migrated.date, migrated.rows);
@@ -2013,6 +2070,20 @@ export const StorageService = {
     }
   },
 
+  normalizeDateStr(d: string): string {
+    if (!d) return '';
+    const clean = d.trim();
+    const parts = clean.split(/[-/]/);
+    if (parts.length === 3) {
+      if (parts[0].length === 4) {
+        return `${parts[0]}-${parts[1].padStart(2, '0')}-${parts[2].padStart(2, '0')}`;
+      } else if (parts[2].length === 4) {
+        return `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
+      }
+    }
+    return clean;
+  },
+
   saveOccupancyRecord(
     outletId: string,
     date: string,
@@ -2026,24 +2097,47 @@ export const StorageService = {
       notes: string;
     }> | any
   ) {
-    const key = `${KEYS.OCCUPANCY}_${outletId}_${date}`;
+    const normDate = this.normalizeDateStr(date);
     const resolvedData = Array.isArray(data)
       ? data.map((row) => ({
           ...row,
           genre: this.resolveFilmGenre(row.filmTitle || row.notes || '', row.genre),
         }))
       : data;
-    localStorage.setItem(key, JSON.stringify(resolvedData));
+
+    // Save with primary normalized key
+    localStorage.setItem(`${KEYS.OCCUPANCY}_${outletId}_${normDate}`, JSON.stringify(resolvedData));
+    if (normDate !== date) {
+      localStorage.setItem(`${KEYS.OCCUPANCY}_${outletId}_${date}`, JSON.stringify(resolvedData));
+    }
+    // Also save legacy key for compatibility
+    localStorage.setItem(`cinema_xxi_occupancy_${outletId}_${normDate}`, JSON.stringify(resolvedData));
+
+    // Save to persistent manifest catalog to ensure it never gets lost
+    try {
+      const manifestRaw = localStorage.getItem('cinema_xxi_occupancy_manifest');
+      const manifest = manifestRaw ? JSON.parse(manifestRaw) : {};
+      manifest[`${outletId}_${normDate}`] = {
+        outletId,
+        date: normDate,
+        data: resolvedData,
+        updatedAt: new Date().toISOString(),
+      };
+      localStorage.setItem('cinema_xxi_occupancy_manifest', JSON.stringify(manifest));
+    } catch {
+      // ignore
+    }
+
     this.broadcastChange('occupancy');
 
     // Auto-sync into movie history records
     if (Array.isArray(resolvedData)) {
-      this.syncOccupancyToMovieHistory(outletId, date, resolvedData);
+      this.syncOccupancyToMovieHistory(outletId, normDate, resolvedData);
     }
 
     // Asynchronous background sync ke Supabase jika terhubung
     import('./supabase')
-      .then((m) => m.syncOccupancyToSupabase(outletId, date, Array.isArray(data) ? data : []))
+      .then((m) => m.syncOccupancyToSupabase(outletId, normDate, Array.isArray(data) ? data : []))
       .catch(() => {});
   },
 

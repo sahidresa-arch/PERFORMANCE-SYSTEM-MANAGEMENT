@@ -30,9 +30,9 @@ export const MarketIntelligence: React.FC<MarketIntelligenceProps> = ({
   }, [rawOutlets, isManagerOrCleaner, currentUser?.outletId]);
 
   const defaultOutletId =
-    currentUser?.outletId || (outlets.length > 0 ? outlets[0].id : '');
+    currentUser?.outletId || (isManagerOrCleaner ? (outlets[0]?.id || '') : 'all');
   const [selectedOutletId, setSelectedOutletId] = useState<string>(defaultOutletId);
-  const [period, setPeriod] = useState<'month' | 'custom'>('month');
+  const [period, setPeriod] = useState<'all' | 'month' | 'custom'>('all');
   const [customStartDate, setCustomStartDate] = useState(() => {
     const now = new Date();
     const y = now.getFullYear();
@@ -47,10 +47,20 @@ export const MarketIntelligence: React.FC<MarketIntelligenceProps> = ({
     return `${y}-${m}-${d}`;
   });
 
-  const selectedOutlet = useMemo(
-    () => outlets.find((o) => o.id === selectedOutletId) || outlets[0],
-    [outlets, selectedOutletId]
-  );
+  const selectedOutlet = useMemo(() => {
+    if (!selectedOutletId || selectedOutletId === 'all') {
+      return {
+        id: 'all',
+        name: 'Semua Outlet Bioskop (Gabungan)',
+        areaId: '',
+        targetHead: 0,
+        umr: 0,
+        class: 'All',
+        studios: [],
+      };
+    }
+    return outlets.find((o) => o.id === selectedOutletId) || outlets[0];
+  }, [outlets, selectedOutletId]);
 
   // Ambil data film riil dari rekap okupansi & hasil upload scan
   const [allMovies, setAllMovies] = useState<MovieScreeningRecord[]>(() =>
@@ -69,7 +79,7 @@ export const MarketIntelligence: React.FC<MarketIntelligenceProps> = ({
 
   const outletMovies = useMemo(() => {
     let list = allMovies.filter((m) =>
-      selectedOutletId ? m.outletId === selectedOutletId : true
+      selectedOutletId && selectedOutletId !== 'all' ? m.outletId === selectedOutletId : true
     );
 
     const now = new Date();
@@ -83,6 +93,7 @@ export const MarketIntelligence: React.FC<MarketIntelligenceProps> = ({
         (m) => m.date && m.date >= customStartDate && m.date <= customEndDate
       );
     }
+    // period === 'all' includes all records!
     return list;
   }, [allMovies, selectedOutletId, period, customStartDate, customEndDate]);
 
@@ -259,6 +270,9 @@ export const MarketIntelligence: React.FC<MarketIntelligenceProps> = ({
               disabled={Boolean(isManagerOrCleaner)}
               className="text-xs font-bold px-3 py-1.5 rounded-xl border border-slate-300 bg-white text-slate-800 shadow-2xs focus:border-amber-400 disabled:bg-slate-100 disabled:text-slate-500 disabled:cursor-not-allowed"
             >
+              {!isManagerOrCleaner && (
+                <option value="all">🌟 Semua Outlet Bioskop (Gabungan)</option>
+              )}
               {outlets.map((o) => (
                 <option key={o.id} value={o.id}>
                   {o.name}
@@ -270,6 +284,7 @@ export const MarketIntelligence: React.FC<MarketIntelligenceProps> = ({
           <div className="flex flex-wrap items-center gap-2">
             <div className="flex rounded-xl overflow-hidden border border-slate-200 p-0.5 bg-slate-100 shadow-2xs">
               {[
+                { id: 'all', label: 'Semua Periode' },
                 { id: 'month', label: 'Bulan Ini' },
                 { id: 'custom', label: 'Custom Date' },
               ].map((p) => (

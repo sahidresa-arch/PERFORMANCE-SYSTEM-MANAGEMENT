@@ -421,17 +421,25 @@ export const RekapOkupansi: React.FC<RekapOkupansiProps> = ({
     StorageService.saveOccupancyRecord(outletId, date, formatted);
 
     setTimeout(() => {
-      if (date === selectedDate) {
+      // Auto-switch filter date to the uploaded report date if different
+      if (date !== selectedDate && typeof onDateChange === 'function') {
+        onDateChange(date);
+      } else {
         setOutletRowsMap((prev) => ({
           ...prev,
           [outletId]: formatted,
         }));
       }
 
+      // Auto-switch outlet filter if specific outlet was selected and doesn't match
+      if (filterType === 'outlet' && selectedOutletId !== outletId && selectedOutletId !== 'all') {
+        setSelectedOutletId(outletId);
+      }
+
       const targetOutletName =
         outlets.find((o) => o.id === outletId)?.name || 'Bioskop XXI';
       setToastMessage(
-        `Data Okupansi ${targetOutletName} berhasil diterapkan (${formatted.length} baris film terpisah & genre teralokasi tepat)!`
+        `Data Okupansi ${targetOutletName} tanggal ${date} berhasil diterapkan (${formatted.length} baris film terpisah)!`
       );
       setTimeout(() => setToastMessage(null), 4000);
     }, 0);
