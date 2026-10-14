@@ -3,6 +3,7 @@ import { User } from '../../types';
 import { StorageService } from '../../lib/storage';
 import {
   CalendarDays,
+  Calendar,
   TrendingUp,
   Users,
   Award,
@@ -21,12 +22,14 @@ interface ExecutiveDashboardProps {
   currentUser: User | null;
   selectedDate: string;
   onNavigate: (menu: string) => void;
+  onDateChange?: (date: string) => void;
 }
 
 export const ExecutiveDashboard: React.FC<ExecutiveDashboardProps> = ({
   currentUser,
   selectedDate,
   onNavigate,
+  onDateChange,
 }) => {
   const areas = StorageService.getAreas();
   const outlets = StorageService.getOutlets();
@@ -179,16 +182,112 @@ export const ExecutiveDashboard: React.FC<ExecutiveDashboardProps> = ({
   const cafeOutlets = outletMetrics.filter((o) => !o.isPremiereOrHs).sort((a, b) => b.sph - a.sph);
   const premiereOutlets = outletMetrics.filter((o) => o.isPremiereOrHs).sort((a, b) => b.sph - a.sph);
 
-  // Active chart items
+  // Active chart items (for Admin & Area Manager view)
   const activeChartItems = chartCategoryTab === 'cafe' ? cafeOutlets : premiereOutlets;
   const maxSphInTab = Math.max(
     ...activeChartItems.map((i) => Math.max(i.sph, i.target)),
     chartCategoryTab === 'cafe' ? 35000 : 150000
   );
 
+  // Check if current user is an Outlet Manager
+  const isManager = currentUser?.role === 'manager' && !!currentUser.outletId;
+  const managerOutlet = outlets.find((o) => o.id === currentUser?.outletId);
+
+  // Monthly Daily Trend Metrics (for Manager role: 1-month daily view)
+  const [yearStr, monthStr] = selectedDate.split('-');
+  const refYear = parseInt(yearStr, 10) || new Date().getFullYear();
+  const refMonth = parseInt(monthStr, 10) || (new Date().getMonth() + 1);
+  const daysInMonth = new Date(refYear, refMonth, 0).getDate();
+
+  const MONTH_NAMES_ID = [
+    'Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni',
+    'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'
+  ];
+  const currentMonthName = MONTH_NAMES_ID[refMonth - 1] || 'Bulan Ini';
+  const DAY_NAMES_ID = ['Min', 'Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab'];
+
+  const managerDailyMetrics = Array.from({ length: daysInMonth }, (_, i) => {
+    const day = i + 1;
+    const dayDate = new Date(refYear, refMonth - 1, day);
+    const dateStr = `${refYear}-${String(refMonth).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    const dayName = DAY_NAMES_ID[dayDate.getDay()];
+    const isWeekend = dayDate.getDay() === 0 || dayDate.getDay() === 6;
+    const isSelected = dateStr === selectedDate;
+
+    const rec = dailySales.find(
+      (s) => s.outletId === managerOutlet?.id && s.date === dateStr
+    );
+    let cin = 0;
+    let fnb = 0;
+    let bll = 0;
+    let pnt = 0;
+    let filledShows = 0;
+    let lockedShows = 0;
+    let hasData = false;
+
+    if (rec && rec.shows && rec.shows.length > 0) {
+      const totals = StorageService.getLatestShowTotals(rec.shows);
+      cin = totals.omsetCinema;
+      fnb = totals.omsetFnB;
+      bll = totals.bill;
+      pnt = totals.penonton;
+      rec.shows.forEach((s) => {
+        if (s.isFilled) filledShows++;
+        if (s.isLocked) lockedShows++;
+      });
+      hasData = cin > 0 || fnb > 0 || pnt > 0 || filledShows > 0;
+    }
+
+    const targetVal = managerOutlet?.targetHead || targetArea;
+    const m = StorageService.calculateMetrics(cin, fnb, bll, pnt, targetVal);
+
+    return {
+      day,
+      dateStr,
+      dayName,
+      isWeekend,
+      isSelected,
+      hasData,
+      sph: m.head,
+      target: targetVal,
+      acv: m.achievement,
+      fnbTotal: fnb,
+      cinemaTotal: cin,
+      penonton: pnt,
+      bill: bll,
+      filledShows,
+      lockedShows,
+    };
+  });
+
+  const totalDaysWithData = managerDailyMetrics.filter((d) => d.hasData).length;
+  const totalDaysAchieved = managerDailyMetrics.filter((d) => d.hasData && d.acv >= 100).length;
+  const mtdFnB = managerDailyMetrics.reduce((sum, d) => sum + d.fnbTotal, 0);
+  const mtdCinema = managerDailyMetrics.reduce((sum, d) => sum + d.cinemaTotal, 0);
+  const mtdPenonton = managerDailyMetrics.reduce((sum, d) => sum + d.penonton, 0);
+  const mtdBill = managerDailyMetrics.reduce((sum, d) => sum + d.bill, 0);
+  const mtdMetrics = StorageService.calculateMetrics(
+    mtdCinema,
+    mtdFnB,
+    mtdBill,
+    mtdPenonton,
+    managerOutlet?.targetHead || targetArea
+  );
+
+  const maxSphMonth = Math.max(
+    ...managerDailyMetrics.map((d) => Math.max(d.sph, d.target)),
+    managerOutlet?.targetHead || targetArea,
+    30000
+  );
+
+  const daysWithDataList = managerDailyMetrics.filter((d) => d.hasData && d.sph > 0);
+  const peakDay = daysWithDataList.length > 0
+    ? daysWithDataList.reduce((prev, curr) => (curr.sph > prev.sph ? curr : prev), daysWithDataList[0])
+    : null;
+
   return (
     <div className="w-full max-w-full space-y-3 sm:space-y-4 pb-4 flex flex-col justify-start">
-      {/* 1. Header Bar: Welcome & Area Filter */}
+      {/* 1. Header Bar: Welcome & Area Filter / Outlet Info */}
       <div className="w-full p-3 sm:p-4 rounded-xl bg-gradient-to-r from-slate-900 via-slate-800 to-amber-950 text-white shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3 border border-amber-500/20">
         <div className="flex items-center space-x-3">
           <div className="p-2 rounded-lg bg-amber-500/20 border border-amber-400/30 text-amber-300 shrink-0">
@@ -197,7 +296,7 @@ export const ExecutiveDashboard: React.FC<ExecutiveDashboardProps> = ({
           <div>
             <div className="flex flex-wrap items-center gap-2">
               <h1 className="text-sm sm:text-base font-extrabold uppercase tracking-tight text-white">
-                Executive Command Center
+                {isManager ? `Command Center &bull; ${managerOutlet?.name}` : 'Executive Command Center'}
               </h1>
               <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-400/20 border border-amber-300/40 text-amber-300">
                 REALTIME PERFORMANCE
@@ -209,24 +308,32 @@ export const ExecutiveDashboard: React.FC<ExecutiveDashboardProps> = ({
           </div>
         </div>
 
-        {/* Filter Area Dropdown */}
+        {/* Filter Area Dropdown for Admin/AM or Outlet Badge for Manager */}
         <div className="flex flex-wrap items-center gap-2.5">
-          <div className="flex items-center space-x-1.5 bg-slate-800/90 px-3 py-1.5 rounded-lg border border-amber-400/30 text-xs">
-            <Building className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-            <label className="text-slate-300 font-medium">Area:</label>
-            <select
-              value={selectedAreaId}
-              onChange={(e) => setSelectedAreaId(e.target.value)}
-              className="bg-transparent text-amber-300 font-bold outline-hidden cursor-pointer focus:ring-0 p-0 text-xs"
-            >
-              <option value="all" className="bg-slate-900 text-white">SEMUA WILAYAH (Target Rp 24.359)</option>
-              {areas.map((a) => (
-                <option key={a.id} value={a.id} className="bg-slate-900 text-white">
-                  {a.name} (Target Rp {a.targetArea.toLocaleString('id-ID')})
-                </option>
-              ))}
-            </select>
-          </div>
+          {isManager ? (
+            <div className="flex items-center space-x-1.5 bg-slate-800/90 px-3 py-1.5 rounded-lg border border-amber-400/30 text-xs">
+              <Building className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+              <span className="text-slate-300 font-medium">Outlet:</span>
+              <span className="text-amber-300 font-black">{managerOutlet?.name}</span>
+            </div>
+          ) : (
+            <div className="flex items-center space-x-1.5 bg-slate-800/90 px-3 py-1.5 rounded-lg border border-amber-400/30 text-xs">
+              <Building className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+              <label className="text-slate-300 font-medium">Area:</label>
+              <select
+                value={selectedAreaId}
+                onChange={(e) => setSelectedAreaId(e.target.value)}
+                className="bg-transparent text-amber-300 font-bold outline-hidden cursor-pointer focus:ring-0 p-0 text-xs"
+              >
+                <option value="all" className="bg-slate-900 text-white">SEMUA WILAYAH (Target Rp 24.359)</option>
+                {areas.map((a) => (
+                  <option key={a.id} value={a.id} className="bg-slate-900 text-white">
+                    {a.name} (Target Rp {a.targetArea.toLocaleString('id-ID')})
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
 
           <button
             onClick={() => onNavigate('sales_input')}
@@ -371,137 +478,336 @@ export const ExecutiveDashboard: React.FC<ExecutiveDashboardProps> = ({
 
       {/* 4. GRAFIK BATANG VERTIKAL (VERTICAL COLUMN BAR CHART) HEAD SPH */}
       <div className="w-full p-3.5 sm:p-4 rounded-xl bg-white border border-slate-200/90 shadow-2xs space-y-3">
+        {/* Header of Chart Section */}
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-2 border-b border-slate-100 pb-2.5">
           <div className="flex items-center space-x-2.5">
             <Award className="w-4 h-4 sm:w-5 sm:h-5 text-amber-600 shrink-0" />
             <div>
-              <h3 className="text-xs sm:text-sm md:text-base font-black uppercase text-slate-900 tracking-wider">
-                Grafik Batang Head SPH Per-Outlet ({selectedAreaName})
-              </h3>
-              <p className="text-[11px] sm:text-xs text-slate-500">
-                Visualisasi Batang Tegak Perbandingan SPH Real (Head) vs Target SPH Outlet
-              </p>
+              {isManager ? (
+                <>
+                  <h3 className="text-xs sm:text-sm md:text-base font-black uppercase text-slate-900 tracking-wider flex items-center gap-2">
+                    <span>Grafik Batang Head SPH Harian &bull; {managerOutlet?.name}</span>
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-300 font-extrabold normal-case">
+                      Bulan {currentMonthName} {refYear}
+                    </span>
+                  </h3>
+                  <p className="text-[11px] sm:text-xs text-slate-500">
+                    Tren Fluktuasi SPH Harian Tanggal 1 s.d. {daysInMonth} &bull; Target Outlet: Rp {(managerOutlet?.targetHead || targetArea).toLocaleString('id-ID')} &bull; Klik batang untuk pilih tanggal
+                  </p>
+                </>
+              ) : (
+                <>
+                  <h3 className="text-xs sm:text-sm md:text-base font-black uppercase text-slate-900 tracking-wider">
+                    Grafik Batang Head SPH Per-Outlet ({selectedAreaName})
+                  </h3>
+                  <p className="text-[11px] sm:text-xs text-slate-500">
+                    Visualisasi Batang Tegak Perbandingan SPH Real (Head) vs Target SPH Outlet
+                  </p>
+                </>
+              )}
             </div>
           </div>
 
-          {/* Category Tabs: Cafe vs Premiere/HS & Legend */}
-          <div className="flex flex-wrap items-center gap-2.5">
-            {/* Chart Legend */}
-            <div className="hidden lg:flex items-center space-x-2.5 text-xs text-slate-500">
-              <span className="flex items-center space-x-1">
-                <span className="w-2.5 h-2.5 rounded-xs bg-emerald-500 inline-block shrink-0" />
-                <span>SPH Achieved (&ge;100%)</span>
-              </span>
-              <span className="flex items-center space-x-1">
-                <span className="w-2.5 h-2.5 rounded-xs bg-amber-500 inline-block shrink-0" />
-                <span>SPH Under Target (&lt;100%)</span>
-              </span>
-              <span className="flex items-center space-x-1">
-                <span className="w-2.5 h-0.5 bg-slate-400 inline-block shrink-0" />
-                <span>Target Baseline</span>
-              </span>
+          {/* Right Header Controls / Legend */}
+          {isManager ? (
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="hidden sm:flex items-center space-x-2 text-xs text-slate-500 mr-1">
+                <span className="flex items-center space-x-1">
+                  <span className="w-2.5 h-2.5 rounded-xs bg-emerald-500 inline-block shrink-0" />
+                  <span>&ge;100%</span>
+                </span>
+                <span className="flex items-center space-x-1">
+                  <span className="w-2.5 h-2.5 rounded-xs bg-amber-500 inline-block shrink-0" />
+                  <span>&lt;100%</span>
+                </span>
+                <span className="flex items-center space-x-1">
+                  <span className="w-2.5 h-0.5 bg-slate-400 inline-block shrink-0" />
+                  <span>Target</span>
+                </span>
+              </div>
+
+              <div className="flex items-center space-x-1.5">
+                <span className="text-[11px] font-extrabold px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-800 border border-emerald-200">
+                  MTD SPH: Rp {mtdMetrics.head.toLocaleString('id-ID')} ({mtdMetrics.achievement}%)
+                </span>
+                <span className="text-[11px] font-bold px-2.5 py-1 rounded-lg bg-blue-50 text-blue-800 border border-blue-200">
+                  Target Capai: {totalDaysAchieved}/{totalDaysWithData} Hari
+                </span>
+              </div>
             </div>
-
-            <div className="flex items-center space-x-1 bg-slate-100 p-1 rounded-lg text-xs">
-              <button
-                onClick={() => setChartCategoryTab('cafe')}
-                className={`px-3 py-1 rounded-md font-bold transition flex items-center space-x-1 cursor-pointer ${
-                  chartCategoryTab === 'cafe'
-                    ? 'bg-amber-500 text-white shadow-2xs'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                <Coffee className="w-3.5 h-3.5" />
-                <span>CAFE XXI ({cafeOutlets.length})</span>
-              </button>
-
-              <button
-                onClick={() => setChartCategoryTab('premiere')}
-                className={`px-3 py-1 rounded-md font-bold transition flex items-center space-x-1 cursor-pointer ${
-                  chartCategoryTab === 'premiere'
-                    ? 'bg-amber-600 text-white shadow-2xs'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                <Crown className="w-3.5 h-3.5" />
-                <span>PREMIERE &amp; HS ({premiereOutlets.length})</span>
-              </button>
-            </div>
-          </div>
-        </div>
-
-        {/* Vertical Column Bar Chart Box */}
-        <div className="w-full overflow-x-auto pb-1">
-          {activeChartItems.length === 0 ? (
-            <p className="text-xs text-slate-400 italic text-center py-6">
-              Tidak ada data outlet untuk kategori ini pada area {selectedAreaName}.
-            </p>
           ) : (
-            <div className="min-w-[800px] lg:min-w-full pt-2">
-              {/* Vertical Column Track Container */}
-              <div className="h-44 sm:h-48 md:h-52 w-full flex items-end gap-2 sm:gap-3 md:gap-4 justify-around pt-6 pb-2 px-2 bg-slate-50/50 rounded-lg border border-slate-100">
-                {activeChartItems.map((item) => {
-                  const targetVal = item.target || targetArea;
-                  const barHeightPct = Math.min(100, Math.max(12, Math.round((item.sph / maxSphInTab) * 100)));
-                  const targetHeightPct = Math.min(100, Math.round((targetVal / maxSphInTab) * 100));
+            <div className="flex flex-wrap items-center gap-2.5">
+              {/* Chart Legend */}
+              <div className="hidden lg:flex items-center space-x-2.5 text-xs text-slate-500">
+                <span className="flex items-center space-x-1">
+                  <span className="w-2.5 h-2.5 rounded-xs bg-emerald-500 inline-block shrink-0" />
+                  <span>SPH Achieved (&ge;100%)</span>
+                </span>
+                <span className="flex items-center space-x-1">
+                  <span className="w-2.5 h-2.5 rounded-xs bg-amber-500 inline-block shrink-0" />
+                  <span>SPH Under Target (&lt;100%)</span>
+                </span>
+                <span className="flex items-center space-x-1">
+                  <span className="w-2.5 h-0.5 bg-slate-400 inline-block shrink-0" />
+                  <span>Target Baseline</span>
+                </span>
+              </div>
 
-                  return (
-                    <div
-                      key={item.outlet.id}
-                      className="flex-1 min-w-[65px] max-w-[110px] h-full flex flex-col justify-end items-center group relative cursor-pointer"
-                    >
-                      {/* Top SPH Tag */}
-                      <div className="mb-1 text-center">
-                        <span
-                          className={`text-[10px] font-black px-1.5 py-0.2 rounded shadow-2xs block whitespace-nowrap ${
-                            item.acv >= 100
-                              ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
-                              : 'bg-amber-100 text-amber-800 border border-amber-200'
-                          }`}
-                        >
-                          {item.sph > 0 ? `Rp ${(item.sph / 1000).toFixed(1)}k` : 'Rp 0'}
-                        </span>
-                        <span className="text-[10px] font-extrabold text-slate-500 block mt-0.5">
-                          {item.acv}%
-                        </span>
-                      </div>
+              <div className="flex items-center space-x-1 bg-slate-100 p-1 rounded-lg text-xs">
+                <button
+                  onClick={() => setChartCategoryTab('cafe')}
+                  className={`px-3 py-1 rounded-md font-bold transition flex items-center space-x-1 cursor-pointer ${
+                    chartCategoryTab === 'cafe'
+                      ? 'bg-amber-500 text-white shadow-2xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <Coffee className="w-3.5 h-3.5" />
+                  <span>CAFE XXI ({cafeOutlets.length})</span>
+                </button>
 
-                      {/* Vertical Column Track */}
-                      <div className="w-full max-w-[36px] bg-slate-200/70 h-full rounded-t-md relative flex items-end justify-center overflow-hidden border border-slate-200/80">
-                        {/* Target SPH Line Indicator */}
-                        <div
-                          style={{ bottom: `${targetHeightPct}%` }}
-                          className="absolute w-full border-b-2 border-dashed border-slate-700 z-10"
-                          title={`Target: Rp ${targetVal.toLocaleString('id-ID')}`}
-                        />
-
-                        {/* SPH Bar Fill */}
-                        <div
-                          style={{ height: `${barHeightPct}%` }}
-                          className={`w-full rounded-t-xs transition-all duration-500 ${
-                            item.acv >= 100
-                              ? 'bg-gradient-to-t from-emerald-600 to-emerald-400 group-hover:from-emerald-500 group-hover:to-emerald-300'
-                              : 'bg-gradient-to-t from-amber-600 to-amber-400 group-hover:from-amber-500 group-hover:to-amber-300'
-                          }`}
-                        />
-                      </div>
-
-                      {/* X-Axis Outlet Label */}
-                      <div className="mt-1.5 text-center w-full">
-                        <span
-                          className="text-[11px] font-bold text-slate-700 block truncate group-hover:text-amber-800"
-                          title={item.outlet.name}
-                        >
-                          {item.shortName}
-                        </span>
-                      </div>
-                    </div>
-                  );
-                })}
+                <button
+                  onClick={() => setChartCategoryTab('premiere')}
+                  className={`px-3 py-1 rounded-md font-bold transition flex items-center space-x-1 cursor-pointer ${
+                    chartCategoryTab === 'premiere'
+                      ? 'bg-amber-600 text-white shadow-2xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <Crown className="w-3.5 h-3.5" />
+                  <span>PREMIERE &amp; HS ({premiereOutlets.length})</span>
+                </button>
               </div>
             </div>
           )}
         </div>
+
+        {/* Content of Chart Box */}
+        {isManager ? (
+          /* ============================================================ */
+          /* TAMPILAN GRAFIK BATANG BULANAN PER HARI KHUSUS USER MANAGER   */
+          /* ============================================================ */
+          <div className="space-y-3">
+            {/* Horizontal Scroll Bar Track for 1-Month (1 to 28-31) */}
+            <div className="w-full overflow-x-auto pb-2">
+              <div className="min-w-[980px] lg:min-w-full pt-2">
+                <div className="h-52 sm:h-56 w-full flex items-end gap-1 sm:gap-1.5 md:gap-2 justify-between pt-7 pb-2 px-2 sm:px-3 bg-gradient-to-b from-slate-50/70 to-slate-100/50 rounded-xl border border-slate-200/80">
+                  {managerDailyMetrics.map((item) => {
+                    const targetVal = item.target || targetArea;
+                    const barHeightPct = item.hasData
+                      ? Math.min(100, Math.max(12, Math.round((item.sph / maxSphMonth) * 100)))
+                      : 0;
+                    const targetHeightPct = Math.min(100, Math.round((targetVal / maxSphMonth) * 100));
+
+                    return (
+                      <div
+                        key={item.day}
+                        onClick={() => onDateChange && onDateChange(item.dateStr)}
+                        className={`flex-1 min-w-[26px] max-w-[42px] h-full flex flex-col justify-end items-center group relative cursor-pointer transition-all duration-200 p-0.5 rounded-lg ${
+                          item.isSelected
+                            ? 'bg-amber-100/80 ring-2 ring-amber-500 shadow-xs'
+                            : 'hover:bg-slate-200/50'
+                        }`}
+                        title={`Tanggal ${item.day} ${currentMonthName} ${refYear} (${item.dayName}) | SPH: Rp ${item.sph.toLocaleString('id-ID')} | Target: Rp ${targetVal.toLocaleString('id-ID')} (${item.acv}%) | Penonton: ${item.penonton} | F&B: Rp ${item.fnbTotal.toLocaleString('id-ID')} | Klik untuk buka tanggal ini`}
+                      >
+                        {/* Top Tag SPH */}
+                        <div className="mb-1 text-center w-full">
+                          {item.hasData ? (
+                            <>
+                              <span
+                                className={`text-[9px] font-black px-1 py-0.2 rounded shadow-2xs block truncate leading-tight ${
+                                  item.acv >= 100
+                                    ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                                    : 'bg-amber-100 text-amber-800 border border-amber-300'
+                                }`}
+                              >
+                                {(item.sph / 1000).toFixed(1)}k
+                              </span>
+                              <span className="text-[8px] font-extrabold text-slate-500 block leading-none mt-0.5">
+                                {item.acv}%
+                              </span>
+                            </>
+                          ) : (
+                            <span className="text-[9px] text-slate-300 font-bold block leading-tight">
+                              -
+                            </span>
+                          )}
+                        </div>
+
+                        {/* Vertical Column Track */}
+                        <div className="w-full max-w-[24px] bg-slate-200/60 h-full rounded-t-md relative flex items-end justify-center overflow-hidden border border-slate-200/90">
+                          {/* Target SPH Line Indicator */}
+                          <div
+                            style={{ bottom: `${targetHeightPct}%` }}
+                            className="absolute w-full border-b-2 border-dashed border-slate-700 z-10 opacity-70"
+                          />
+
+                          {/* SPH Bar Fill */}
+                          {item.hasData && (
+                            <div
+                              style={{ height: `${barHeightPct}%` }}
+                              className={`w-full rounded-t-xs transition-all duration-500 ${
+                                item.acv >= 100
+                                  ? 'bg-gradient-to-t from-emerald-600 via-emerald-500 to-emerald-400 group-hover:from-emerald-500 group-hover:to-emerald-300'
+                                  : 'bg-gradient-to-t from-amber-600 via-amber-500 to-amber-400 group-hover:from-amber-500 group-hover:to-amber-300'
+                              }`}
+                            />
+                          )}
+                        </div>
+
+                        {/* X-Axis Date & Day Name Label */}
+                        <div className="mt-1 text-center w-full leading-tight">
+                          <span
+                            className={`text-[10px] font-black block ${
+                              item.isSelected
+                                ? 'text-amber-800 font-extrabold'
+                                : item.isWeekend
+                                ? 'text-rose-600'
+                                : 'text-slate-700'
+                            }`}
+                          >
+                            {String(item.day).padStart(2, '0')}
+                          </span>
+                          <span
+                            className={`text-[8px] font-semibold block ${
+                              item.isWeekend ? 'text-rose-400 font-bold' : 'text-slate-400'
+                            }`}
+                          >
+                            {item.dayName}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+
+            {/* Monthly KPI Summary Footer for Manager */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-2 border-t border-slate-100 text-xs">
+              <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-200/80">
+                <span className="text-[10px] font-bold text-slate-500 uppercase block">Total Omset F&B (MTD)</span>
+                <span className="text-sm sm:text-base font-black text-slate-900 mt-0.5 block">
+                  Rp {(mtdFnB / 1000000).toFixed(2)} Jt
+                </span>
+                <span className="text-[10px] text-slate-400 block mt-0.5">
+                  Rp {mtdFnB.toLocaleString('id-ID')}
+                </span>
+              </div>
+
+              <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-200/80">
+                <span className="text-[10px] font-bold text-slate-500 uppercase block">Total Penonton (MTD)</span>
+                <span className="text-sm sm:text-base font-black text-slate-900 mt-0.5 block">
+                  {mtdPenonton.toLocaleString('id-ID')} Org
+                </span>
+                <span className="text-[10px] text-slate-400 block mt-0.5">
+                  {mtdBill.toLocaleString('id-ID')} Bill Transaksi
+                </span>
+              </div>
+
+              <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-200/80">
+                <span className="text-[10px] font-bold text-slate-500 uppercase block">Rata-Rata SPH Bulanan</span>
+                <span className={`text-sm sm:text-base font-black mt-0.5 block ${mtdMetrics.achievement >= 100 ? 'text-emerald-700' : 'text-amber-700'}`}>
+                  Rp {mtdMetrics.head.toLocaleString('id-ID')}
+                </span>
+                <span className="text-[10px] font-bold text-slate-500 block mt-0.5">
+                  Ach: {mtdMetrics.achievement}% vs Target Rp {(managerOutlet?.targetHead || targetArea).toLocaleString('id-ID')}
+                </span>
+              </div>
+
+              <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-200/80">
+                <span className="text-[10px] font-bold text-slate-500 uppercase block">Puncak SPH Tertinggi</span>
+                {peakDay ? (
+                  <>
+                    <span className="text-sm sm:text-base font-black text-emerald-700 mt-0.5 block">
+                      Rp {peakDay.sph.toLocaleString('id-ID')}
+                    </span>
+                    <span className="text-[10px] font-bold text-slate-500 block mt-0.5">
+                      Tgl {peakDay.day} {currentMonthName} ({peakDay.acv}%)
+                    </span>
+                  </>
+                ) : (
+                  <span className="text-xs font-bold text-slate-400 mt-1 block">Belum ada data</span>
+                )}
+              </div>
+            </div>
+          </div>
+        ) : (
+          /* ============================================================ */
+          /* TAMPILAN GRAFIK BATANG PER-OUTLET UNTUK ADMIN & AREA MANAGER  */
+          /* ============================================================ */
+          <div className="w-full overflow-x-auto pb-1">
+            {activeChartItems.length === 0 ? (
+              <p className="text-xs text-slate-400 italic text-center py-6">
+                Tidak ada data outlet untuk kategori ini pada area {selectedAreaName}.
+              </p>
+            ) : (
+              <div className="min-w-[800px] lg:min-w-full pt-2">
+                {/* Vertical Column Track Container */}
+                <div className="h-44 sm:h-48 md:h-52 w-full flex items-end gap-2 sm:gap-3 md:gap-4 justify-around pt-6 pb-2 px-2 bg-slate-50/50 rounded-lg border border-slate-100">
+                  {activeChartItems.map((item) => {
+                    const targetVal = item.target || targetArea;
+                    const barHeightPct = Math.min(100, Math.max(12, Math.round((item.sph / maxSphInTab) * 100)));
+                    const targetHeightPct = Math.min(100, Math.round((targetVal / maxSphInTab) * 100));
+
+                    return (
+                      <div
+                        key={item.outlet.id}
+                        className="flex-1 min-w-[65px] max-w-[110px] h-full flex flex-col justify-end items-center group relative cursor-pointer"
+                      >
+                        {/* Top SPH Tag */}
+                        <div className="mb-1 text-center">
+                          <span
+                            className={`text-[10px] font-black px-1.5 py-0.2 rounded shadow-2xs block whitespace-nowrap ${
+                              item.acv >= 100
+                                ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+                                : 'bg-amber-100 text-amber-800 border border-amber-200'
+                            }`}
+                          >
+                            {item.sph > 0 ? `Rp ${(item.sph / 1000).toFixed(1)}k` : 'Rp 0'}
+                          </span>
+                          <span className="text-[10px] font-extrabold text-slate-500 block mt-0.5">
+                            {item.acv}%
+                          </span>
+                        </div>
+
+                        {/* Vertical Column Track */}
+                        <div className="w-full max-w-[36px] bg-slate-200/70 h-full rounded-t-md relative flex items-end justify-center overflow-hidden border border-slate-200/80">
+                          {/* Target SPH Line Indicator */}
+                          <div
+                            style={{ bottom: `${targetHeightPct}%` }}
+                            className="absolute w-full border-b-2 border-dashed border-slate-700 z-10"
+                            title={`Target: Rp ${targetVal.toLocaleString('id-ID')}`}
+                          />
+
+                          {/* SPH Bar Fill */}
+                          <div
+                            style={{ height: `${barHeightPct}%` }}
+                            className={`w-full rounded-t-xs transition-all duration-500 ${
+                              item.acv >= 100
+                                ? 'bg-gradient-to-t from-emerald-600 to-emerald-400 group-hover:from-emerald-500 group-hover:to-emerald-300'
+                                : 'bg-gradient-to-t from-amber-600 to-amber-400 group-hover:from-amber-500 group-hover:to-amber-300'
+                            }`}
+                          />
+                        </div>
+
+                        {/* X-Axis Outlet Label */}
+                        <div className="mt-1.5 text-center w-full">
+                          <span
+                            className="text-[11px] font-bold text-slate-700 block truncate group-hover:text-amber-800"
+                            title={item.outlet.name}
+                          >
+                            {item.shortName}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

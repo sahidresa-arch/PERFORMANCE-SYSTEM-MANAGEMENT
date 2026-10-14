@@ -182,6 +182,7 @@ export default function App() {
                 currentUser={currentUser}
                 selectedDate={selectedDate}
                 onNavigate={handleMenuChange}
+                onDateChange={setSelectedDate}
               />
             )}
 
