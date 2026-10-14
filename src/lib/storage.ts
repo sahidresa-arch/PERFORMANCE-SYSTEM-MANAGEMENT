@@ -544,26 +544,45 @@ export const KNOWN_FILM_GENRES: {
 export const StorageService = {
   // Config
   getConfig(): SystemConfig {
+    const envMistralKey =
+      (import.meta as any).env?.VITE_MISTRAL_API_KEY ||
+      (window as any).MISTRAL_API_KEY ||
+      '';
+    const envSupabaseUrl = (import.meta as any).env?.VITE_SUPABASE_URL || '';
+    const envSupabaseAnonKey = (import.meta as any).env?.VITE_SUPABASE_ANON_KEY || '';
+
     const raw = localStorage.getItem(KEYS.CONFIG);
     let config: SystemConfig = {
-      supabaseUrl: '',
-      supabaseAnonKey: '',
-      supabaseConnected: false,
-      mistralApiKey: '',
+      supabaseUrl: envSupabaseUrl,
+      supabaseAnonKey: envSupabaseAnonKey,
+      supabaseConnected: Boolean(envSupabaseUrl && envSupabaseAnonKey),
+      mistralApiKey: envMistralKey,
       ocrProvider: 'mistral',
       activeTheme: 'gold_dark',
     };
+
     if (raw) {
       try {
         const parsed = JSON.parse(raw);
-        config = { ...config, ...parsed };
+        config = {
+          ...config,
+          ...parsed,
+          mistralApiKey: parsed.mistralApiKey || envMistralKey,
+          supabaseUrl: parsed.supabaseUrl || envSupabaseUrl,
+          supabaseAnonKey: parsed.supabaseAnonKey || envSupabaseAnonKey,
+          supabaseConnected: Boolean(
+            (parsed.supabaseUrl || envSupabaseUrl) && (parsed.supabaseAnonKey || envSupabaseAnonKey)
+          ),
+        };
       } catch {
         // use default
       }
     }
+
     if (config.mistralApiKey && config.mistralApiKey.trim()) {
       config.ocrProvider = 'mistral';
     }
+
     return config;
   },
 
