@@ -322,13 +322,13 @@ export const PerformanceDashboard: React.FC<PerformanceDashboardProps> = ({
       </div>
 
       {/* 4. 2 Tabel: Side-by-Side (Performance Report Daily & MTD) */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-[16px]">
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-3 sm:gap-4 w-full">
         {/* TABEL KIRI: Performance Report Daily */}
-        <div className="bg-[#FFFFFF] border border-[#E5E7EB] rounded-[12px] p-4 shadow-xs">
-          <div className="flex items-center justify-between mb-3">
+        <div className="bg-[#FFFFFF] border border-[#E5E7EB] rounded-[12px] p-3 sm:p-4 shadow-2xs flex flex-col justify-between">
+          <div className="flex items-center justify-between mb-2.5">
             <div className="flex items-center space-x-2">
               <span className="w-2 h-2 rounded-full bg-[#2563EB] inline-block shrink-0"></span>
-              <h2 className="text-[12px] font-bold text-[#111827] uppercase tracking-wide">
+              <h2 className="text-[11px] sm:text-[12px] font-bold text-[#111827] uppercase tracking-wide">
                 PERFORMANCE REPORT DAILY
               </h2>
             </div>
@@ -337,59 +337,59 @@ export const PerformanceDashboard: React.FC<PerformanceDashboardProps> = ({
             </span>
           </div>
 
-          <div className="overflow-x-auto max-h-[460px]">
-            <table className="w-full text-left border-collapse">
-              <thead className="sticky top-0 bg-[#F9FAFB] border-b border-[#E5E7EB] text-[10px] font-semibold text-[#6B7280] uppercase tracking-[0.5px] z-10">
+          <div className="overflow-x-auto overflow-y-auto max-h-[620px] w-full">
+            <table className="w-full text-left border-collapse text-[10px] sm:text-[11px]">
+              <thead className="sticky top-0 bg-[#F9FAFB] border-b border-[#E5E7EB] font-semibold text-[#6B7280] uppercase tracking-[0.2px] z-10">
                 <tr>
-                  <th className="py-2.5 px-2 text-center w-8">NO</th>
-                  <th className="py-2.5 px-2">NAMA OUTLET</th>
-                  <th className="py-2.5 px-2 text-center">PENONTON</th>
-                  <th className="py-2.5 px-2 text-right">TARGET SPH</th>
-                  <th className="py-2.5 px-2 text-right">HEAD SPH</th>
+                  <th className="py-2 px-1 text-center w-6">NO</th>
+                  <th className="py-2 px-1.5">NAMA OUTLET</th>
+                  <th className="py-2 px-1 text-center">PENONTON</th>
+                  <th className="py-2 px-1 text-right">TARGET SPH</th>
+                  <th className="py-2 px-1 text-right">HEAD SPH</th>
 
                   {/* Interaktif Sort Header ACH dengan ikon panah */}
                   <th
                     onClick={() => setAchSortOrder((prev) => (prev === 'desc' ? 'asc' : 'desc'))}
-                    className="py-2.5 px-2 text-center cursor-pointer select-none hover:bg-purple-100 transition rounded-md"
+                    className="py-2 px-1 text-center cursor-pointer select-none hover:bg-purple-100 transition rounded-md"
                     title="Klik untuk mengurutkan pencapaian terbesar / terkecil"
                   >
-                    <div className="flex items-center justify-center space-x-1 font-bold text-purple-900">
+                    <div className="flex items-center justify-center space-x-0.5 font-bold text-purple-900">
                       <span>ACH</span>
                       {achSortOrder === 'desc' ? (
-                        <ArrowDown className="w-3 h-3 text-purple-700" />
+                        <ArrowDown className="w-2.5 h-2.5 text-purple-700" />
                       ) : (
-                        <ArrowUp className="w-3 h-3 text-purple-700" />
+                        <ArrowUp className="w-2.5 h-2.5 text-purple-700" />
                       )}
                     </div>
                   </th>
 
-                  <th className="py-2.5 px-2 text-center">DAYA SERAP</th>
-                  <th className="py-2.5 px-2 text-right">AT</th>
-                  <th className="py-2.5 px-2 text-right">SELISIH</th>
+                  <th className="py-2 px-1 text-center">DAYA SERAP</th>
+                  <th className="py-2 px-1 text-right">AT</th>
+                  <th className="py-2 px-1 text-right">SELISIH</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-[#E5E7EB] text-[11px] text-[#374151]">
+              <tbody className="divide-y divide-[#E5E7EB] text-[#374151]">
                 {performanceRows.map((row, idx) => (
                   <tr key={row.outlet.id} className="hover:bg-[#F9FAFB] transition">
-                    <td className="py-2 px-2 text-center font-medium text-[#6B7280]">{idx + 1}</td>
-                    <td className="py-2 px-2 font-bold text-[11px] text-[#111827] truncate max-w-[130px]">
+                    <td className="py-1.5 px-1 text-center font-medium text-[#6B7280]">{idx + 1}</td>
+                    <td className="py-1.5 px-1.5 font-bold text-[#111827] truncate max-w-[110px] sm:max-w-[130px]" title={row.outlet.name}>
                       {row.outlet.name}
                     </td>
-                    <td className="py-2 px-2 text-center text-[#374151]">
+                    <td className="py-1.5 px-1 text-center text-[#374151]">
                       {row.daily.penonton.toLocaleString('id-ID')}
                     </td>
-                    <td className="py-2 px-2 text-right text-[11px] text-[#6B7280]">
+                    <td className="py-1.5 px-1 text-right text-[#6B7280]">
                       {row.outlet.targetHead === 0
                         ? '0'
                         : row.outlet.targetHead.toLocaleString('id-ID')}
                     </td>
-                    <td className="py-2 px-2 text-right text-[11px] text-[#6B7280] font-semibold">
+                    <td className="py-1.5 px-1 text-right text-[#6B7280] font-semibold">
                       {row.daily.metrics.head.toLocaleString('id-ID')}
                     </td>
-                    <td className="py-2 px-2 text-center">
+                    <td className="py-1.5 px-1 text-center">
                       {row.daily.penonton > 0 ? (
                         <span
-                          className={`font-semibold text-[11px] ${
+                          className={`font-semibold ${
                             row.daily.metrics.achievement >= 100
                               ? 'text-emerald-600'
                               : 'text-amber-600'
@@ -401,13 +401,13 @@ export const PerformanceDashboard: React.FC<PerformanceDashboardProps> = ({
                         <span className="text-[#9CA3AF]">-</span>
                       )}
                     </td>
-                    <td className="py-2 px-2 text-center text-[#374151]">
+                    <td className="py-1.5 px-1 text-center text-[#374151]">
                       {row.daily.penonton > 0 ? `${row.daily.metrics.dayaSerap}%` : '-'}
                     </td>
-                    <td className="py-2 px-2 text-right text-[11px] text-[#6B7280]">
+                    <td className="py-1.5 px-1 text-right text-[#6B7280]">
                       {row.daily.metrics.at.toLocaleString('id-ID')}
                     </td>
-                    <td className="py-2 px-2 text-right text-[11px] font-medium">
+                    <td className="py-1.5 px-1 text-right font-medium">
                       <span
                         className={
                           row.daily.metrics.selisih >= 0
@@ -426,11 +426,11 @@ export const PerformanceDashboard: React.FC<PerformanceDashboardProps> = ({
         </div>
 
         {/* TABEL KANAN: Performance Report MTD */}
-        <div className="bg-[#FFFFFF] border border-[#E5E7EB] rounded-[12px] p-4 shadow-xs">
-          <div className="flex items-center justify-between mb-3">
+        <div className="bg-[#FFFFFF] border border-[#E5E7EB] rounded-[12px] p-3 sm:p-4 shadow-2xs flex flex-col justify-between">
+          <div className="flex items-center justify-between mb-2.5">
             <div className="flex items-center space-x-2">
               <span className="w-2 h-2 rounded-full bg-[#2563EB] inline-block shrink-0"></span>
-              <h2 className="text-[12px] font-bold text-[#111827] uppercase tracking-wide">
+              <h2 className="text-[11px] sm:text-[12px] font-bold text-[#111827] uppercase tracking-wide">
                 PERFORMANCE REPORT MTD
               </h2>
             </div>
@@ -439,58 +439,58 @@ export const PerformanceDashboard: React.FC<PerformanceDashboardProps> = ({
             </span>
           </div>
 
-          <div className="overflow-x-auto max-h-[460px]">
-            <table className="w-full text-left border-collapse">
-              <thead className="sticky top-0 bg-[#F9FAFB] border-b border-[#E5E7EB] text-[10px] font-semibold text-[#6B7280] uppercase tracking-[0.5px] z-10">
+          <div className="overflow-x-auto overflow-y-auto max-h-[620px] w-full">
+            <table className="w-full text-left border-collapse text-[10px] sm:text-[11px]">
+              <thead className="sticky top-0 bg-[#F9FAFB] border-b border-[#E5E7EB] font-semibold text-[#6B7280] uppercase tracking-[0.2px] z-10">
                 <tr>
-                  <th className="py-2.5 px-2 text-center w-8">NO</th>
-                  <th className="py-2.5 px-2">NAMA OUTLET</th>
-                  <th className="py-2.5 px-2 text-center">PENONTON</th>
-                  <th className="py-2.5 px-2 text-right">TARGET SPH</th>
-                  <th className="py-2.5 px-2 text-right">HEAD SPH</th>
+                  <th className="py-2 px-1 text-center w-6">NO</th>
+                  <th className="py-2 px-1.5">NAMA OUTLET</th>
+                  <th className="py-2 px-1 text-center">PENONTON</th>
+                  <th className="py-2 px-1 text-right">TARGET SPH</th>
+                  <th className="py-2 px-1 text-right">HEAD SPH</th>
 
                   {/* Interaktif Sort Header ACH dengan ikon panah */}
                   <th
                     onClick={() => setAchSortOrder((prev) => (prev === 'desc' ? 'asc' : 'desc'))}
-                    className="py-2.5 px-2 text-center cursor-pointer select-none hover:bg-purple-100 transition rounded-md"
+                    className="py-2 px-1 text-center cursor-pointer select-none hover:bg-purple-100 transition rounded-md"
                     title="Klik untuk mengurutkan pencapaian terbesar / terkecil"
                   >
-                    <div className="flex items-center justify-center space-x-1 font-bold text-purple-900">
+                    <div className="flex items-center justify-center space-x-0.5 font-bold text-purple-900">
                       <span>ACH</span>
                       {achSortOrder === 'desc' ? (
-                        <ArrowDown className="w-3 h-3 text-purple-700" />
+                        <ArrowDown className="w-2.5 h-2.5 text-purple-700" />
                       ) : (
-                        <ArrowUp className="w-3 h-3 text-purple-700" />
+                        <ArrowUp className="w-2.5 h-2.5 text-purple-700" />
                       )}
                     </div>
                   </th>
 
-                  <th className="py-2.5 px-2 text-center">DAYA SERAP</th>
-                  <th className="py-2.5 px-2 text-right">AT</th>
-                  <th className="py-2.5 px-2 text-right">SELISIH</th>
+                  <th className="py-2 px-1 text-center">DAYA SERAP</th>
+                  <th className="py-2 px-1 text-right">AT</th>
+                  <th className="py-2 px-1 text-right">SELISIH</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-[#E5E7EB] text-[11px] text-[#374151]">
+              <tbody className="divide-y divide-[#E5E7EB] text-[#374151]">
                 {performanceRows.map((row, idx) => (
                   <tr key={row.outlet.id} className="hover:bg-[#F9FAFB] transition">
-                    <td className="py-2 px-2 text-center font-medium text-[#6B7280]">{idx + 1}</td>
-                    <td className="py-2 px-2 font-bold text-[11px] text-[#111827] truncate max-w-[130px]">
+                    <td className="py-1.5 px-1 text-center font-medium text-[#6B7280]">{idx + 1}</td>
+                    <td className="py-1.5 px-1.5 font-bold text-[#111827] truncate max-w-[110px] sm:max-w-[130px]" title={row.outlet.name}>
                       {row.outlet.name}
                     </td>
-                    <td className="py-2 px-2 text-center text-[#374151]">
+                    <td className="py-1.5 px-1 text-center text-[#374151]">
                       {row.mtd.penonton.toLocaleString('id-ID')}
                     </td>
-                    <td className="py-2 px-2 text-right text-[11px] text-[#6B7280]">
+                    <td className="py-1.5 px-1 text-right text-[#6B7280]">
                       {row.outlet.targetHead === 0
                         ? '0'
                         : row.outlet.targetHead.toLocaleString('id-ID')}
                     </td>
-                    <td className="py-2 px-2 text-right text-[11px] text-[#6B7280] font-semibold">
+                    <td className="py-1.5 px-1 text-right text-[#6B7280] font-semibold">
                       {row.mtd.metrics.head.toLocaleString('id-ID')}
                     </td>
-                    <td className="py-2 px-2 text-center">
+                    <td className="py-1.5 px-1 text-center">
                       <span
-                        className={`font-semibold text-[11px] ${
+                        className={`font-semibold ${
                           row.mtd.metrics.achievement >= 100
                             ? 'text-emerald-600'
                             : 'text-amber-600'
@@ -499,13 +499,13 @@ export const PerformanceDashboard: React.FC<PerformanceDashboardProps> = ({
                         {row.mtd.metrics.achievement}%
                       </span>
                     </td>
-                    <td className="py-2 px-2 text-center text-[#374151]">
+                    <td className="py-1.5 px-1 text-center text-[#374151]">
                       {row.mtd.metrics.dayaSerap}%
                     </td>
-                    <td className="py-2 px-2 text-right text-[11px] text-[#6B7280]">
+                    <td className="py-1.5 px-1 text-right text-[#6B7280]">
                       {row.mtd.metrics.at.toLocaleString('id-ID')}
                     </td>
-                    <td className="py-2 px-2 text-right text-[11px] font-medium">
+                    <td className="py-1.5 px-1 text-right font-medium">
                       <span
                         className={
                           row.mtd.metrics.selisih >= 0

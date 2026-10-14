@@ -56,15 +56,21 @@ export const Header: React.FC<HeaderProps> = ({
         </div>
       </div>
 
-      {/* 2. Tengah: Visi Cinema XXI & Three Pillars (Sesuai Gambar visi misi.png) */}
+      {/* 2. Tengah: Visi Cinema XXI & Three Pillars */}
       <div className="hidden lg:flex flex-col justify-center text-left mx-auto shrink min-w-0 overflow-hidden px-2">
         <div className="text-xs sm:text-[13px] leading-snug truncate">
-          <span className="font-bold text-amber-600">Visi Cinema XXI:</span>{' '}
-          <span className="font-medium text-[#1d4ed8]">Menjadi jejaring bioskop terbaik di dunia, dan menjadi kebanggaan Indonesia.</span>
+          <span className="font-bold text-amber-500 mr-1.5">VISI:</span>
+          <span className="font-medium text-[#1d4ed8]">
+            Menjadi jejaring bioskop terbaik di dunia, dan menjadi kebanggaan Indonesia.
+          </span>
         </div>
-        <p className="text-[10px] font-bold tracking-wide text-slate-500 uppercase mt-0.5 truncate">
-          UNCOMPROMISED QUALITY, AFFORDABLE ENTERTAINMENT, FOREVER BETTER
-        </p>
+        <div className="text-[10px] sm:text-[11px] text-slate-500 font-semibold tracking-tight truncate flex items-center gap-1.5 mt-0.5">
+          <span className="bg-amber-100 text-amber-800 px-1.5 py-0.2 rounded font-bold">Uncompromised Quality</span>
+          <span>•</span>
+          <span className="bg-blue-100 text-blue-800 px-1.5 py-0.2 rounded font-bold">Affordable Entertainment</span>
+          <span>•</span>
+          <span className="bg-emerald-100 text-emerald-800 px-1.5 py-0.2 rounded font-bold">Forever Better</span>
+        </div>
       </div>
 
       {/* 3. Kanan: Controls Group (Role Admin, Date Picker, Cloud & OCR, Logout) */}

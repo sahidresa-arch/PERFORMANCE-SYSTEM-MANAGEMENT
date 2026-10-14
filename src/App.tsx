@@ -145,8 +145,8 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen flex flex-col font-sans bg-[#F8F9FC] text-[#374151] antialiased">
-      {/* Top Header (tinggi 56px, border bawah #E5E7EB 1px) */}
+    <div className="min-h-screen w-full flex flex-col font-sans bg-[#F8F9FC] text-[#374151] antialiased">
+      {/* Top Header */}
       <Header
         currentUser={currentUser}
         selectedDate={selectedDate}
@@ -158,8 +158,8 @@ export default function App() {
       />
 
       {/* Main Body Shell */}
-      <div className="flex-1 flex overflow-hidden">
-        {/* Sidebar (fixed left 0 top 0 h-screen, width 260px / 72px) */}
+      <div className="flex-1 w-full flex min-h-0 min-w-0">
+        {/* Sidebar */}
         <Sidebar
           currentUser={currentUser}
           activeMenu={activeMenu}
@@ -169,13 +169,13 @@ export default function App() {
           onToggleCollapse={handleToggleCollapse}
         />
 
-        {/* Content Area: shifted by sidebar width (260px or 72px) with smooth transition */}
+        {/* Content Area */}
         <main
-          className={`flex-1 min-w-0 overflow-y-auto p-3 sm:p-5 bg-[#F8F9FC] transition-[margin] duration-300 ease-in-out ${
+          className={`flex-1 w-full max-w-full min-w-0 overflow-y-auto p-3 sm:p-4 lg:p-4 bg-[#F8F9FC] transition-[margin] duration-300 ease-in-out ${
             collapsed ? 'ml-[72px]' : 'ml-[260px]'
           }`}
         >
-          <div className="w-full">
+          <div className="w-full max-w-full">
             {/* Dashboard */}
             {activeMenu === 'dashboard' && (
               <ExecutiveDashboard
