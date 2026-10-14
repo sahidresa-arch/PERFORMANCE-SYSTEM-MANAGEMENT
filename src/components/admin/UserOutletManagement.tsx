@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Area, Outlet, User } from '../../types';
 import { StorageService } from '../../lib/storage';
+import * as XLSX from 'xlsx';
 import {
   ShieldCheck,
   Plus,
@@ -19,6 +20,9 @@ import {
   XCircle,
   Filter,
   UserCheck,
+  AlertTriangle,
+  FileSpreadsheet,
+  Download,
 } from 'lucide-react';
 
 interface UserOutletManagementProps {
@@ -55,6 +59,7 @@ export const UserOutletManagement: React.FC<UserOutletManagementProps> = ({
   const [newUserRole, setNewUserRole] = useState<'admin' | 'area_manager' | 'manager' | 'cleaner'>('manager');
   const [newUserOutletId, setNewUserOutletId] = useState(outlets[0]?.id || '');
   const [newUserAreaId, setNewUserAreaId] = useState(areas[0]?.id || '');
+  const [newUserAreaIds, setNewUserAreaIds] = useState<string[]>(() => areas.map((a) => a.id));
   const [newUserPassword, setNewUserPassword] = useState('password123');
 
   // User Role Filter State
@@ -72,7 +77,11 @@ export const UserOutletManagement: React.FC<UserOutletManagementProps> = ({
   const [editRole, setEditRole] = useState<'admin' | 'area_manager' | 'manager' | 'cleaner'>('manager');
   const [editOutletId, setEditOutletId] = useState('');
   const [editAreaId, setEditAreaId] = useState('');
+  const [editAreaIds, setEditAreaIds] = useState<string[]>([]);
   const [editPassword, setEditPassword] = useState('');
+
+  // Delete User Modal State
+  const [deletingUser, setDeletingUser] = useState<User | null>(null);
 
   const [notification, setNotification] = useState('');
 
@@ -156,12 +165,14 @@ export const UserOutletManagement: React.FC<UserOutletManagementProps> = ({
 
     let assignedOutletId: string | undefined = undefined;
     let assignedAreaId: string | undefined = undefined;
+    let assignedAreasList: string[] | undefined = undefined;
 
     if (newUserRole === 'manager' || newUserRole === 'cleaner') {
       assignedOutletId = newUserOutletId;
       assignedAreaId = targetOutlet?.areaId;
     } else if (newUserRole === 'area_manager') {
-      assignedAreaId = newUserAreaId;
+      assignedAreasList = newUserAreaIds.length > 0 ? newUserAreaIds : [areas[0]?.id].filter(Boolean);
+      assignedAreaId = assignedAreasList[0];
     }
 
     const newUser: User = {
@@ -171,6 +182,7 @@ export const UserOutletManagement: React.FC<UserOutletManagementProps> = ({
       role: newUserRole,
       outletId: assignedOutletId,
       areaId: assignedAreaId,
+      assignedAreas: assignedAreasList,
       password: newUserPassword.trim() || 'password123',
       isActive: true,
     };
@@ -191,6 +203,13 @@ export const UserOutletManagement: React.FC<UserOutletManagementProps> = ({
     setEditRole(user.role);
     setEditOutletId(user.outletId || outlets[0]?.id || '');
     setEditAreaId(user.areaId || areas[0]?.id || '');
+    setEditAreaIds(
+      user.assignedAreas && user.assignedAreas.length > 0
+        ? user.assignedAreas
+        : user.areaId
+        ? [user.areaId]
+        : areas.map((a) => a.id)
+    );
     setEditPassword(user.password || '');
   };
 
@@ -204,12 +223,14 @@ export const UserOutletManagement: React.FC<UserOutletManagementProps> = ({
 
     let assignedOutletId: string | undefined = undefined;
     let assignedAreaId: string | undefined = undefined;
+    let assignedAreasList: string[] | undefined = undefined;
 
     if (editRole === 'manager' || editRole === 'cleaner') {
       assignedOutletId = editOutletId;
       assignedAreaId = targetOutlet?.areaId;
     } else if (editRole === 'area_manager') {
-      assignedAreaId = editAreaId;
+      assignedAreasList = editAreaIds.length > 0 ? editAreaIds : [areas[0]?.id].filter(Boolean);
+      assignedAreaId = assignedAreasList[0];
     }
 
     const updatedUser: User = {
@@ -219,6 +240,7 @@ export const UserOutletManagement: React.FC<UserOutletManagementProps> = ({
       role: editRole,
       outletId: assignedOutletId,
       areaId: assignedAreaId,
+      assignedAreas: assignedAreasList,
       password: editPassword.trim() ? editPassword.trim() : editingUser.password,
     };
 
@@ -240,17 +262,90 @@ export const UserOutletManagement: React.FC<UserOutletManagementProps> = ({
     showToast(`Password untuk user ${user.username} berhasil direset!`);
   };
 
-  // Handle Delete User
-  const handleDeleteUser = (user: User) => {
-    if (user.username === 'admin' || user.id === currentUser?.id) {
-      alert('Tidak dapat menghapus akun admin utama atau akun sendiri!');
+  // Handle Confirm Delete User
+  const handleConfirmDeleteUser = () => {
+    if (!deletingUser) return;
+    if (deletingUser.username === 'admin' || deletingUser.id === currentUser?.id) {
+      showToast('Tidak dapat menghapus akun admin utama atau akun sendiri!');
+      setDeletingUser(null);
       return;
     }
-    if (confirm(`Apakah Anda yakin ingin menghapus akun user "${user.username}"?`)) {
-      const updatedList = StorageService.deleteUser(user.id);
-      setUsers(updatedList);
-      showToast(`User ${user.username} berhasil dihapus.`);
+    const updatedList = StorageService.deleteUser(deletingUser.id);
+    setUsers(updatedList);
+    showToast(`User "${deletingUser.username}" berhasil dihapus dari sistem.`);
+    setDeletingUser(null);
+  };
+
+  // Handle Export Users to XLSX
+  const handleExportUsersToXlsx = (roleType?: 'manager' | 'cleaner' | 'all') => {
+    let targetList = users;
+    if (roleType === 'manager') {
+      targetList = users.filter((u) => u.role === 'manager');
+    } else if (roleType === 'cleaner') {
+      targetList = users.filter((u) => u.role === 'cleaner');
     }
+
+    if (targetList.length === 0) {
+      showToast('Tidak ada data user untuk di-export.');
+      return;
+    }
+
+    // Format data for sheet
+    const dataToExport = targetList.map((u, idx) => {
+      const assignedOutlet = outlets.find((o) => o.id === u.outletId);
+      const assignedArea = areas.find((a) => a.id === u.areaId);
+
+      let scopeText = 'Semua Outlet & Area (Full Admin)';
+      let areaText = '-';
+
+      if (u.role === 'area_manager') {
+        const uAreas = u.assignedAreas && u.assignedAreas.length > 0
+          ? u.assignedAreas
+          : (u.areaId ? [u.areaId] : []);
+        const areaNames = uAreas.map((id) => areas.find((a) => a.id === id)?.name || id);
+        scopeText = areaNames.length > 0 ? areaNames.join(' + ') : 'Seluruh Area';
+        areaText = areaNames.length > 0 ? areaNames.join(', ') : 'Seluruh Area';
+      } else if (u.role === 'manager' || u.role === 'cleaner') {
+        scopeText = assignedOutlet?.name || u.outletId || '-';
+        areaText = assignedArea?.name || '-';
+      }
+
+      return {
+        'NO': idx + 1,
+        'USERNAME (LOGIN)': u.username,
+        'NAMA PENGGUNA': u.name,
+        'ROLE / PERAN': getRoleLabel(u.role),
+        'OUTLET PENUGASAN': scopeText,
+        'AREA WILAYAH': areaText,
+        'KATA SANDI / PASSWORD': u.password || 'password123',
+        'STATUS AKUN': u.isActive ? 'Aktif' : 'Non-Aktif',
+      };
+    });
+
+    // Create worksheet and workbook
+    const worksheet = XLSX.utils.json_to_sheet(dataToExport);
+
+    // Set column widths
+    worksheet['!cols'] = [
+      { wch: 6 },  // NO
+      { wch: 32 }, // USERNAME
+      { wch: 40 }, // NAMA PENGGUNA
+      { wch: 22 }, // ROLE
+      { wch: 42 }, // OUTLET
+      { wch: 30 }, // AREA
+      { wch: 22 }, // PASSWORD
+      { wch: 12 }, // STATUS
+    ];
+
+    const workbook = XLSX.utils.book_new();
+    const sheetTitle = roleType === 'manager' ? 'User Manager' : roleType === 'cleaner' ? 'User Cleaner' : 'Daftar User XXI';
+    XLSX.utils.book_append_sheet(workbook, worksheet, sheetTitle);
+
+    const timestamp = new Date().toISOString().split('T')[0];
+    const fileName = `Cinema_XXI_User_List_${roleType ? roleType.toUpperCase() : 'SEMUA'}_${timestamp}.xlsx`;
+
+    XLSX.writeFile(workbook, fileName);
+    showToast(`File Excel ${fileName} berhasil diunduh!`);
   };
 
   function getRoleLabel(role: string) {
@@ -506,20 +601,58 @@ export const UserOutletManagement: React.FC<UserOutletManagementProps> = ({
             {/* Scope selection depends on Role */}
             {newUserRole === 'area_manager' && (
               <div>
-                <label className="text-[10px] font-bold text-blue-700 uppercase block mb-1">
-                  AREA WILAYAH PENUGASAN
-                </label>
-                <select
-                  value={newUserAreaId}
-                  onChange={(e) => setNewUserAreaId(e.target.value)}
-                  className="w-full px-3 py-2 rounded-xl border border-blue-200 bg-blue-50/50 text-blue-900 font-bold focus:border-blue-500 focus:bg-white"
-                >
-                  {areas.map((a) => (
-                    <option key={a.id} value={a.id}>
-                      {a.name}
-                    </option>
-                  ))}
-                </select>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-[10px] font-bold text-blue-700 uppercase">
+                    AREA WILAYAH PENUGASAN (PILIH BANYAK)
+                  </label>
+                  <div className="flex items-center space-x-1.5 text-[10px] font-bold">
+                    <button
+                      type="button"
+                      onClick={() => setNewUserAreaIds(areas.map((a) => a.id))}
+                      className="text-blue-600 hover:underline cursor-pointer"
+                    >
+                      Pilih Semua
+                    </button>
+                    <span className="text-slate-300">|</span>
+                    <button
+                      type="button"
+                      onClick={() => setNewUserAreaIds([])}
+                      className="text-slate-500 hover:underline cursor-pointer"
+                    >
+                      Hapus Semua
+                    </button>
+                  </div>
+                </div>
+                <div className="space-y-1.5 p-2.5 rounded-xl border border-blue-200 bg-blue-50/40 max-h-40 overflow-y-auto">
+                  {areas.map((a) => {
+                    const isChecked = newUserAreaIds.includes(a.id);
+                    return (
+                      <label
+                        key={a.id}
+                        className="flex items-center space-x-2 text-xs font-bold text-blue-900 cursor-pointer select-none hover:bg-blue-100/50 p-1 rounded-lg transition"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={isChecked}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setNewUserAreaIds([...newUserAreaIds, a.id]);
+                            } else {
+                              setNewUserAreaIds(newUserAreaIds.filter((id) => id !== a.id));
+                            }
+                          }}
+                          className="w-4 h-4 text-blue-600 rounded border-blue-300 focus:ring-blue-500 cursor-pointer"
+                        />
+                        <span>{a.name}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+                {newUserAreaIds.length === 0 && (
+                  <p className="text-[10px] text-amber-600 font-bold mt-1">
+                    ⚠️ Pilih minimal 1 wilayah penugasan
+                  </p>
+                )}
               </div>
             )}
 
@@ -578,7 +711,37 @@ export const UserOutletManagement: React.FC<UserOutletManagementProps> = ({
             </h3>
           </div>
 
-          <div className="flex flex-wrap items-center gap-3">
+          <div className="flex flex-wrap items-center gap-2.5">
+            {/* EXCEL DOWNLOAD BUTTONS */}
+            <div className="flex items-center gap-1.5 bg-emerald-50/80 p-1 rounded-2xl border border-emerald-200">
+              <button
+                onClick={() => handleExportUsersToXlsx('all')}
+                className="px-3 py-1.5 rounded-xl bg-emerald-700 hover:bg-emerald-600 text-white text-xs font-bold flex items-center space-x-1.5 transition cursor-pointer shadow-xs"
+                title="Download seluruh data user ke file Excel (.xlsx)"
+              >
+                <FileSpreadsheet className="w-3.5 h-3.5" />
+                <span>Export XLS (Semua)</span>
+              </button>
+              
+              <button
+                onClick={() => handleExportUsersToXlsx('manager')}
+                className="px-2.5 py-1.5 rounded-xl bg-white hover:bg-emerald-100 text-emerald-900 border border-emerald-300 text-xs font-bold flex items-center space-x-1 transition cursor-pointer"
+                title="Download khusus User Manager ke Excel (.xlsx)"
+              >
+                <Download className="w-3 h-3 text-emerald-700" />
+                <span>XLS Manager</span>
+              </button>
+
+              <button
+                onClick={() => handleExportUsersToXlsx('cleaner')}
+                className="px-2.5 py-1.5 rounded-xl bg-white hover:bg-amber-100 text-amber-900 border border-amber-300 text-xs font-bold flex items-center space-x-1 transition cursor-pointer"
+                title="Download khusus User Cleaner ke Excel (.xlsx)"
+              >
+                <Download className="w-3 h-3 text-amber-700" />
+                <span>XLS Cleaner</span>
+              </button>
+            </div>
+
             <div className="relative">
               <Search className="w-3.5 h-3.5 absolute left-3 top-2.5 text-slate-400" />
               <input
@@ -700,7 +863,17 @@ export const UserOutletManagement: React.FC<UserOutletManagementProps> = ({
 
                   let scopeText = 'Semua Outlet & Area (Full)';
                   if (u.role === 'area_manager') {
-                    scopeText = `Area: ${assignedArea?.name || u.areaId || 'Seluruh Area'}`;
+                    const uAreas = u.assignedAreas && u.assignedAreas.length > 0
+                      ? u.assignedAreas
+                      : (u.areaId ? [u.areaId] : []);
+                    const areaNames = uAreas.map((id) => areas.find((a) => a.id === id)?.name || id);
+                    if (areaNames.length === 0) {
+                      scopeText = 'Seluruh Area';
+                    } else if (areaNames.length === areas.length) {
+                      scopeText = `Seluruh Wilayah (${areas.length} Area)`;
+                    } else {
+                      scopeText = `Area (${areaNames.length}): ${areaNames.join(' + ')}`;
+                    }
                   } else if (u.role === 'manager' || u.role === 'cleaner') {
                     scopeText = `Outlet: ${assignedOutlet?.name || u.outletId || '-'}`;
                   }
@@ -778,9 +951,9 @@ export const UserOutletManagement: React.FC<UserOutletManagementProps> = ({
 
                             {u.username !== 'admin' && u.id !== currentUser?.id && (
                               <button
-                                onClick={() => handleDeleteUser(u)}
-                                className="p-1 rounded-lg text-rose-500 hover:bg-rose-50 transition cursor-pointer"
-                                title="Hapus User"
+                                onClick={() => setDeletingUser(u)}
+                                className="p-1.5 rounded-lg border border-rose-200 bg-rose-50 text-rose-600 hover:bg-rose-100 transition cursor-pointer"
+                                title="Hapus Akun User"
                               >
                                 <Trash2 className="w-3.5 h-3.5" />
                               </button>
@@ -866,20 +1039,58 @@ export const UserOutletManagement: React.FC<UserOutletManagementProps> = ({
 
               {editRole === 'area_manager' && (
                 <div>
-                  <label className="text-[10px] font-bold text-blue-700 uppercase block mb-1">
-                    AREA WILAYAH PENUGASAN
-                  </label>
-                  <select
-                    value={editAreaId}
-                    onChange={(e) => setEditAreaId(e.target.value)}
-                    className="w-full px-3 py-2 rounded-xl border border-blue-200 bg-blue-50/50 text-blue-900 font-bold focus:border-blue-500 focus:bg-white"
-                  >
-                    {areas.map((a) => (
-                      <option key={a.id} value={a.id}>
-                        {a.name}
-                      </option>
-                    ))}
-                  </select>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-[10px] font-bold text-blue-700 uppercase">
+                      AREA WILAYAH PENUGASAN (PILIH BANYAK)
+                    </label>
+                    <div className="flex items-center space-x-1.5 text-[10px] font-bold">
+                      <button
+                        type="button"
+                        onClick={() => setEditAreaIds(areas.map((a) => a.id))}
+                        className="text-blue-600 hover:underline cursor-pointer"
+                      >
+                        Pilih Semua
+                      </button>
+                      <span className="text-slate-300">|</span>
+                      <button
+                        type="button"
+                        onClick={() => setEditAreaIds([])}
+                        className="text-slate-500 hover:underline cursor-pointer"
+                      >
+                        Hapus Semua
+                      </button>
+                    </div>
+                  </div>
+                  <div className="space-y-1.5 p-2.5 rounded-xl border border-blue-200 bg-blue-50/40 max-h-40 overflow-y-auto">
+                    {areas.map((a) => {
+                      const isChecked = editAreaIds.includes(a.id);
+                      return (
+                        <label
+                          key={a.id}
+                          className="flex items-center space-x-2 text-xs font-bold text-blue-900 cursor-pointer select-none hover:bg-blue-100/50 p-1 rounded-lg transition"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={isChecked}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setEditAreaIds([...editAreaIds, a.id]);
+                              } else {
+                                setEditAreaIds(editAreaIds.filter((id) => id !== a.id));
+                              }
+                            }}
+                            className="w-4 h-4 text-blue-600 rounded border-blue-300 focus:ring-blue-500 cursor-pointer"
+                          />
+                          <span>{a.name}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                  {editAreaIds.length === 0 && (
+                    <p className="text-[10px] text-amber-600 font-bold mt-1">
+                      ⚠️ Pilih minimal 1 wilayah penugasan
+                    </p>
+                  )}
                 </div>
               )}
 
@@ -932,6 +1143,54 @@ export const UserOutletManagement: React.FC<UserOutletManagementProps> = ({
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL KONFIRMASI HAPUS USER */}
+      {deletingUser && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in">
+          <div className="bg-white rounded-3xl border border-rose-100 shadow-2xl max-w-md w-full p-6 text-slate-800 relative space-y-4">
+            <div className="flex items-center space-x-3 pb-3 border-b border-slate-100">
+              <span className="p-2.5 rounded-2xl bg-rose-100 text-rose-700 border border-rose-200">
+                <AlertTriangle className="w-6 h-6" />
+              </span>
+              <div>
+                <h3 className="font-extrabold text-base uppercase text-rose-950">
+                  Konfirmasi Hapus User
+                </h3>
+                <p className="text-xs text-slate-500">Tindakan ini tidak dapat dibatalkan</p>
+              </div>
+            </div>
+
+            <div className="space-y-2 text-xs bg-rose-50/50 p-4 rounded-2xl border border-rose-100">
+              <p className="text-slate-700 font-medium">
+                Apakah Anda yakin ingin menghapus akun pengguna berikut?
+              </p>
+              <div className="font-mono bg-white p-3 rounded-xl border border-slate-200 space-y-1">
+                <div><span className="text-slate-400 font-sans">Username:</span> <strong className="text-rose-950 font-black">{deletingUser.username}</strong></div>
+                <div><span className="text-slate-400 font-sans">Nama:</span> <strong className="text-slate-900">{deletingUser.name}</strong></div>
+                <div><span className="text-slate-400 font-sans">Role:</span> <strong className="text-purple-900">{getRoleLabel(deletingUser.role)}</strong></div>
+              </div>
+            </div>
+
+            <div className="pt-2 flex items-center justify-end space-x-2">
+              <button
+                type="button"
+                onClick={() => setDeletingUser(null)}
+                className="px-4 py-2.5 rounded-xl text-xs font-bold bg-slate-100 hover:bg-slate-200 text-slate-700 cursor-pointer"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmDeleteUser}
+                className="px-4 py-2.5 rounded-xl text-xs font-bold bg-rose-600 hover:bg-rose-500 text-white flex items-center space-x-1.5 shadow-xs cursor-pointer"
+              >
+                <Trash2 className="w-4 h-4" />
+                <span>Ya, Hapus Akun Ini</span>
+              </button>
+            </div>
           </div>
         </div>
       )}

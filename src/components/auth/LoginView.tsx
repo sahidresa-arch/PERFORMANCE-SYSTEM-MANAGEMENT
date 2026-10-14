@@ -29,31 +29,56 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
     e.preventDefault();
     setErrorMessage('');
 
-    const trimmed = username.trim().toLowerCase();
-    const foundUser = users.find(
+    // Fetch freshest user list directly from storage on submit
+    const currentUsers = StorageService.getUsersList();
+    const trimmedUser = username.trim().toLowerCase();
+    const trimmedPass = password.trim();
+
+    if (!trimmedUser) {
+      setErrorMessage('Silakan masukkan Username atau Email Anda.');
+      return;
+    }
+
+    // 1. Exact Match on Username or ID (Prioritized)
+    let foundUser = currentUsers.find(
       (u) =>
-        u.username.toLowerCase() === trimmed ||
-        u.id.toLowerCase() === trimmed ||
-        (u.name && u.name.toLowerCase().includes(trimmed))
+        u.username.toLowerCase() === trimmedUser ||
+        u.id.toLowerCase() === trimmedUser ||
+        u.id.toLowerCase() === `user-${trimmedUser.replace(/[^a-z0-9]/g, '')}`
     );
 
+    // 2. Fallback Match on Full Name
+    if (!foundUser) {
+      foundUser = currentUsers.find(
+        (u) => u.name && u.name.toLowerCase().trim() === trimmedUser
+      );
+    }
+
     if (foundUser) {
+      // Validate active status
+      if (foundUser.isActive === false) {
+        setErrorMessage('Akun ini dalam status Non-Aktif. Hubungi Administrator untuk mengaktifkan kembali.');
+        return;
+      }
+
+      // Validate Password
+      if (foundUser.password && trimmedPass) {
+        if (foundUser.password !== trimmedPass) {
+          setErrorMessage(`Kata sandi salah untuk username "${foundUser.username}". Silakan periksa kembali kata sandi Anda.`);
+          return;
+        }
+      }
+
       StorageService.setCurrentUser(foundUser);
       onLoginSuccess(foundUser);
     } else {
-      if (trimmed === 'admin') {
-        const adminUser = users[0];
-        StorageService.setCurrentUser(adminUser);
-        onLoginSuccess(adminUser);
-      } else {
-        setErrorMessage('Username atau password tidak sesuai. Gunakan akun pengujian di bawah.');
-      }
+      setErrorMessage(`User dengan username "${username}" tidak ditemukan. Pastikan username sudah sesuai atau buat akun di Kelola User.`);
     }
   };
 
   const handleQuickSelectUser = (user: User) => {
     setUsername(user.username);
-    setPassword('password123');
+    setPassword(user.password || 'password123');
     StorageService.setCurrentUser(user);
     onLoginSuccess(user);
   };

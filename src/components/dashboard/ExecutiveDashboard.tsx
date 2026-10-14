@@ -58,6 +58,13 @@ export const ExecutiveDashboard: React.FC<ExecutiveDashboardProps> = ({
   );
   if ((currentUser?.role === 'manager' || currentUser?.role === 'cleaner') && currentUser.outletId) {
     filteredOutlets = filteredOutlets.filter((o) => o.id === currentUser.outletId);
+  } else if (currentUser?.role === 'area_manager') {
+    const userAssignedAreaIds = currentUser.assignedAreas && currentUser.assignedAreas.length > 0
+      ? currentUser.assignedAreas
+      : (currentUser.areaId ? [currentUser.areaId] : []);
+    if (userAssignedAreaIds.length > 0) {
+      filteredOutlets = filteredOutlets.filter((o) => userAssignedAreaIds.includes(o.areaId));
+    }
   }
 
   // Aggregate daily metrics for selected outlets

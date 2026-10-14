@@ -183,6 +183,15 @@ export const INITIAL_OUTLETS: Outlet[] = [
     ],
   },
   {
+    id: 'premiere-cibinong-xxi',
+    name: 'PREMIERE CIBINONG XXI',
+    areaId: 'area-bogor-1-depok',
+    targetHead: 85000,
+    umr: 5161769,
+    class: 'Premiere',
+    studios: [{ name: 'Premiere 1', capacity: 50 }],
+  },
+  {
     id: 'living-world-kota-wisata-xxi',
     name: 'CAFE LIVING WORLD KOTA WISATA XXI',
     areaId: 'area-bogor-1-depok',
@@ -196,6 +205,15 @@ export const INITIAL_OUTLETS: Outlet[] = [
       { name: 'IMEX', capacity: 332 },
       { name: 'PREMIERE 1', capacity: 48 },
     ],
+  },
+  {
+    id: 'premiere-living-world-kota-wisata-xxi',
+    name: 'PREMIERE LIVING WORLD KOTA WISATA XXI',
+    areaId: 'area-bogor-1-depok',
+    targetHead: 110000,
+    umr: 5161769,
+    class: 'Premiere',
+    studios: [{ name: 'Premiere 1', capacity: 48 }],
   },
   {
     id: 'metmall-cileungsi-xxi',
@@ -232,6 +250,15 @@ export const INITIAL_OUTLETS: Outlet[] = [
       { name: 'IMAX', capacity: 310 },
       { name: 'PREMIERE 1', capacity: 48 },
     ],
+  },
+  {
+    id: 'premiere-aeon-sentul-xxi',
+    name: 'PREMIERE AEON SENTUL XXI',
+    areaId: 'area-bogor-2',
+    targetHead: 95000,
+    umr: 5161769,
+    class: 'Premiere',
+    studios: [{ name: 'Premiere 1', capacity: 48 }],
   },
   {
     id: 'hs-aeon-sentul-xxi',
@@ -389,84 +416,281 @@ export const BAKING_PRODUCTS: BakingProduct[] = [
   { id: 27, name: 'Croffle Original (Mini)', unit: 'PCS', targetDefault: 25 },
 ];
 
-export const INITIAL_USERS: User[] = [
-  {
-    id: 'user-admin',
-    username: 'admin',
-    name: 'Master Administrator',
-    role: 'admin',
-    password: 'password123',
-    isActive: true,
-  },
-  {
-    id: 'user-am-bogor1',
-    username: 'area_bogor1',
-    name: 'Area Manager Bogor 1 & Depok',
-    role: 'area_manager',
-    areaId: 'area-bogor-1-depok',
-    password: 'password123',
-    isActive: true,
-  },
-  {
-    id: 'user-am-bogor2',
-    username: 'area_bogor2',
-    name: 'Area Manager Bogor 2',
-    role: 'area_manager',
-    areaId: 'area-bogor-2',
-    password: 'password123',
-    isActive: true,
-  },
-  {
-    id: 'user-aeon-sentul',
-    username: 'aeon_sentul',
-    name: 'Manager Cafe Aeon Sentul XXI',
-    role: 'manager',
-    outletId: 'aeon-sentul-xxi',
-    areaId: 'area-bogor-2',
-    password: 'password123',
-    isActive: true,
-  },
-  {
-    id: 'user-margo-city',
-    username: 'margo_city',
-    name: 'Manager Cafe Margo City XXI',
-    role: 'manager',
-    outletId: 'margo-city-xxi',
-    areaId: 'area-bogor-1-depok',
-    password: 'password123',
-    isActive: true,
-  },
-  {
-    id: 'user-cibinong',
-    username: 'cibinong',
-    name: 'Manager Cafe Cibinong XXI',
-    role: 'manager',
-    outletId: 'cibinong-xxi',
-    areaId: 'area-bogor-1-depok',
-    password: 'password123',
-    isActive: true,
-  },
-  {
-    id: 'user-cleaner-sawangan',
-    username: 'cleaner_sawangan',
-    name: 'Cleaner The Park Sawangan XXI',
-    role: 'cleaner',
-    outletId: 'the-park-sawangan-xxi',
-    areaId: 'area-bogor-1-depok',
-    password: 'password123',
-    isActive: true,
-  },
-  {
-    id: 'user-cleaner-margo',
-    username: 'cleaner_margo',
-    name: 'Cleaner Margo City XXI',
-    role: 'cleaner',
-    outletId: 'margo-city-xxi',
-    areaId: 'area-bogor-1-depok',
-    password: 'password123',
-    isActive: true,
-  },
-];
+// Helper data generator for initial outlet users
+const generateOutletUsers = (): User[] => {
+  const users: User[] = [
+    {
+      id: 'user-admin',
+      username: 'admin',
+      name: 'Master Administrator',
+      role: 'admin',
+      password: 'password123',
+      isActive: true,
+    },
+    {
+      id: 'user-am-bogor1',
+      username: 'area_bogor1',
+      name: 'Area Manager Bogor 1 & Depok',
+      role: 'area_manager',
+      areaId: 'area-bogor-1-depok',
+      password: 'password123',
+      isActive: true,
+    },
+    {
+      id: 'user-am-bogor2',
+      username: 'area_bogor2',
+      name: 'Area Manager Bogor 2',
+      role: 'area_manager',
+      areaId: 'area-bogor-2',
+      password: 'password123',
+      isActive: true,
+    },
+  ];
+
+  INITIAL_OUTLETS.forEach((outlet) => {
+    // Generate clean slug from outlet id, preserving hs- and premiere- concept prefixes
+    const cleanSlug = outlet.id
+      .replace(/-xxi$/i, '')
+      .replace(/^cafe-/i, '')
+      .replace(/[^a-z0-9]/gi, '_');
+
+    // Manager Account
+    const mgrUsername = `mgr_${cleanSlug}`;
+    users.push({
+      id: `user-mgr-${cleanSlug}`,
+      username: mgrUsername,
+      name: `Manager ${outlet.name}`,
+      role: 'manager',
+      outletId: outlet.id,
+      areaId: outlet.areaId,
+      password: 'password123',
+      isActive: true,
+    });
+
+    // Cleaner Account
+    const cleanerUsername = `cleaner_${cleanSlug}`;
+    users.push({
+      id: `user-cleaner-${cleanSlug}`,
+      username: cleanerUsername,
+      name: `Cleaner ${outlet.name}`,
+      role: 'cleaner',
+      outletId: outlet.id,
+      areaId: outlet.areaId,
+      password: 'password123',
+      isActive: true,
+    });
+  });
+
+  // Short alias accounts for Premiere, HS, and standard outlets
+  users.push(
+    {
+      id: 'user-alias-premiere-margo',
+      username: 'premiere_margo',
+      name: 'Manager PREMIERE MARGO CITY XXI',
+      role: 'manager',
+      outletId: 'premiere-margo-city-xxi',
+      areaId: 'area-bogor-1-depok',
+      password: 'password123',
+      isActive: true,
+    },
+    {
+      id: 'user-alias-cleaner-premiere-margo',
+      username: 'cleaner_premiere_margo',
+      name: 'Cleaner PREMIERE MARGO CITY XXI',
+      role: 'cleaner',
+      outletId: 'premiere-margo-city-xxi',
+      areaId: 'area-bogor-1-depok',
+      password: 'password123',
+      isActive: true,
+    },
+    {
+      id: 'user-alias-hs-margo',
+      username: 'hs_margo',
+      name: 'Manager HS MARGO CITY XXI',
+      role: 'manager',
+      outletId: 'hs-margo-city-xxi',
+      areaId: 'area-bogor-1-depok',
+      password: 'password123',
+      isActive: true,
+    },
+    {
+      id: 'user-alias-cleaner-hs-margo',
+      username: 'cleaner_hs_margo',
+      name: 'Cleaner HS MARGO CITY XXI',
+      role: 'cleaner',
+      outletId: 'hs-margo-city-xxi',
+      areaId: 'area-bogor-1-depok',
+      password: 'password123',
+      isActive: true,
+    },
+    {
+      id: 'user-alias-premiere-pesona',
+      username: 'premiere_pesona',
+      name: 'Manager PREMIERE PESONA SQUARE XXI',
+      role: 'manager',
+      outletId: 'premiere-pesona-square-xxi',
+      areaId: 'area-bogor-1-depok',
+      password: 'password123',
+      isActive: true,
+    },
+    {
+      id: 'user-alias-cleaner-premiere-pesona',
+      username: 'cleaner_premiere_pesona',
+      name: 'Cleaner PREMIERE PESONA SQUARE XXI',
+      role: 'cleaner',
+      outletId: 'premiere-pesona-square-xxi',
+      areaId: 'area-bogor-1-depok',
+      password: 'password123',
+      isActive: true,
+    },
+    {
+      id: 'user-alias-hs-aeon',
+      username: 'hs_aeon',
+      name: 'Manager HS AEON SENTUL XXI',
+      role: 'manager',
+      outletId: 'hs-aeon-sentul-xxi',
+      areaId: 'area-bogor-2',
+      password: 'password123',
+      isActive: true,
+    },
+    {
+      id: 'user-alias-cleaner-hs-aeon',
+      username: 'cleaner_hs_aeon',
+      name: 'Cleaner HS AEON SENTUL XXI',
+      role: 'cleaner',
+      outletId: 'hs-aeon-sentul-xxi',
+      areaId: 'area-bogor-2',
+      password: 'password123',
+      isActive: true,
+    },
+    {
+      id: 'user-alias-premiere-aeon',
+      username: 'premiere_aeon',
+      name: 'Manager PREMIERE AEON SENTUL XXI',
+      role: 'manager',
+      outletId: 'premiere-aeon-sentul-xxi',
+      areaId: 'area-bogor-2',
+      password: 'password123',
+      isActive: true,
+    },
+    {
+      id: 'user-alias-cleaner-premiere-aeon',
+      username: 'cleaner_premiere_aeon',
+      name: 'Cleaner PREMIERE AEON SENTUL XXI',
+      role: 'cleaner',
+      outletId: 'premiere-aeon-sentul-xxi',
+      areaId: 'area-bogor-2',
+      password: 'password123',
+      isActive: true,
+    },
+    {
+      id: 'user-alias-premiere-cibinong',
+      username: 'premiere_cibinong',
+      name: 'Manager PREMIERE CIBINONG XXI',
+      role: 'manager',
+      outletId: 'premiere-cibinong-xxi',
+      areaId: 'area-bogor-1-depok',
+      password: 'password123',
+      isActive: true,
+    },
+    {
+      id: 'user-alias-cleaner-premiere-cibinong',
+      username: 'cleaner_premiere_cibinong',
+      name: 'Cleaner PREMIERE CIBINONG XXI',
+      role: 'cleaner',
+      outletId: 'premiere-cibinong-xxi',
+      areaId: 'area-bogor-1-depok',
+      password: 'password123',
+      isActive: true,
+    },
+    {
+      id: 'user-alias-premiere-living-world',
+      username: 'premiere_living_world',
+      name: 'Manager PREMIERE LIVING WORLD KOTA WISATA XXI',
+      role: 'manager',
+      outletId: 'premiere-living-world-kota-wisata-xxi',
+      areaId: 'area-bogor-1-depok',
+      password: 'password123',
+      isActive: true,
+    },
+    {
+      id: 'user-alias-cleaner-premiere-living-world',
+      username: 'cleaner_premiere_living_world',
+      name: 'Cleaner PREMIERE LIVING WORLD KOTA WISATA XXI',
+      role: 'cleaner',
+      outletId: 'premiere-living-world-kota-wisata-xxi',
+      areaId: 'area-bogor-1-depok',
+      password: 'password123',
+      isActive: true,
+    },
+    {
+      id: 'user-aeon-sentul',
+      username: 'aeon_sentul',
+      name: 'Manager Cafe Aeon Sentul XXI',
+      role: 'manager',
+      outletId: 'aeon-sentul-xxi',
+      areaId: 'area-bogor-2',
+      password: 'password123',
+      isActive: true,
+    },
+    {
+      id: 'user-margo-city',
+      username: 'margo_city',
+      name: 'Manager Cafe Margo City XXI',
+      role: 'manager',
+      outletId: 'margo-city-xxi',
+      areaId: 'area-bogor-1-depok',
+      password: 'password123',
+      isActive: true,
+    },
+    {
+      id: 'user-cibinong',
+      username: 'cibinong',
+      name: 'Manager Cafe Cibinong XXI',
+      role: 'manager',
+      outletId: 'cibinong-xxi',
+      areaId: 'area-bogor-1-depok',
+      password: 'password123',
+      isActive: true,
+    },
+    {
+      id: 'user-cleaner-sawangan',
+      username: 'cleaner_sawangan',
+      name: 'Cleaner The Park Sawangan XXI',
+      role: 'cleaner',
+      outletId: 'the-park-sawangan-xxi',
+      areaId: 'area-bogor-1-depok',
+      password: 'password123',
+      isActive: true,
+    },
+    {
+      id: 'user-cleaner-margo',
+      username: 'cleaner_margo',
+      name: 'Cleaner Margo City XXI',
+      role: 'cleaner',
+      outletId: 'margo-city-xxi',
+      areaId: 'area-bogor-1-depok',
+      password: 'password123',
+      isActive: true,
+    }
+  );
+
+  const seenIds = new Set<string>();
+  const seenUsernames = new Set<string>();
+  const uniqueUsers: User[] = [];
+
+  users.forEach((u) => {
+    if (!seenIds.has(u.id) && !seenUsernames.has(u.username)) {
+      seenIds.add(u.id);
+      seenUsernames.add(u.username);
+      uniqueUsers.push(u);
+    }
+  });
+
+  return uniqueUsers;
+};
+
+export const INITIAL_USERS: User[] = generateOutletUsers();
 
 export const CHECKLIST_ITEMS = [
   { key: 'bau', label: 'Bau', icon: 'wind' },

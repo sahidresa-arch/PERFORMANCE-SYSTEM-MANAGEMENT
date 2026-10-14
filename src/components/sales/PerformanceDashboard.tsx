@@ -23,8 +23,16 @@ export const PerformanceDashboard: React.FC<PerformanceDashboardProps> = ({
   const areas = StorageService.getAreas();
   const rawOutlets = StorageService.getOutlets();
   const isManagerOrCleaner = (currentUser?.role === 'manager' || currentUser?.role === 'cleaner') && currentUser?.outletId;
+  const userAssignedAreaIds = currentUser?.role === 'area_manager'
+    ? (currentUser.assignedAreas && currentUser.assignedAreas.length > 0
+        ? currentUser.assignedAreas
+        : (currentUser.areaId ? [currentUser.areaId] : []))
+    : null;
+
   const outlets = isManagerOrCleaner
     ? rawOutlets.filter((o) => o.id === currentUser.outletId)
+    : userAssignedAreaIds && userAssignedAreaIds.length > 0
+    ? rawOutlets.filter((o) => userAssignedAreaIds.includes(o.areaId))
     : rawOutlets;
   const [dailySales, setDailySales] = React.useState(() => StorageService.getDailySales());
 

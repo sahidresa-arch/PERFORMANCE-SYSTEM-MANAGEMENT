@@ -29,8 +29,16 @@ export const InputDataSales: React.FC<InputDataSalesProps> = ({
   onDateChange,
 }) => {
   const allOutlets = StorageService.getOutlets();
+  const userAssignedAreaIds = currentUser?.role === 'area_manager'
+    ? (currentUser.assignedAreas && currentUser.assignedAreas.length > 0
+        ? currentUser.assignedAreas
+        : (currentUser.areaId ? [currentUser.areaId] : []))
+    : null;
+
   const outlets = (currentUser?.role === 'manager' || currentUser?.role === 'cleaner') && currentUser?.outletId
     ? allOutlets.filter((o) => o.id === currentUser.outletId)
+    : userAssignedAreaIds && userAssignedAreaIds.length > 0
+    ? allOutlets.filter((o) => userAssignedAreaIds.includes(o.areaId))
     : allOutlets;
   const isAdmin = currentUser?.role === 'admin' || currentUser?.role === 'area_manager';
 

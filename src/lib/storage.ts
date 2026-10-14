@@ -633,32 +633,93 @@ export const StorageService = {
 
   getUsersList(): User[] {
     const raw = localStorage.getItem(KEYS.USERS_LIST);
+    const deletedRaw = localStorage.getItem('cinema_xxi_deleted_user_ids');
+    const deletedIds: string[] = deletedRaw ? JSON.parse(deletedRaw) : [];
+
+    const buildDedupedInitial = () => {
+      const seenIds = new Set<string>();
+      const seenUsernames = new Set<string>();
+      const deduped: User[] = [];
+      INITIAL_USERS.forEach((u) => {
+        if (!seenIds.has(u.id) && !seenUsernames.has(u.username)) {
+          seenIds.add(u.id);
+          seenUsernames.add(u.username);
+          deduped.push(u);
+        }
+      });
+      return deduped;
+    };
+
     if (!raw) {
-      localStorage.setItem(KEYS.USERS_LIST, JSON.stringify(INITIAL_USERS));
-      return INITIAL_USERS;
+      const initList = buildDedupedInitial();
+      localStorage.setItem(KEYS.USERS_LIST, JSON.stringify(initList));
+      return initList;
     }
+
     try {
-      const list: User[] = JSON.parse(raw);
+      const parsed: User[] = JSON.parse(raw);
+      const seenIds = new Set<string>();
+      const seenUsernames = new Set<string>();
+      const cleanedList: User[] = [];
       let changed = false;
+
+      // 1. Process stored users and deduplicate + purge deleted
+      parsed.forEach((u) => {
+        if (!u.id || !u.username) {
+          changed = true;
+          return;
+        }
+        if (deletedIds.includes(u.id) || deletedIds.includes(u.username)) {
+          changed = true;
+          return;
+        }
+        if (!seenIds.has(u.id) && !seenUsernames.has(u.username)) {
+          seenIds.add(u.id);
+          seenUsernames.add(u.username);
+          cleanedList.push(u);
+        } else {
+          changed = true; // found duplicate
+        }
+      });
+
+      // 2. Auto-seed missing INITIAL_USERS
       INITIAL_USERS.forEach((initUser) => {
-        if (!list.some((u) => u.id === initUser.id || u.username === initUser.username)) {
-          list.push(initUser);
+        if (
+          !deletedIds.includes(initUser.id) &&
+          !deletedIds.includes(initUser.username) &&
+          !seenIds.has(initUser.id) &&
+          !seenUsernames.has(initUser.username)
+        ) {
+          seenIds.add(initUser.id);
+          seenUsernames.add(initUser.username);
+          cleanedList.push(initUser);
           changed = true;
         }
       });
+
       if (changed) {
-        localStorage.setItem(KEYS.USERS_LIST, JSON.stringify(list));
+        localStorage.setItem(KEYS.USERS_LIST, JSON.stringify(cleanedList));
       }
-      return list;
+
+      return cleanedList;
     } catch {
-      localStorage.setItem(KEYS.USERS_LIST, JSON.stringify(INITIAL_USERS));
-      return INITIAL_USERS;
+      const initList = buildDedupedInitial();
+      localStorage.setItem(KEYS.USERS_LIST, JSON.stringify(initList));
+      return initList;
     }
   },
 
   saveUser(user: User): User[] {
+    // If a user is re-saved, remove them from deletedIds list if present
+    const deletedRaw = localStorage.getItem('cinema_xxi_deleted_user_ids');
+    let deletedIds: string[] = deletedRaw ? JSON.parse(deletedRaw) : [];
+    if (deletedIds.length > 0) {
+      deletedIds = deletedIds.filter((id) => id !== user.id && id !== user.username);
+      localStorage.setItem('cinema_xxi_deleted_user_ids', JSON.stringify(deletedIds));
+    }
+
     const list = this.getUsersList();
-    const idx = list.findIndex((u) => u.id === user.id);
+    const idx = list.findIndex((u) => u.id === user.id || u.username === user.username);
     if (idx >= 0) {
       list[idx] = user;
     } else {
@@ -670,7 +731,21 @@ export const StorageService = {
   },
 
   deleteUser(userId: string): User[] {
-    const list = this.getUsersList().filter((u) => u.id !== userId);
+    const currentList = this.getUsersList();
+    const targetUser = currentList.find((u) => u.id === userId || u.username === userId);
+
+    // Track deleted IDs in localStorage so getUsersList will not restore them from INITIAL_USERS
+    const deletedRaw = localStorage.getItem('cinema_xxi_deleted_user_ids');
+    const deletedIds: string[] = deletedRaw ? JSON.parse(deletedRaw) : [];
+    if (targetUser) {
+      if (!deletedIds.includes(targetUser.id)) deletedIds.push(targetUser.id);
+      if (!deletedIds.includes(targetUser.username)) deletedIds.push(targetUser.username);
+    } else {
+      if (!deletedIds.includes(userId)) deletedIds.push(userId);
+    }
+    localStorage.setItem('cinema_xxi_deleted_user_ids', JSON.stringify(deletedIds));
+
+    const list = currentList.filter((u) => u.id !== userId && u.username !== userId);
     localStorage.setItem(KEYS.USERS_LIST, JSON.stringify(list));
     this.broadcastChange('users');
     return list;
