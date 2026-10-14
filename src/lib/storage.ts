@@ -632,10 +632,10 @@ export const StorageService = {
   },
 
   getUsersList(): User[] {
-    // Ensure live web and any stale browser cache is automatically synced to the standard 48 users
-    const isV3Synced = localStorage.getItem('cinema_xxi_user_sync_version_v3');
-    if (!isV3Synced) {
-      localStorage.setItem('cinema_xxi_user_sync_version_v3', 'true');
+    const SYNC_VERSION_KEY = 'cinema_xxi_users_synced_v5_admin123';
+    const isSynced = localStorage.getItem(SYNC_VERSION_KEY);
+    if (!isSynced) {
+      localStorage.setItem(SYNC_VERSION_KEY, 'true');
       return this.resetUsersToDefault();
     }
 
@@ -651,7 +651,7 @@ export const StorageService = {
         if (!seenIds.has(u.id) && !seenUsernames.has(u.username)) {
           seenIds.add(u.id);
           seenUsernames.add(u.username);
-          deduped.push({ ...u, password: u.password || 'admin123' });
+          deduped.push({ ...u, password: 'admin123' });
         }
       });
       return deduped;
@@ -670,7 +670,7 @@ export const StorageService = {
       const cleanedList: User[] = [];
       let changed = false;
 
-      // 1. Process stored users and deduplicate + purge deleted
+      // 1. Process stored users and deduplicate + purge deleted + sync default passwords
       parsed.forEach((u) => {
         if (!u.id || !u.username) {
           changed = true;
@@ -683,6 +683,16 @@ export const StorageService = {
         if (!seenIds.has(u.id) && !seenUsernames.has(u.username)) {
           seenIds.add(u.id);
           seenUsernames.add(u.username);
+
+          // If this is a standard initial user and password was empty or legacy 'password123', ensure it is 'admin123'
+          const matchingInit = INITIAL_USERS.find(
+            (iu) => iu.id === u.id || iu.username === u.username
+          );
+          if (matchingInit && (!u.password || u.password === 'password123')) {
+            u.password = 'admin123';
+            changed = true;
+          }
+
           cleanedList.push(u);
         } else {
           changed = true; // found duplicate
@@ -699,7 +709,7 @@ export const StorageService = {
         ) {
           seenIds.add(initUser.id);
           seenUsernames.add(initUser.username);
-          cleanedList.push(initUser);
+          cleanedList.push({ ...initUser, password: 'admin123' });
           changed = true;
         }
       });
@@ -760,6 +770,7 @@ export const StorageService = {
 
   resetUsersToDefault(): User[] {
     localStorage.removeItem('cinema_xxi_deleted_user_ids');
+    localStorage.setItem('cinema_xxi_users_synced_v5_admin123', 'true');
     const seenIds = new Set<string>();
     const seenUsernames = new Set<string>();
     const deduped: User[] = [];
@@ -768,7 +779,7 @@ export const StorageService = {
       if (!seenIds.has(u.id) && !seenUsernames.has(u.username)) {
         seenIds.add(u.id);
         seenUsernames.add(u.username);
-        deduped.push({ ...u });
+        deduped.push({ ...u, password: 'admin123' });
       }
     });
 
