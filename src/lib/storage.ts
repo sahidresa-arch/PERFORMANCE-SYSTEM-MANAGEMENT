@@ -632,6 +632,13 @@ export const StorageService = {
   },
 
   getUsersList(): User[] {
+    // Ensure live web and any stale browser cache is automatically synced to the standard 48 users
+    const isV3Synced = localStorage.getItem('cinema_xxi_user_sync_version_v3');
+    if (!isV3Synced) {
+      localStorage.setItem('cinema_xxi_user_sync_version_v3', 'true');
+      return this.resetUsersToDefault();
+    }
+
     const raw = localStorage.getItem(KEYS.USERS_LIST);
     const deletedRaw = localStorage.getItem('cinema_xxi_deleted_user_ids');
     const deletedIds: string[] = deletedRaw ? JSON.parse(deletedRaw) : [];
@@ -644,7 +651,7 @@ export const StorageService = {
         if (!seenIds.has(u.id) && !seenUsernames.has(u.username)) {
           seenIds.add(u.id);
           seenUsernames.add(u.username);
-          deduped.push(u);
+          deduped.push({ ...u, password: u.password || 'admin123' });
         }
       });
       return deduped;
@@ -749,6 +756,25 @@ export const StorageService = {
     localStorage.setItem(KEYS.USERS_LIST, JSON.stringify(list));
     this.broadcastChange('users');
     return list;
+  },
+
+  resetUsersToDefault(): User[] {
+    localStorage.removeItem('cinema_xxi_deleted_user_ids');
+    const seenIds = new Set<string>();
+    const seenUsernames = new Set<string>();
+    const deduped: User[] = [];
+
+    INITIAL_USERS.forEach((u) => {
+      if (!seenIds.has(u.id) && !seenUsernames.has(u.username)) {
+        seenIds.add(u.id);
+        seenUsernames.add(u.username);
+        deduped.push({ ...u });
+      }
+    });
+
+    localStorage.setItem(KEYS.USERS_LIST, JSON.stringify(deduped));
+    this.broadcastChange('users');
+    return deduped;
   },
 
   // Areas

@@ -83,6 +83,9 @@ export const UserOutletManagement: React.FC<UserOutletManagementProps> = ({
   // Delete User Modal State
   const [deletingUser, setDeletingUser] = useState<User | null>(null);
 
+  // Reset to Default Users Modal State
+  const [showResetUsersModal, setShowResetUsersModal] = useState(false);
+
   const [notification, setNotification] = useState('');
 
   const showToast = (msg: string) => {
@@ -274,6 +277,14 @@ export const UserOutletManagement: React.FC<UserOutletManagementProps> = ({
     setUsers(updatedList);
     showToast(`User "${deletingUser.username}" berhasil dihapus dari sistem.`);
     setDeletingUser(null);
+  };
+
+  // Handle Reset / Sync to Standard Users (48 Users, No Duplicates)
+  const handleResetToDefaultUsers = () => {
+    const cleanList = StorageService.resetUsersToDefault();
+    setUsers(cleanList);
+    setShowResetUsersModal(false);
+    showToast('Berhasil disinkronkan! Daftar 48 akun pengguna standar telah diperbarui tanpa duplikat.');
   };
 
   // Handle Export Users to XLSX
@@ -742,6 +753,16 @@ export const UserOutletManagement: React.FC<UserOutletManagementProps> = ({
               </button>
             </div>
 
+            {/* SINKRONKAN / BERSIHKAN DUPLIKAT BUTTON */}
+            <button
+              onClick={() => setShowResetUsersModal(true)}
+              className="px-3 py-1.5 rounded-xl bg-purple-700 hover:bg-purple-600 text-white text-xs font-bold flex items-center space-x-1.5 transition cursor-pointer shadow-xs"
+              title="Sinkronkan daftar 48 user standar sesuai gambar (bersihkan semua duplikat)"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+              <span>Sinkronkan User Standar</span>
+            </button>
+
             <div className="relative">
               <Search className="w-3.5 h-3.5 absolute left-3 top-2.5 text-slate-400" />
               <input
@@ -1189,6 +1210,59 @@ export const UserOutletManagement: React.FC<UserOutletManagementProps> = ({
               >
                 <Trash2 className="w-4 h-4" />
                 <span>Ya, Hapus Akun Ini</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL SYNC / RESET USERS TO STANDARD (NO DUPLICATES) */}
+      {showResetUsersModal && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-lg w-full p-6 shadow-2xl border border-purple-200 animate-in zoom-in-95 space-y-4">
+            <div className="flex items-center space-x-3 text-purple-800">
+              <span className="p-2.5 rounded-2xl bg-purple-100 text-purple-700 border border-purple-300">
+                <Users className="w-6 h-6" />
+              </span>
+              <div>
+                <h3 className="font-extrabold text-base uppercase text-slate-900">
+                  Sinkronkan Daftar Pengguna Standar
+                </h3>
+                <p className="text-xs text-slate-500">
+                  Format Resmi Cinema XXI (Total 48 Akun Pengguna Unik)
+                </p>
+              </div>
+            </div>
+
+            <div className="p-4 rounded-2xl bg-purple-50/70 border border-purple-200 text-xs text-purple-950 space-y-2">
+              <p className="font-bold flex items-center gap-1.5 text-purple-900">
+                <CheckCircle2 className="w-4 h-4 text-purple-600 shrink-0" />
+                <span>Fitur ini akan menyelaraskan seluruh daftar user sesuai gambar:</span>
+              </p>
+              <ul className="list-disc pl-5 space-y-1 text-slate-700">
+                <li><strong>1 Master Administrator</strong> (admin)</li>
+                <li><strong>2 Area Manager</strong> (area_bogor1 &amp; area_bogor2)</li>
+                <li><strong>23 Manager Outlet</strong> (sesuai seluruh cabang bioskop)</li>
+                <li><strong>22 Cleaner Outlet</strong> (sesuai seluruh cabang bioskop)</li>
+                <li><strong className="text-emerald-700">Pembersihan Duplikat:</strong> Menghapus semua user ganda (*double user*), ID ganda, dan memperbaiki struktur akun.</li>
+              </ul>
+            </div>
+
+            <div className="pt-2 flex items-center justify-end space-x-2">
+              <button
+                type="button"
+                onClick={() => setShowResetUsersModal(false)}
+                className="px-4 py-2.5 rounded-xl text-xs font-bold bg-slate-100 hover:bg-slate-200 text-slate-700 cursor-pointer"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={handleResetToDefaultUsers}
+                className="px-4 py-2.5 rounded-xl text-xs font-bold bg-purple-700 hover:bg-purple-600 text-white flex items-center space-x-1.5 shadow-xs cursor-pointer"
+              >
+                <Check className="w-4 h-4" />
+                <span>Ya, Sinkronkan Sekarang</span>
               </button>
             </div>
           </div>
