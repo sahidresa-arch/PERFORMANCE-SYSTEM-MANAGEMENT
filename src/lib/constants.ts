@@ -182,15 +182,7 @@ export const INITIAL_OUTLETS: Outlet[] = [
       { name: 'PREMIERE 1', capacity: 50 },
     ],
   },
-  {
-    id: 'premiere-cibinong-xxi',
-    name: 'PREMIERE CIBINONG XXI',
-    areaId: 'area-bogor-1-depok',
-    targetHead: 85000,
-    umr: 5161769,
-    class: 'Premiere',
-    studios: [{ name: 'Premiere 1', capacity: 50 }],
-  },
+
   {
     id: 'living-world-kota-wisata-xxi',
     name: 'CAFE LIVING WORLD KOTA WISATA XXI',
@@ -206,15 +198,7 @@ export const INITIAL_OUTLETS: Outlet[] = [
       { name: 'PREMIERE 1', capacity: 48 },
     ],
   },
-  {
-    id: 'premiere-living-world-kota-wisata-xxi',
-    name: 'PREMIERE LIVING WORLD KOTA WISATA XXI',
-    areaId: 'area-bogor-1-depok',
-    targetHead: 110000,
-    umr: 5161769,
-    class: 'Premiere',
-    studios: [{ name: 'Premiere 1', capacity: 48 }],
-  },
+
   {
     id: 'metmall-cileungsi-xxi',
     name: 'CAFE METMALL CILENGSI XXI',
@@ -251,15 +235,7 @@ export const INITIAL_OUTLETS: Outlet[] = [
       { name: 'PREMIERE 1', capacity: 48 },
     ],
   },
-  {
-    id: 'premiere-aeon-sentul-xxi',
-    name: 'PREMIERE AEON SENTUL XXI',
-    areaId: 'area-bogor-2',
-    targetHead: 95000,
-    umr: 5161769,
-    class: 'Premiere',
-    studios: [{ name: 'Premiere 1', capacity: 48 }],
-  },
+
   {
     id: 'hs-aeon-sentul-xxi',
     name: 'HS AEON SENTUL XXI',
@@ -893,16 +869,7 @@ export const INITIAL_USERS: User[] = [
     password: 'admin123',
     isActive: true,
   },
-  {
-    id: 'user-cln-premiere_sentul',
-    username: 'cleaner_premiere_sentul',
-    name: 'Cleaner PREMIERE AEON SENTUL XXI',
-    role: 'cleaner',
-    outletId: 'premiere-aeon-sentul-xxi',
-    areaId: 'area-bogor-2',
-    password: 'admin123',
-    isActive: true,
-  },
+
 ];
 
 export const CHECKLIST_ITEMS = [

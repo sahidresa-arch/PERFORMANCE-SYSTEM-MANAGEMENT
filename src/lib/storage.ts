@@ -847,11 +847,19 @@ export const StorageService = {
           updatedList.push(io);
         }
       });
-      localStorage.setItem(KEYS.OUTLETS, JSON.stringify(updatedList));
-      return updatedList;
+      const finalOutlets = updatedList.filter(
+        (o) =>
+          !['premiere-cibinong-xxi', 'premiere-living-world-kota-wisata-xxi', 'premiere-aeon-sentul-xxi'].includes(o.id)
+      );
+      localStorage.setItem(KEYS.OUTLETS, JSON.stringify(finalOutlets));
+      return finalOutlets;
     } catch {
-      localStorage.setItem(KEYS.OUTLETS, JSON.stringify(INITIAL_OUTLETS));
-      return INITIAL_OUTLETS;
+      const cleanInit = INITIAL_OUTLETS.filter(
+        (o) =>
+          !['premiere-cibinong-xxi', 'premiere-living-world-kota-wisata-xxi', 'premiere-aeon-sentul-xxi'].includes(o.id)
+      );
+      localStorage.setItem(KEYS.OUTLETS, JSON.stringify(cleanInit));
+      return cleanInit;
     }
   },
 
