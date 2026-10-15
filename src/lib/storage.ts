@@ -655,7 +655,7 @@ export const StorageService = {
         if (!seenIds.has(u.id) && !seenUsernames.has(u.username)) {
           seenIds.add(u.id);
           seenUsernames.add(u.username);
-          deduped.push({ ...u, password: 'admin123' });
+          deduped.push({ ...u });
         }
       });
       return deduped;
@@ -688,12 +688,17 @@ export const StorageService = {
           seenIds.add(u.id);
           seenUsernames.add(u.username);
 
-          // If this is a standard initial user and password was empty or legacy 'password123', ensure it is 'admin123'
+          // Force admin password to cinema2121 if it's admin123 or empty
+          if (u.id === 'user-admin' && (u.password === 'admin123' || !u.password)) {
+            u.password = 'cinema2121';
+            changed = true;
+          }
+
           const matchingInit = INITIAL_USERS.find(
             (iu) => iu.id === u.id || iu.username === u.username
           );
-          if (matchingInit && (!u.password || u.password === 'password123')) {
-            u.password = 'admin123';
+          if (matchingInit && matchingInit.password && (!u.password || u.password === 'password123')) {
+            u.password = matchingInit.password;
             changed = true;
           }
 
@@ -713,7 +718,7 @@ export const StorageService = {
         ) {
           seenIds.add(initUser.id);
           seenUsernames.add(initUser.username);
-          cleanedList.push({ ...initUser, password: 'admin123' });
+          cleanedList.push({ ...initUser });
           changed = true;
         }
       });

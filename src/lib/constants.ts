@@ -400,7 +400,7 @@ export const INITIAL_USERS: User[] = [
     username: 'admin',
     name: 'Master Administrator',
     role: 'admin',
-    password: 'admin123',
+    password: 'cinema2121',
     isActive: true,
   },
 
