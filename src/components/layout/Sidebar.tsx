@@ -668,19 +668,21 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </>
         )}
 
-        {/* Settings button */}
-        <div className="pt-1">
-          <button
-            onClick={onOpenSettings}
-            title="Koneksi & OCR API"
-            className={`w-full h-[42px] px-3.5 flex items-center rounded-lg text-[#6B7280] hover:text-[#4A1D6A] hover:bg-[#F3E8FF]/60 transition-colors cursor-pointer text-left ${
-              collapsed ? 'justify-center px-0' : 'space-x-3'
-            }`}
-          >
-            <Settings className="w-4 h-4 shrink-0" />
-            {!collapsed && <span className="truncate">Koneksi & OCR API</span>}
-          </button>
-        </div>
+        {/* Settings button - Admin only */}
+        {isAdmin && (
+          <div className="pt-1">
+            <button
+              onClick={onOpenSettings}
+              title="Koneksi & OCR API"
+              className={`w-full h-[42px] px-3.5 flex items-center rounded-lg text-[#6B7280] hover:text-[#4A1D6A] hover:bg-[#F3E8FF]/60 transition-colors cursor-pointer text-left ${
+                collapsed ? 'justify-center px-0' : 'space-x-3'
+              }`}
+            >
+              <Settings className="w-4 h-4 shrink-0" />
+              {!collapsed && <span className="truncate">Koneksi & OCR API</span>}
+            </button>
+          </div>
+        )}
       </nav>
 
       {/* Footer */}

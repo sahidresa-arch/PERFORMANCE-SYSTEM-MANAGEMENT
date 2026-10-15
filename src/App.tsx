@@ -130,6 +130,12 @@ export default function App() {
     );
   }
 
+  const handleOpenSettings = () => {
+    if (currentUser?.role === 'admin') {
+      setIsSettingsOpen(true);
+    }
+  };
+
   return (
     <div className="min-h-screen w-full flex flex-col font-sans bg-[#F8F9FC] text-[#374151] antialiased">
       {/* Top Header */}
@@ -138,7 +144,7 @@ export default function App() {
         selectedDate={selectedDate}
         onDateChange={setSelectedDate}
         onLogout={handleLogout}
-        onOpenSettings={() => setIsSettingsOpen(true)}
+        onOpenSettings={handleOpenSettings}
         collapsed={collapsed}
         onToggleSidebar={handleToggleCollapse}
       />
@@ -150,7 +156,7 @@ export default function App() {
           currentUser={currentUser}
           activeMenu={activeMenu}
           setActiveMenu={handleMenuChange}
-          onOpenSettings={() => setIsSettingsOpen(true)}
+          onOpenSettings={handleOpenSettings}
           collapsed={collapsed}
           onToggleCollapse={handleToggleCollapse}
         />

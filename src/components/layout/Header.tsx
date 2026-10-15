@@ -113,14 +113,16 @@ export const Header: React.FC<HeaderProps> = ({
         </div>
 
         {/* Settings / Cloud DB Button */}
-        <button
-          onClick={onOpenSettings}
-          title="Pengaturan Database Supabase & Mistral OCR"
-          className="flex items-center space-x-1 px-2.5 py-1 rounded-lg border border-[#E5E7EB] bg-[#FFFFFF] hover:bg-[#F3E8FF] text-[#6D28D9] transition cursor-pointer text-xs font-semibold shrink-0"
-        >
-          <Database className="w-3.5 h-3.5 text-[#6D28D9]" />
-          <span className="hidden md:inline text-[10px] text-[#4B5563]">Cloud &amp; OCR</span>
-        </button>
+        {currentUser?.role === 'admin' && (
+          <button
+            onClick={onOpenSettings}
+            title="Pengaturan Database Supabase & Mistral OCR"
+            className="flex items-center space-x-1 px-2.5 py-1 rounded-lg border border-[#E5E7EB] bg-[#FFFFFF] hover:bg-[#F3E8FF] text-[#6D28D9] transition cursor-pointer text-xs font-semibold shrink-0"
+          >
+            <Database className="w-3.5 h-3.5 text-[#6D28D9]" />
+            <span className="hidden md:inline text-[10px] text-[#4B5563]">Cloud &amp; OCR</span>
+          </button>
+        )}
 
         {/* Logout Button */}
         <button
