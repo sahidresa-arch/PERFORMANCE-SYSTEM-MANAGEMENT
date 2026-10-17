@@ -282,6 +282,7 @@ export const InputDataSales: React.FC<InputDataSalesProps> = ({
     const dayaSerapPercent = netPenonton > 0 ? (netBill / netPenonton) * 100 : 0;
     const netAt = netBill > 0 ? netFnb / netBill : 0;
     const achievementPercent = targetHead > 0 && netSph > 0 ? (netSph / targetHead) * 100 : 0;
+    const selisihRupiah = targetHead > 0 && netPenonton > 0 ? Math.round((netSph - targetHead) * netPenonton) : 0;
 
     return {
       showNumber: showNum,
@@ -296,6 +297,7 @@ export const InputDataSales: React.FC<InputDataSalesProps> = ({
       dayaSerapPercent,
       netAt,
       achievementPercent,
+      selisihRupiah,
       isCapai: netSph >= targetHead && netPenonton > 0,
     };
   });
@@ -639,6 +641,7 @@ export const InputDataSales: React.FC<InputDataSalesProps> = ({
                 <th className="py-3 px-3 text-center text-emerald-900">DAYA SERAP (%)</th>
                 <th className="py-3 px-3 text-right text-slate-900">AT (RP)</th>
                 <th className="py-3 px-3 text-center text-blue-900">ACHIEVEMENT (%)</th>
+                <th className="py-3 px-3 text-right text-emerald-900">SELISIH (RP)</th>
                 <th className="py-3 px-3 text-center">STATUS</th>
               </tr>
             </thead>
@@ -704,6 +707,23 @@ export const InputDataSales: React.FC<InputDataSalesProps> = ({
                         '-'
                       )}
                     </td>
+                    {/* SELISIH (RP) = (SPH - Target Head) * Penonton */}
+                    <td className="py-3 px-3 text-right font-black">
+                      {s.netPenonton > 0 || s.netFnb > 0 ? (
+                        <span
+                          className={
+                            s.selisihRupiah >= 0
+                              ? 'text-emerald-700 font-bold'
+                              : 'text-rose-700 font-bold'
+                          }
+                        >
+                          {s.selisihRupiah >= 0 ? '+' : ''}
+                          Rp {s.selisihRupiah.toLocaleString('id-ID')}
+                        </span>
+                      ) : (
+                        <span className="text-slate-400 font-semibold">-</span>
+                      )}
+                    </td>
                     {/* STATUS: Capai / Tidak Capai terhadap Target Head */}
                     <td className="py-3 px-3 text-center">
                       {s.netPenonton > 0 || s.netFnb > 0 ? (
@@ -752,6 +772,12 @@ export const InputDataSales: React.FC<InputDataSalesProps> = ({
                 </td>
                 <td className="py-3.5 px-3 text-center text-blue-300 font-black">
                   {totalDailyMetrics.achievement}%
+                </td>
+                <td className="py-3.5 px-3 text-right font-black">
+                  <span className={totalDailyMetrics.selisih >= 0 ? 'text-emerald-300' : 'text-rose-300'}>
+                    {totalDailyMetrics.selisih >= 0 ? '+' : ''}
+                    Rp {Math.round(totalDailyMetrics.selisih).toLocaleString('id-ID')}
+                  </span>
                 </td>
                 <td className="py-3.5 px-3 text-center">
                   <span
