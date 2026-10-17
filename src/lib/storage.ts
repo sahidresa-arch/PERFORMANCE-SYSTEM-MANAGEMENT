@@ -931,9 +931,15 @@ export const StorageService = {
     const allMigrated = [...MIGRATED_SALES_2025, ...MIGRATED_SALES_2026];
     const migratedMap = new Set(allMigrated.map((m) => `${m.outletId}_${m.date}`));
 
-    // Purge any stale/obsolete migrated records that were removed from source data
+    // Purge any stale/obsolete migrated records or system sync rows
     const initialLen = list.length;
     list = list.filter((item) => {
+      if (
+        String(item?.id || '').startsWith('__SYSTEM_SYNC_') ||
+        String(item?.outletId || '').startsWith('__SYSTEM_SYNC_')
+      ) {
+        return false;
+      }
       if (item.isMigrated || item.date <= '2026-09-30') {
         return migratedMap.has(`${item.outletId}_${item.date}`);
       }
@@ -2836,7 +2842,9 @@ export const StorageService = {
       }
     }
 
-    // Deduplicate list by ID and by clean NIK
+    // Deduplicate list by ID and by clean NIK, and exclude deleted employee IDs
+    const deletedRaw = localStorage.getItem('cinema_xxi_deleted_employee_ids');
+    const deletedIdsSet = new Set<string>(deletedRaw ? JSON.parse(deletedRaw) : []);
     const seenIds = new Set<string>();
     const seenNiks = new Set<string>();
     const deduplicated: Employee[] = [];
@@ -2844,6 +2852,7 @@ export const StorageService = {
     for (const emp of resultList) {
       if (!emp || !emp.id) continue;
       const cleanNik = emp.nik ? emp.nik.trim() : '';
+      if (deletedIdsSet.has(emp.id) || (cleanNik && deletedIdsSet.has(cleanNik))) continue;
       if (seenIds.has(emp.id)) continue;
       if (cleanNik && cleanNik !== '-' && seenNiks.has(cleanNik)) continue;
 
@@ -2860,9 +2869,22 @@ export const StorageService = {
   },
 
   saveEmployee(emp: Employee): Employee[] {
-    const list = this.getEmployees();
     const cleanNik = emp.nik ? emp.nik.trim() : '';
-    
+
+    // Remove from deletedIds if re-added/saved
+    const deletedRaw = localStorage.getItem('cinema_xxi_deleted_employee_ids');
+    let deletedIds: string[] = deletedRaw ? JSON.parse(deletedRaw) : [];
+    if (deletedIds.length > 0) {
+      deletedIds = deletedIds.filter((id) => id !== emp.id && (!cleanNik || id !== cleanNik));
+      localStorage.setItem('cinema_xxi_deleted_employee_ids', JSON.stringify(deletedIds));
+    }
+
+    const list = this.getEmployees();
+    const empWithTimestamp: Employee = {
+      ...emp,
+      ...({ updatedAt: new Date().toISOString() } as any),
+    };
+
     // Find matching employee by ID OR by clean NIK
     const idx = list.findIndex(
       (e) => e.id === emp.id || (cleanNik && cleanNik !== '-' && e.nik?.trim() === cleanNik)
@@ -2870,9 +2892,9 @@ export const StorageService = {
 
     if (idx >= 0) {
       // Preserve original ID if it matched by NIK
-      list[idx] = { ...list[idx], ...emp, id: list[idx].id || emp.id };
+      list[idx] = { ...list[idx], ...empWithTimestamp, id: list[idx].id || emp.id };
     } else {
-      list.unshift(emp);
+      list.unshift(empWithTimestamp);
     }
 
     // Ensure strict uniqueness
@@ -2892,15 +2914,43 @@ export const StorageService = {
     }
 
     localStorage.setItem(KEYS.EMPLOYEES, JSON.stringify(deduplicated));
+    localStorage.setItem('cinema_xxi_employees_modified', 'true');
     this.broadcastChange('employees');
+
+    // Asynchronous background sync ke Supabase agar Web Live langsung mengikuti
+    import('./supabase')
+      .then((m) => m.syncEmployeesToSupabase(deduplicated, deletedIds))
+      .catch(() => {});
+
     return deduplicated;
   },
 
   deleteEmployee(id: string): Employee[] {
     const currentList = this.getEmployees();
+    const target = currentList.find((e) => e.id === id || e.nik === id);
+
+    const deletedRaw = localStorage.getItem('cinema_xxi_deleted_employee_ids');
+    const deletedIds: string[] = deletedRaw ? JSON.parse(deletedRaw) : [];
+    if (!deletedIds.includes(id)) deletedIds.push(id);
+    if (target) {
+      if (target.id && !deletedIds.includes(target.id)) deletedIds.push(target.id);
+      const cleanNik = target.nik ? target.nik.trim() : '';
+      if (cleanNik && cleanNik !== '-' && !deletedIds.includes(cleanNik)) {
+        deletedIds.push(cleanNik);
+      }
+    }
+    localStorage.setItem('cinema_xxi_deleted_employee_ids', JSON.stringify(deletedIds));
+
     const list = currentList.filter((e) => e.id !== id && e.nik !== id);
     localStorage.setItem(KEYS.EMPLOYEES, JSON.stringify(list));
+    localStorage.setItem('cinema_xxi_employees_modified', 'true');
     this.broadcastChange('employees');
+
+    // Asynchronous background sync ke Supabase agar Web Live langsung mengikuti
+    import('./supabase')
+      .then((m) => m.syncEmployeesToSupabase(list, deletedIds))
+      .catch(() => {});
+
     return list;
   },
 
@@ -2924,6 +2974,11 @@ export const StorageService = {
   saveEmployeeKpis(records: EmployeeKpiRecord[]) {
     localStorage.setItem(KEYS.EMPLOYEE_KPIS, JSON.stringify(records));
     this.broadcastChange('employee-kpis');
+
+    // Asynchronous background sync ke Supabase agar Web Live langsung mengikuti
+    import('./supabase')
+      .then((m) => m.syncEmployeeKpisToSupabase(records))
+      .catch(() => {});
   },
 
   // Lost & Found

@@ -28,12 +28,30 @@ export const KpiKaryawanView: React.FC<KpiKaryawanViewProps> = ({ currentUser, s
   const [selectedAreaId, setSelectedAreaId] = useState<string>('all');
   const [selectedOutletId, setSelectedOutletId] = useState<string>('all');
 
-  const employees = StorageService.getEmployees();
+  const [employees, setEmployees] = useState<Employee[]>(() => StorageService.getEmployees());
   const outlets = StorageService.getOutlets();
   const areas = INITIAL_AREAS;
 
   const [kpiRecords, setKpiRecords] = useState<EmployeeKpiRecord[]>(() => StorageService.getEmployeeKpis());
   const [successMsg, setSuccessMsg] = useState('');
+
+  useEffect(() => {
+    const handleStorageUpdate = (e: any) => {
+      const type = e?.detail?.type;
+      if (!type || type === 'employees' || type === 'all-reset') {
+        setEmployees(StorageService.getEmployees());
+      }
+      if (!type || type === 'employee-kpis' || type === 'all-reset') {
+        setKpiRecords(StorageService.getEmployeeKpis());
+      }
+    };
+    window.addEventListener('cinema-xxi-storage-update', handleStorageUpdate);
+    window.addEventListener('storage', handleStorageUpdate);
+    return () => {
+      window.removeEventListener('cinema-xxi-storage-update', handleStorageUpdate);
+      window.removeEventListener('storage', handleStorageUpdate);
+    };
+  }, []);
 
   const showToast = (msg: string) => {
     setSuccessMsg(msg);

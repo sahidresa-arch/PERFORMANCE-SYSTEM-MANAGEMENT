@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import * as XLSX from 'xlsx';
 import { User, Outlet, Employee } from '../../types';
 import { StorageService } from '../../lib/storage';
+import { syncEmployeesToSupabase, mergeRemoteEmployeesToLocal } from '../../lib/supabase';
 import { exportToPrettyExcel } from '../../lib/excelExport';
 import { INITIAL_AREAS } from '../../lib/constants';
 import {
@@ -24,6 +25,7 @@ import {
   Clock,
   Building2,
   FileSpreadsheet,
+  RefreshCw,
 } from 'lucide-react';
 
 export const JABATAN_OPTIONS = [
@@ -102,10 +104,67 @@ export const EmployeesView: React.FC<EmployeesViewProps> = ({ currentUser, selec
   });
 
   const [successMsg, setSuccessMsg] = useState('');
+  const [isSyncingCloud, setIsSyncingCloud] = useState(false);
 
   const showToast = (msg: string) => {
     setSuccessMsg(msg);
     setTimeout(() => setSuccessMsg(''), 3500);
+  };
+
+  // Sinkronisasi Real-Time antar AI Studio & Web Live
+  useEffect(() => {
+    const handleStorageUpdate = (e: any) => {
+      const type = e?.detail?.type;
+      if (!type || type === 'employees' || type === 'all-reset') {
+        setEmployees(StorageService.getEmployees());
+      }
+    };
+    window.addEventListener('cinema-xxi-storage-update', handleStorageUpdate);
+    window.addEventListener('storage', handleStorageUpdate);
+
+    // Tarik & gabungkan data dari Supabase Cloud saat halaman dibuka
+    mergeRemoteEmployeesToLocal().then((updated) => {
+      if (updated) {
+        setEmployees(StorageService.getEmployees());
+      }
+    });
+
+    return () => {
+      window.removeEventListener('cinema-xxi-storage-update', handleStorageUpdate);
+      window.removeEventListener('storage', handleStorageUpdate);
+    };
+  }, []);
+
+  const handleManualCloudSync = async () => {
+    setIsSyncingCloud(true);
+    try {
+      const currentLocal = StorageService.getEmployees();
+      // Tandai semua data lokal saat ini dengan timestamp terbaru agar menjadi acuan di Cloud / Web Live
+      const nowIso = new Date().toISOString();
+      const stamped = currentLocal.map((emp) => ({
+        ...emp,
+        ...({ updatedAt: (emp as any).updatedAt || nowIso } as any),
+      }));
+      localStorage.setItem('cinema_xxi_employees', JSON.stringify(stamped));
+      localStorage.setItem('cinema_xxi_employees_modified', 'true');
+
+      const pushed = await syncEmployeesToSupabase(stamped);
+      await mergeRemoteEmployeesToLocal();
+      const refreshed = StorageService.getEmployees();
+      setEmployees(refreshed);
+
+      if (pushed) {
+        showToast(
+          `Sinkronisasi Cloud Berhasil! ${refreshed.length} Data Karyawan kini seragam di AI Studio & Web Live.`
+        );
+      } else {
+        showToast(`Data Karyawan tersimpan di memori lokal (${refreshed.length} orang).`);
+      }
+    } catch {
+      showToast('Gagal melakukan sinkronisasi ke Cloud Database.');
+    } finally {
+      setIsSyncingCloud(false);
+    }
   };
 
   const isManagerOrCleaner = (currentUser?.role === 'manager' || currentUser?.role === 'cleaner') && currentUser?.outletId;
@@ -418,6 +477,15 @@ export const EmployeesView: React.FC<EmployeesViewProps> = ({ currentUser, selec
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+          <button
+            onClick={handleManualCloudSync}
+            disabled={isSyncingCloud}
+            title="Push & Sinkronkan Data Karyawan antara AI Studio dan Web Live"
+            className="bg-sky-500 hover:bg-sky-400 disabled:opacity-60 text-white px-4 py-3 rounded-xl font-bold text-xs flex items-center space-x-2 shadow-lg transition cursor-pointer"
+          >
+            <RefreshCw className={`w-4 h-4 ${isSyncingCloud ? 'animate-spin' : ''}`} />
+            <span>{isSyncingCloud ? 'Menyinkronkan...' : 'Sinkronkan Cloud (Web Live)'}</span>
+          </button>
           <button
             onClick={handleExportXls}
             className="bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-3 rounded-xl font-bold text-xs flex items-center space-x-2 shadow-lg transition cursor-pointer"

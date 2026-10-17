@@ -81,12 +81,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     }
 
     setIsUploadingSupabase(true);
-    setUploadStatus('Mengunggah data sales, okupansi & inspection lokal ke Supabase...');
+    setUploadStatus('Mengunggah data sales, okupansi, inspection & data karyawan ke Supabase...');
     try {
       const res = await uploadAllLocalToSupabase();
       if (res.success) {
         setUploadStatus(
-          `Berhasil upload! ${res.salesCount} sales, ${res.occupancyCount} okupansi, & ${res.inspectionCount} card inspection tersinkron ke Supabase.`
+          `Berhasil upload! ${res.salesCount} sales, ${res.occupancyCount} okupansi, ${res.inspectionCount} inspection, & ${res.employeeCount || 0} data karyawan tersinkron ke Supabase.`
         );
       } else {
         setUploadStatus(`Upload gagal: ${res.error || 'Periksa tabel di Supabase'}`);

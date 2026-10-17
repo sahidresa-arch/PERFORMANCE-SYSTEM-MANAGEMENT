@@ -1,6 +1,6 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { StorageService } from './storage';
-import { DailySalesRecord, ToiletInspectionRecord } from '../types';
+import { DailySalesRecord, ToiletInspectionRecord, Employee, EmployeeKpiRecord } from '../types';
 
 let supabaseInstance: SupabaseClient | null = null;
 let currentClientKey = '';
@@ -220,12 +220,18 @@ export async function fetchSalesFromSupabase(): Promise<DailySalesRecord[] | nul
       return null;
     }
 
-    return data.map((row: any) => ({
-      id: row.id,
-      outletId: row.outlet_id,
-      date: row.date,
-      shows: Array.isArray(row.shows) ? row.shows : [],
-    }));
+    return data
+      .filter(
+        (row: any) =>
+          !String(row.id || '').startsWith('__SYSTEM_SYNC_') &&
+          !String(row.outlet_id || '').startsWith('__SYSTEM_SYNC_')
+      )
+      .map((row: any) => ({
+        id: row.id,
+        outletId: row.outlet_id,
+        date: row.date,
+        shows: Array.isArray(row.shows) ? row.shows : [],
+      }));
   } catch (e) {
     console.warn('Supabase fetch sales error:', e);
     return null;
@@ -481,6 +487,277 @@ export async function mergeRemoteInspectionsToLocal(): Promise<boolean> {
 }
 
 /**
+ * Sinkronisasi Data Karyawan & Daftar Karyawan Dihapus ke Supabase
+ * Menggunakan reserved row pada tabel cinema_sales agar langsung aktif tanpa perlu buat tabel baru
+ */
+export async function syncEmployeesToSupabase(
+  employees?: Employee[],
+  deletedIds?: string[]
+): Promise<boolean> {
+  const client = getSupabase();
+  if (!client) return false;
+
+  try {
+    const empList = employees || StorageService.getEmployees();
+    const delRaw = localStorage.getItem('cinema_xxi_deleted_employee_ids');
+    const delList: string[] = deletedIds || (delRaw ? JSON.parse(delRaw) : []);
+
+    const payload = [
+      {
+        id: '__SYSTEM_SYNC_EMPLOYEES__',
+        outlet_id: '__SYSTEM_SYNC_EMPLOYEES__',
+        date: '2000-01-01',
+        shows: empList as any,
+        updated_at: new Date().toISOString(),
+      },
+      {
+        id: '__SYSTEM_SYNC_DELETED_EMPLOYEES__',
+        outlet_id: '__SYSTEM_SYNC_DELETED_EMPLOYEES__',
+        date: '2000-01-01',
+        shows: delList as any,
+        updated_at: new Date().toISOString(),
+      },
+    ];
+
+    const { error } = await client.from('cinema_sales').upsert(payload, { onConflict: 'id' });
+    if (error) {
+      console.warn('Sync employees to Supabase warning:', error);
+      return false;
+    }
+    return true;
+  } catch (e) {
+    console.warn('Supabase employees sync error:', e);
+    return false;
+  }
+}
+
+/**
+ * Ambil & Gabungkan Data Karyawan dari Supabase ke Local Storage secara Cerdas
+ */
+export async function mergeRemoteEmployeesToLocal(): Promise<boolean> {
+  const client = getSupabase();
+  if (!client) return false;
+
+  try {
+    const { data, error } = await client
+      .from('cinema_sales')
+      .select('id, shows, updated_at')
+      .in('id', ['__SYSTEM_SYNC_EMPLOYEES__', '__SYSTEM_SYNC_DELETED_EMPLOYEES__']);
+
+    if (error || !data) return false;
+
+    const empRow = data.find((r: any) => r.id === '__SYSTEM_SYNC_EMPLOYEES__');
+    const delRow = data.find((r: any) => r.id === '__SYSTEM_SYNC_DELETED_EMPLOYEES__');
+
+    const localEmployees = StorageService.getEmployees();
+    const localDelRaw = localStorage.getItem('cinema_xxi_deleted_employee_ids');
+    const localDeletedIds: string[] = localDelRaw ? JSON.parse(localDelRaw) : [];
+
+    // Jika di Supabase belum pernah ada data karyawan sama sekali:
+    // Hanya push otomatis jika instance lokal ini memiliki modifikasi (misal dari AI Studio)
+    if (!empRow || !Array.isArray(empRow.shows) || empRow.shows.length === 0) {
+      const hasLocalEdits =
+        localStorage.getItem('cinema_xxi_employees_modified') === 'true' ||
+        localDeletedIds.length > 0 ||
+        localEmployees.some(
+          (e: any) =>
+            (e.tanggalLahir && e.tanggalLahir !== '-') ||
+            Boolean(e.updatedAt) ||
+            String(e.id || '').startsWith('emp_')
+        );
+
+      if (hasLocalEdits) {
+        await syncEmployeesToSupabase(localEmployees, localDeletedIds);
+      }
+      return false;
+    }
+
+    const remoteEmployees: Employee[] = empRow.shows;
+    const remoteDeletedIds: string[] =
+      delRow && Array.isArray(delRow.shows) ? delRow.shows : [];
+
+    // Gabungkan daftar ID/NIK yang dihapus
+    const mergedDeletedSet = new Set<string>([...localDeletedIds, ...remoteDeletedIds]);
+    const mergedDeletedList = Array.from(mergedDeletedSet);
+    if (mergedDeletedList.length !== localDeletedIds.length) {
+      localStorage.setItem('cinema_xxi_deleted_employee_ids', JSON.stringify(mergedDeletedList));
+    }
+
+    let needsPushBack = false;
+    if (localDeletedIds.some((id) => !remoteDeletedIds.includes(id))) {
+      needsPushBack = true;
+    }
+
+    // Buat map dari local employees untuk penggabungan cerdas
+    const localById = new Map<string, Employee>();
+    const localByNik = new Map<string, Employee>();
+    localEmployees.forEach((le) => {
+      if (le && le.id) localById.set(le.id, le);
+      const cleanNik = le?.nik ? le.nik.trim() : '';
+      if (cleanNik && cleanNik !== '-') localByNik.set(cleanNik, le);
+    });
+
+    const mergedList: Employee[] = [];
+    const seenIds = new Set<string>();
+    const seenNiks = new Set<string>();
+
+    // 1. Proses semua employee dari Remote Supabase
+    for (const rem of remoteEmployees) {
+      if (!rem || !rem.id) continue;
+      const cleanNik = rem.nik ? rem.nik.trim() : '';
+      if (mergedDeletedSet.has(rem.id) || (cleanNik && mergedDeletedSet.has(cleanNik))) {
+        continue;
+      }
+
+      const loc = localById.get(rem.id) || (cleanNik ? localByNik.get(cleanNik) : undefined);
+      let chosen: Employee = { ...rem };
+
+      if (loc) {
+        const remTime = (rem as any).updatedAt ? new Date((rem as any).updatedAt).getTime() : 0;
+        const locTime = (loc as any).updatedAt ? new Date((loc as any).updatedAt).getTime() : 0;
+
+        if (locTime > remTime) {
+          // Local lebih baru (misal baru diedit di AI Studio tapi belum sempat ter-push)
+          chosen = { ...rem, ...loc };
+          needsPushBack = true;
+        } else {
+          // Remote lebih baru atau setara, gunakan remote, namun pertahankan tanggalLahir lokal jika di remote masih kosong/'-'
+          const remHasDob = rem.tanggalLahir && rem.tanggalLahir !== '-';
+          const locHasDob = loc.tanggalLahir && loc.tanggalLahir !== '-';
+          if (!remHasDob && locHasDob && remTime === 0) {
+            chosen = { ...rem, tanggalLahir: loc.tanggalLahir };
+            needsPushBack = true;
+          }
+        }
+      }
+
+      if (!seenIds.has(chosen.id) && (!cleanNik || cleanNik === '-' || !seenNiks.has(cleanNik))) {
+        seenIds.add(chosen.id);
+        if (cleanNik && cleanNik !== '-') seenNiks.add(cleanNik);
+        mergedList.push(chosen);
+      }
+    }
+
+    // 2. Cek apakah ada karyawan lokal yang baru ditambahkan / diedit di AI Studio tapi belum ada di Remote
+    for (const loc of localEmployees) {
+      if (!loc || !loc.id) continue;
+      const cleanNik = loc.nik ? loc.nik.trim() : '';
+      if (mergedDeletedSet.has(loc.id) || (cleanNik && mergedDeletedSet.has(cleanNik))) {
+        continue;
+      }
+      const alreadyIncluded =
+        seenIds.has(loc.id) || (cleanNik && cleanNik !== '-' && seenNiks.has(cleanNik));
+      if (!alreadyIncluded) {
+        const isCustomOrEdited =
+          Boolean((loc as any).updatedAt) ||
+          String(loc.id).startsWith('emp_') ||
+          (loc.tanggalLahir && loc.tanggalLahir !== '-');
+        if (isCustomOrEdited) {
+          seenIds.add(loc.id);
+          if (cleanNik && cleanNik !== '-') seenNiks.add(cleanNik);
+          mergedList.unshift(loc);
+          needsPushBack = true;
+        }
+      }
+    }
+
+    const currentRaw = localStorage.getItem('cinema_xxi_employees') || '';
+    const mergedRaw = JSON.stringify(mergedList);
+
+    let updated = false;
+    if (currentRaw !== mergedRaw && mergedList.length > 0) {
+      localStorage.setItem('cinema_xxi_employees', mergedRaw);
+      localStorage.setItem('EMPLOYEES_INITIALIZED_V6', 'true');
+      StorageService.broadcastChange('employees');
+      updated = true;
+    }
+
+    if (needsPushBack && mergedList.length > 0) {
+      await syncEmployeesToSupabase(mergedList, mergedDeletedList);
+    }
+
+    return updated;
+  } catch (e) {
+    console.warn('Merge remote employees error:', e);
+    return false;
+  }
+}
+
+/**
+ * Sinkronisasi Data KPI Karyawan ke Supabase
+ */
+export async function syncEmployeeKpisToSupabase(records?: EmployeeKpiRecord[]): Promise<boolean> {
+  const client = getSupabase();
+  if (!client) return false;
+
+  try {
+    const list = records || StorageService.getEmployeeKpis();
+    const { error } = await client.from('cinema_sales').upsert(
+      {
+        id: '__SYSTEM_SYNC_EMPLOYEE_KPIS__',
+        outlet_id: '__SYSTEM_SYNC_EMPLOYEE_KPIS__',
+        date: '2000-01-01',
+        shows: list as any,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: 'id' }
+    );
+    if (error) {
+      console.warn('Sync employee KPIs to Supabase warning:', error);
+      return false;
+    }
+    return true;
+  } catch (e) {
+    console.warn('Supabase employee KPIs sync error:', e);
+    return false;
+  }
+}
+
+/**
+ * Ambil & Gabungkan Data KPI Karyawan dari Supabase ke Local Storage
+ */
+export async function mergeRemoteEmployeeKpisToLocal(): Promise<boolean> {
+  const client = getSupabase();
+  if (!client) return false;
+
+  try {
+    const { data, error } = await client
+      .from('cinema_sales')
+      .select('id, shows')
+      .eq('id', '__SYSTEM_SYNC_EMPLOYEE_KPIS__')
+      .maybeSingle();
+
+    if (error || !data || !Array.isArray(data.shows)) return false;
+
+    const remoteKpis: EmployeeKpiRecord[] = data.shows;
+    if (remoteKpis.length === 0) return false;
+
+    const localKpis = StorageService.getEmployeeKpis();
+    const kpiMap = new Map<string, EmployeeKpiRecord>();
+    localKpis.forEach((k) => {
+      if (k && k.id) kpiMap.set(k.id, k);
+    });
+    remoteKpis.forEach((rk) => {
+      if (rk && rk.id) kpiMap.set(rk.id, rk);
+    });
+
+    const merged = Array.from(kpiMap.values());
+    const currentRaw = localStorage.getItem('cinema_xxi_employee_kpis') || '[]';
+    const mergedRaw = JSON.stringify(merged);
+
+    if (currentRaw !== mergedRaw) {
+      localStorage.setItem('cinema_xxi_employee_kpis', mergedRaw);
+      StorageService.broadcastChange('employee-kpis');
+      return true;
+    }
+    return false;
+  } catch (e) {
+    console.warn('Merge remote employee KPIs error:', e);
+    return false;
+  }
+}
+
+/**
  * Setup Realtime channel listener and periodic sync for Supabase database changes
  */
 export function setupSupabaseRealtimeSync(): () => void {
@@ -493,6 +770,8 @@ export function setupSupabaseRealtimeSync(): () => void {
   mergeRemoteSalesToLocal();
   mergeRemoteOccupancyToLocal();
   mergeRemoteInspectionsToLocal();
+  mergeRemoteEmployeesToLocal();
+  mergeRemoteEmployeeKpisToLocal();
   mergeRemoteConfigToLocal();
 
   // Setup Supabase Realtime channel subscription
@@ -503,24 +782,45 @@ export function setupSupabaseRealtimeSync(): () => void {
         'postgres_changes',
         { event: '*', schema: 'public', table: 'cinema_sales' },
         (payload: any) => {
-          if (payload.new && payload.new.outlet_id && payload.new.date) {
-            const remoteRecord: DailySalesRecord = {
-              id: payload.new.id,
-              outletId: payload.new.outlet_id,
-              date: payload.new.date,
-              shows: Array.isArray(payload.new.shows) ? payload.new.shows : [],
-            };
-            const currentLocal = StorageService.getDailySales();
-            const idx = currentLocal.findIndex(
-              (s) => s.outletId === remoteRecord.outletId && s.date === remoteRecord.date
-            );
-            if (idx >= 0) {
-              currentLocal[idx] = remoteRecord;
-            } else {
-              currentLocal.push(remoteRecord);
+          if (payload.new && payload.new.id) {
+            const rowId = String(payload.new.id);
+            const rowOutlet = String(payload.new.outlet_id || '');
+
+            // Tangani sinkronisasi real-time untuk Data Karyawan & KPI Karyawan
+            if (
+              rowId === '__SYSTEM_SYNC_EMPLOYEES__' ||
+              rowId === '__SYSTEM_SYNC_DELETED_EMPLOYEES__'
+            ) {
+              mergeRemoteEmployeesToLocal();
+              return;
             }
-            localStorage.setItem('cinema_xxi_daily_sales', JSON.stringify(currentLocal));
-            StorageService.broadcastChange('sales');
+            if (rowId === '__SYSTEM_SYNC_EMPLOYEE_KPIS__') {
+              mergeRemoteEmployeeKpisToLocal();
+              return;
+            }
+            if (rowId.startsWith('__SYSTEM_SYNC_') || rowOutlet.startsWith('__SYSTEM_SYNC_')) {
+              return;
+            }
+
+            if (payload.new.outlet_id && payload.new.date) {
+              const remoteRecord: DailySalesRecord = {
+                id: payload.new.id,
+                outletId: payload.new.outlet_id,
+                date: payload.new.date,
+                shows: Array.isArray(payload.new.shows) ? payload.new.shows : [],
+              };
+              const currentLocal = StorageService.getDailySales();
+              const idx = currentLocal.findIndex(
+                (s) => s.outletId === remoteRecord.outletId && s.date === remoteRecord.date
+              );
+              if (idx >= 0) {
+                currentLocal[idx] = remoteRecord;
+              } else {
+                currentLocal.push(remoteRecord);
+              }
+              localStorage.setItem('cinema_xxi_daily_sales', JSON.stringify(currentLocal));
+              StorageService.broadcastChange('sales');
+            }
           }
         }
       )
@@ -589,6 +889,8 @@ export function setupSupabaseRealtimeSync(): () => void {
       mergeRemoteSalesToLocal();
       mergeRemoteOccupancyToLocal();
       mergeRemoteInspectionsToLocal();
+      mergeRemoteEmployeesToLocal();
+      mergeRemoteEmployeeKpisToLocal();
     }, 5000);
 
     return () => {
@@ -605,6 +907,8 @@ export function setupSupabaseRealtimeSync(): () => void {
       mergeRemoteSalesToLocal();
       mergeRemoteOccupancyToLocal();
       mergeRemoteInspectionsToLocal();
+      mergeRemoteEmployeesToLocal();
+      mergeRemoteEmployeeKpisToLocal();
     }, 5000);
     return () => clearInterval(intervalId);
   }
@@ -618,6 +922,7 @@ export async function uploadAllLocalToSupabase(): Promise<{
   salesCount: number;
   occupancyCount: number;
   inspectionCount: number;
+  employeeCount?: number;
   error?: string;
 }> {
   const client = getSupabase();
@@ -672,11 +977,24 @@ export async function uploadAllLocalToSupabase(): Promise<{
       }
     }
 
+    // Ambil dan upload Data Karyawan & KPI Karyawan
+    const employees = StorageService.getEmployees();
+    let employeeCount = 0;
+    if (employees.length > 0) {
+      const okEmp = await syncEmployeesToSupabase(employees);
+      if (okEmp) employeeCount = employees.length;
+    }
+    const employeeKpis = StorageService.getEmployeeKpis();
+    if (employeeKpis.length > 0) {
+      await syncEmployeeKpisToSupabase(employeeKpis);
+    }
+
     return {
       success: true,
       salesCount,
       occupancyCount,
       inspectionCount,
+      employeeCount,
     };
   } catch (err: any) {
     return {
