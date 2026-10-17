@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { motion } from 'motion/react';
 import { User } from '../../types';
 import {
   LayoutDashboard,
@@ -45,17 +46,27 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const isCleaner = currentUser?.role === 'cleaner';
   const isAdmin = currentUser?.role === 'admin';
 
-  const getInitialOpenMenu = () => {
+  const getGroupForMenu = (menu: string): string | null => {
     if (isCleaner) return 'inspection';
-    if (activeMenu.startsWith('sales_')) return 'sales';
-    if (activeMenu.startsWith('occupancy_')) return 'occupancy';
-    if (activeMenu.startsWith('inspection_')) return 'inspection';
-    if (activeMenu.startsWith('accounting_')) return 'accounting';
-    if (activeMenu.startsWith('hc_')) return 'hc';
-    return 'sales';
+    if (menu.startsWith('sales_')) return 'sales';
+    if (menu.startsWith('occupancy_')) return 'occupancy';
+    if (menu.startsWith('inspection_')) return 'inspection';
+    if (menu.startsWith('accounting_')) return 'accounting';
+    if (menu.startsWith('hc_')) return 'hc';
+    return null;
   };
 
-  const [openGroup, setOpenGroup] = useState<string | null>(getInitialOpenMenu);
+  const [openGroup, setOpenGroup] = useState<string | null>(() => {
+    return getGroupForMenu(activeMenu) ?? 'sales';
+  });
+
+  // Automatically open parent accordion smoothly when activeMenu changes externally
+  useEffect(() => {
+    const targetGroup = getGroupForMenu(activeMenu);
+    if (targetGroup) {
+      setOpenGroup(targetGroup);
+    }
+  }, [activeMenu, isCleaner]);
 
   const toggleGroup = (groupName: string) => {
     setOpenGroup((prev) => (prev === groupName ? null : groupName));
@@ -83,9 +94,175 @@ export const Sidebar: React.FC<SidebarProps> = ({
     }
   }
 
+  const renderSubMenuItem = (
+    menuKey: string,
+    label: string,
+    IconComponent: React.ElementType,
+    index = 0
+  ) => {
+    const isActive = activeMenu === menuKey;
+    return (
+      <motion.button
+        key={menuKey}
+        whileHover={{ x: 4 }}
+        whileTap={{ scale: 0.95 }}
+        onClick={() => setActiveMenu(menuKey)}
+        transition={{ type: 'spring', stiffness: 400, damping: 25, delay: index * 0.02 }}
+        className={`group relative w-full h-[38px] flex items-center justify-between px-3 rounded-xl text-left cursor-pointer text-[12px] transition-colors duration-200 ${
+          isActive
+            ? 'text-[#4A1D6A] font-extrabold'
+            : 'text-[#4B5563] hover:text-[#581c87] hover:bg-[#F3E8FF]/50'
+        }`}
+      >
+        {isActive && (
+          <motion.div
+            layoutId="sidebar-sub-active-bg"
+            className="absolute inset-0 bg-gradient-to-r from-[#F3E8FF] via-[#FAF5FF] to-amber-50/80 border-l-[3.5px] border-[#7C3AED] rounded-xl shadow-sm ring-1 ring-purple-200/80"
+            transition={{ type: 'spring', stiffness: 320, damping: 26, mass: 0.9 }}
+          />
+        )}
+        <div className="relative z-10 flex items-center space-x-2.5 min-w-0 overflow-hidden">
+          <IconComponent
+            className={`w-3.5 h-3.5 shrink-0 transition-all duration-300 ${
+              isActive
+                ? 'text-[#7C3AED] scale-115 drop-shadow-2xs'
+                : 'text-[#6B7280] group-hover:text-[#7C3AED] group-hover:scale-110'
+            }`}
+          />
+          <span className="truncate">{label}</span>
+        </div>
+
+        {isActive && (
+          <motion.span
+            initial={{ scale: 0, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            transition={{ type: 'spring', stiffness: 500, damping: 20 }}
+            className="relative z-10 w-2 h-2 rounded-full bg-amber-400 ring-2 ring-purple-600/30 shrink-0 ml-1"
+          />
+        )}
+      </motion.button>
+    );
+  };
+
+  const renderStandaloneMainButton = (
+    menuKey: string,
+    title: string,
+    IconComponent: React.ElementType
+  ) => {
+    const isActive = activeMenu === menuKey;
+    return (
+      <motion.button
+        whileHover={{ x: collapsed ? 0 : 3 }}
+        whileTap={{ scale: 0.96 }}
+        onClick={() => setActiveMenu(menuKey)}
+        title={title}
+        className={`group relative w-full h-[44px] px-3.5 flex items-center rounded-xl transition-colors duration-200 cursor-pointer text-left overflow-hidden ${
+          collapsed ? 'justify-center px-0' : 'space-x-3'
+        } ${
+          isActive
+            ? 'text-white font-bold'
+            : 'text-[#374151] hover:bg-[#F3E8FF]/60 hover:text-[#4A1D6A]'
+        }`}
+      >
+        {isActive && (
+          <motion.div
+            layoutId="sidebar-main-active-pill"
+            className="absolute inset-0 bg-gradient-to-r from-[#3D1A5E] via-[#581c87] to-[#4c1d95] border-l-[4px] border-[#FACC15] rounded-xl shadow-md"
+            transition={{ type: 'spring', stiffness: 300, damping: 26, mass: 0.95 }}
+          />
+        )}
+        <IconComponent
+          className={`relative z-10 w-4 h-4 shrink-0 transition-transform duration-300 ${
+            isActive ? 'text-[#FACC15] scale-115' : 'group-hover:scale-110'
+          }`}
+        />
+        {!collapsed && <span className="relative z-10 truncate">{title}</span>}
+      </motion.button>
+    );
+  };
+
+  const renderAccordionSection = (
+    groupKey: string,
+    title: string,
+    IconComponent: React.ElementType,
+    isGroupActive: boolean,
+    children: React.ReactNode
+  ) => {
+    const isOpen = openGroup === groupKey && !collapsed;
+
+    return (
+      <div className="overflow-hidden">
+        <motion.button
+          whileHover={{ x: collapsed ? 0 : 3 }}
+          whileTap={{ scale: 0.96 }}
+          onClick={() => {
+            if (collapsed) {
+              onToggleCollapse();
+              setOpenGroup(groupKey);
+            } else {
+              toggleGroup(groupKey);
+            }
+          }}
+          title={title}
+          className={`group relative w-full h-[44px] px-3.5 flex items-center justify-between rounded-xl transition-colors duration-200 cursor-pointer text-left overflow-hidden ${
+            collapsed ? 'justify-center px-0' : ''
+          } ${
+            isGroupActive
+              ? 'text-white font-bold'
+              : isOpen
+              ? 'bg-[#F3E8FF]/85 text-[#4A1D6A] font-bold'
+              : 'text-[#374151] hover:bg-[#F3E8FF]/60 hover:text-[#4A1D6A]'
+          }`}
+        >
+          {isGroupActive && (
+            <motion.div
+              layoutId="sidebar-main-active-pill"
+              className="absolute inset-0 bg-gradient-to-r from-[#3D1A5E] via-[#581c87] to-[#4c1d95] border-l-[4px] border-[#FACC15] rounded-xl shadow-md"
+              transition={{ type: 'spring', stiffness: 300, damping: 26, mass: 0.95 }}
+            />
+          )}
+          <div className={`relative z-10 flex items-center ${collapsed ? '' : 'space-x-3'} overflow-hidden`}>
+            <IconComponent
+              className={`w-4 h-4 shrink-0 transition-transform duration-300 ${
+                isGroupActive
+                  ? 'text-[#FACC15] scale-115'
+                  : 'group-hover:scale-110'
+              }`}
+            />
+            {!collapsed && <span className="truncate">{title}</span>}
+          </div>
+          {!collapsed && (
+            <ChevronDown
+              className={`relative z-10 w-4 h-4 shrink-0 transition-transform duration-400 ease-[cubic-bezier(0.16,1,0.3,1)] ${
+                isOpen ? 'rotate-180' : 'rotate-0'
+              } ${isGroupActive ? 'text-[#FACC15]' : ''}`}
+            />
+          )}
+        </motion.button>
+
+        {/* Dramatic CSS Grid 0fr -> 1fr + Slide/Scale Accordion Container */}
+        {!collapsed && (
+          <div
+            className={`grid transition-[grid-template-rows,opacity,transform] duration-400 ease-[cubic-bezier(0.16,1,0.3,1)] ${
+              isOpen
+                ? 'grid-rows-[1fr] opacity-100 translate-y-0'
+                : 'grid-rows-[0fr] opacity-0 -translate-y-2 pointer-events-none'
+            }`}
+          >
+            <div className="overflow-hidden">
+              <div className="pl-5 pr-1 py-1.5 space-y-1 border-l-2 border-purple-200 ml-4 mt-1">
+                {children}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
   return (
     <aside
-      className={`fixed left-0 top-0 h-screen z-40 bg-[#F8F9FC] text-[#374151] border-r border-[#E5E7EB] flex flex-col overflow-y-auto overflow-x-hidden select-none transition-all duration-300 ease-in-out ${
+      className={`fixed left-0 top-0 h-screen z-40 bg-[#F8F9FC] text-[#374151] border-r border-[#E5E7EB] flex flex-col overflow-y-auto overflow-x-hidden select-none transition-[width] duration-400 ease-[cubic-bezier(0.16,1,0.3,1)] ${
         collapsed ? 'w-[72px]' : 'w-[260px]'
       }`}
     >
@@ -110,7 +287,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               onClick={onToggleCollapse}
               type="button"
               title="Collapse Sidebar"
-              className="p-1 rounded-md text-purple-200 hover:text-white hover:bg-purple-800/60 transition cursor-pointer shrink-0 ml-1"
+              className="p-1.5 rounded-lg text-purple-200 hover:text-white hover:bg-purple-800/60 active:scale-90 transition-all duration-200 cursor-pointer shrink-0 ml-1"
             >
               <ChevronLeft className="w-4 h-4" />
             </button>
@@ -121,7 +298,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               onClick={onToggleCollapse}
               type="button"
               title="Expand Sidebar"
-              className="p-1.5 rounded-md text-purple-200 hover:text-white hover:bg-purple-800/60 transition cursor-pointer"
+              className="p-1.5 rounded-lg text-purple-200 hover:text-white hover:bg-purple-800/60 active:scale-90 transition-all duration-200 cursor-pointer"
             >
               <ChevronRight className="w-4 h-4" />
             </button>
@@ -158,10 +335,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
       )}
 
       {/* Navigation Links */}
-      <nav className="p-2 space-y-1 text-[12px] font-medium flex-1 overflow-x-hidden">
+      <nav className="p-2.5 space-y-1.5 text-[12px] font-medium flex-1 overflow-x-hidden">
         {/* If Cleaner: ONLY SHOW INSPECTION */}
         {isCleaner ? (
-          <div className="space-y-1">
+          <div className="space-y-1.5">
             {!collapsed && (
               <span className="px-3 text-[10px] font-bold text-amber-800 uppercase tracking-wider block mb-1">
                 Akses Cleaner Toilet
@@ -169,476 +346,85 @@ export const Sidebar: React.FC<SidebarProps> = ({
             )}
             <button
               onClick={() => setActiveMenu('inspection_form')}
-              className={`w-full h-[40px] flex items-center ${
+              className={`group w-full h-[40px] flex items-center ${
                 collapsed ? 'justify-center px-0' : 'space-x-3 px-3.5'
-              } rounded-lg transition-colors cursor-pointer text-left ${
+              } rounded-xl transition-all duration-200 ease-out active:scale-95 cursor-pointer text-left ${
                 activeMenu === 'inspection_form'
-                  ? 'bg-amber-600 text-white font-bold'
+                  ? 'bg-amber-600 text-white font-bold shadow-xs'
                   : 'text-slate-700 hover:bg-amber-50 hover:text-amber-900'
               }`}
             >
-              <CheckSquare className="w-4 h-4 shrink-0" />
+              <CheckSquare className="w-4 h-4 shrink-0 transition-transform duration-200 group-hover:scale-110" />
               {!collapsed && <span className="truncate font-semibold">Form Inspeksi Toilet</span>}
             </button>
 
             <button
               onClick={() => setActiveMenu('inspection_dashboard')}
-              className={`w-full h-[40px] flex items-center ${
+              className={`group w-full h-[40px] flex items-center ${
                 collapsed ? 'justify-center px-0' : 'space-x-3 px-3.5'
-              } rounded-lg transition-colors cursor-pointer text-left ${
+              } rounded-xl transition-all duration-200 ease-out active:scale-95 cursor-pointer text-left ${
                 activeMenu === 'inspection_dashboard'
-                  ? 'bg-amber-600 text-white font-bold'
+                  ? 'bg-amber-600 text-white font-bold shadow-xs'
                   : 'text-slate-700 hover:bg-amber-50 hover:text-amber-900'
               }`}
             >
-              <ClipboardCheck className="w-4 h-4 shrink-0" />
+              <ClipboardCheck className="w-4 h-4 shrink-0 transition-transform duration-200 group-hover:scale-110" />
               {!collapsed && <span className="truncate font-semibold">Dashboard Higienitas</span>}
             </button>
           </div>
         ) : (
           <>
             {/* Dashboard Utama */}
-            <button
-              onClick={() => setActiveMenu('dashboard')}
-              title="Dashboard"
-              className={`w-full h-[42px] px-3.5 flex items-center rounded-lg transition-colors cursor-pointer text-left ${
-                collapsed ? 'justify-center px-0' : 'space-x-3'
-              } ${
-                activeMenu === 'dashboard'
-                  ? 'bg-[#3D1A5E] text-white border-l-[3px] border-[#FACC15] font-semibold'
-                  : 'text-[#374151] hover:bg-[#F3E8FF]/60 hover:text-[#4A1D6A]'
-              }`}
-            >
-              <LayoutDashboard className="w-4 h-4 shrink-0" />
-              {!collapsed && <span className="truncate">Dashboard</span>}
-            </button>
+            {renderStandaloneMainButton('dashboard', 'Dashboard', LayoutDashboard)}
 
             {/* 1. SALES SYSTEM ACCORDION */}
-            <div className="overflow-hidden">
-              <button
-                onClick={() => {
-                  if (collapsed) {
-                    onToggleCollapse();
-                    setOpenGroup('sales');
-                  } else {
-                    toggleGroup('sales');
-                  }
-                }}
-                title="Sales System"
-                className={`w-full h-[42px] px-3.5 flex items-center justify-between rounded-lg transition-colors cursor-pointer text-left ${
-                  collapsed ? 'justify-center px-0' : ''
-                } ${
-                  isSalesActive
-                    ? 'bg-[#3D1A5E] text-white border-l-[3px] border-[#FACC15] font-semibold'
-                    : 'text-[#374151] hover:bg-[#F3E8FF]/60 hover:text-[#4A1D6A]'
-                }`}
-              >
-                <div className={`flex items-center ${collapsed ? '' : 'space-x-3'} overflow-hidden`}>
-                  <DollarSign className="w-4 h-4 shrink-0" />
-                  {!collapsed && <span className="truncate">Sales System</span>}
-                </div>
-                {!collapsed && (
-                  <ChevronDown
-                    className={`w-3.5 h-3.5 shrink-0 transition-transform duration-200 ${
-                      openGroup === 'sales' ? 'rotate-180' : 'rotate-0'
-                    }`}
-                  />
-                )}
-              </button>
-
-              {!collapsed && (
-                <div
-                  className="overflow-hidden transition-all duration-300 ease-in-out"
-                  style={{
-                    maxHeight: openGroup === 'sales' ? '400px' : '0px',
-                    opacity: openGroup === 'sales' ? 1 : 0,
-                  }}
-                >
-                  <div className="pl-6 pr-1 py-1 space-y-0.5 border-l-2 border-[#E5E7EB] ml-4 mt-0.5">
-                    <button
-                      onClick={() => setActiveMenu('sales_performance')}
-                      className={`w-full h-[36px] flex items-center space-x-2.5 px-3 rounded-lg text-left transition-colors cursor-pointer text-[12px] ${
-                        activeMenu === 'sales_performance'
-                          ? 'bg-[#F3E8FF] text-[#6D28D9] border-l-[2px] border-[#7C3AED] font-semibold'
-                          : 'text-[#374151] hover:bg-[#F3E8FF]/50 hover:text-[#6D28D9]'
-                      }`}
-                    >
-                      <BarChart3 className="w-3.5 h-3.5 shrink-0" />
-                      <span className="truncate">Performance Dashboard</span>
-                    </button>
-
-                    <button
-                      onClick={() => setActiveMenu('sales_input')}
-                      className={`w-full h-[36px] flex items-center space-x-2.5 px-3 rounded-lg text-left transition-colors cursor-pointer text-[12px] ${
-                        activeMenu === 'sales_input'
-                          ? 'bg-[#F3E8FF] text-[#6D28D9] border-l-[2px] border-[#7C3AED] font-semibold'
-                          : 'text-[#374151] hover:bg-[#F3E8FF]/50 hover:text-[#6D28D9]'
-                      }`}
-                    >
-                      <CalendarDays className="w-3.5 h-3.5 shrink-0" />
-                      <span className="truncate">Input Data Sales</span>
-                    </button>
-
-                    <button
-                      onClick={() => setActiveMenu('sales_rekap_daily')}
-                      className={`w-full h-[36px] flex items-center space-x-2.5 px-3 rounded-lg text-left transition-colors cursor-pointer text-[12px] ${
-                        activeMenu === 'sales_rekap_daily'
-                          ? 'bg-[#F3E8FF] text-[#6D28D9] border-l-[2px] border-[#7C3AED] font-semibold'
-                          : 'text-[#374151] hover:bg-[#F3E8FF]/50 hover:text-[#6D28D9]'
-                      }`}
-                    >
-                      <FileSpreadsheet className="w-3.5 h-3.5 shrink-0" />
-                      <span className="truncate">Tabel Rekap Daily</span>
-                    </button>
-
-                    <button
-                      onClick={() => setActiveMenu('sales_baking')}
-                      className={`w-full h-[36px] flex items-center space-x-2.5 px-3 rounded-lg text-left transition-colors cursor-pointer text-[12px] ${
-                        activeMenu === 'sales_baking'
-                          ? 'bg-[#F3E8FF] text-[#6D28D9] border-l-[2px] border-[#7C3AED] font-semibold'
-                          : 'text-[#374151] hover:bg-[#F3E8FF]/50 hover:text-[#6D28D9]'
-                      }`}
-                    >
-                      <UtensilsCrossed className="w-3.5 h-3.5 shrink-0" />
-                      <span className="truncate">Penjualan Baking</span>
-                    </button>
-
-                    <button
-                      onClick={() => setActiveMenu('sales_kpi_summary')}
-                      className={`w-full h-[36px] flex items-center space-x-2.5 px-3 rounded-lg text-left transition-colors cursor-pointer text-[12px] ${
-                        activeMenu === 'sales_kpi_summary'
-                          ? 'bg-[#F3E8FF] text-[#6D28D9] border-l-[2px] border-[#7C3AED] font-semibold'
-                          : 'text-[#374151] hover:bg-[#F3E8FF]/50 hover:text-[#6D28D9]'
-                      }`}
-                    >
-                      <Target className="w-3.5 h-3.5 shrink-0" />
-                      <span className="truncate">KPI Summary</span>
-                    </button>
-
-                    <button
-                      onClick={() => setActiveMenu('sales_google_slide')}
-                      className={`w-full h-[36px] flex items-center space-x-2.5 px-3 rounded-lg text-left transition-colors cursor-pointer text-[12px] ${
-                        activeMenu === 'sales_google_slide'
-                          ? 'bg-[#F3E8FF] text-[#6D28D9] border-l-[2px] border-[#7C3AED] font-semibold'
-                          : 'text-[#374151] hover:bg-[#F3E8FF]/50 hover:text-[#6D28D9]'
-                      }`}
-                    >
-                      <Presentation className="w-3.5 h-3.5 shrink-0" />
-                      <span className="truncate">Google Slide KPI</span>
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
+            {renderAccordionSection('sales', 'Sales System', DollarSign, isSalesActive, (
+              <>
+                {renderSubMenuItem('sales_performance', 'Performance Dashboard', BarChart3, 0)}
+                {renderSubMenuItem('sales_input', 'Input Data Sales', CalendarDays, 1)}
+                {renderSubMenuItem('sales_rekap_daily', 'Tabel Rekap Daily', FileSpreadsheet, 2)}
+                {renderSubMenuItem('sales_baking', 'Penjualan Baking', UtensilsCrossed, 3)}
+                {renderSubMenuItem('sales_kpi_summary', 'KPI Summary', Target, 4)}
+                {renderSubMenuItem('sales_google_slide', 'Google Slide KPI', Presentation, 5)}
+              </>
+            ))}
 
             {/* 2. OKUPANSI RATE ACCORDION */}
-            <div className="overflow-hidden">
-              <button
-                onClick={() => {
-                  if (collapsed) {
-                    onToggleCollapse();
-                    setOpenGroup('occupancy');
-                  } else {
-                    toggleGroup('occupancy');
-                  }
-                }}
-                title="Okupansi Rate"
-                className={`w-full h-[42px] px-3.5 flex items-center justify-between rounded-lg transition-colors cursor-pointer text-left ${
-                  collapsed ? 'justify-center px-0' : ''
-                } ${
-                  isOccupancyActive
-                    ? 'bg-[#3D1A5E] text-white border-l-[3px] border-[#FACC15] font-semibold'
-                    : 'text-[#374151] hover:bg-[#F3E8FF]/60 hover:text-[#4A1D6A]'
-                }`}
-              >
-                <div className={`flex items-center ${collapsed ? '' : 'space-x-3'} overflow-hidden`}>
-                  <Film className="w-4 h-4 shrink-0" />
-                  {!collapsed && <span className="truncate">Okupansi Rate</span>}
-                </div>
-                {!collapsed && (
-                  <ChevronDown
-                    className={`w-3.5 h-3.5 shrink-0 transition-transform duration-200 ${
-                      openGroup === 'occupancy' ? 'rotate-180' : 'rotate-0'
-                    }`}
-                  />
-                )}
-              </button>
-
-              {!collapsed && (
-                <div
-                  className="overflow-hidden transition-all duration-300 ease-in-out"
-                  style={{
-                    maxHeight: openGroup === 'occupancy' ? '250px' : '0px',
-                    opacity: openGroup === 'occupancy' ? 1 : 0,
-                  }}
-                >
-                  <div className="pl-6 pr-1 py-1 space-y-0.5 border-l-2 border-[#E5E7EB] ml-4 mt-0.5">
-                    <button
-                      onClick={() => setActiveMenu('occupancy_rekap')}
-                      className={`w-full h-[36px] flex items-center space-x-2.5 px-3 rounded-lg text-left transition-colors cursor-pointer text-[12px] ${
-                        activeMenu === 'occupancy_rekap'
-                          ? 'bg-[#F3E8FF] text-[#6D28D9] border-l-[2px] border-[#7C3AED] font-semibold'
-                          : 'text-[#374151] hover:bg-[#F3E8FF]/50 hover:text-[#6D28D9]'
-                      }`}
-                    >
-                      <FileSpreadsheet className="w-3.5 h-3.5 shrink-0" />
-                      <span className="truncate">Rekap Okupansi Outlet</span>
-                    </button>
-
-                    <button
-                      onClick={() => setActiveMenu('occupancy_market_intel')}
-                      className={`w-full h-[36px] flex items-center space-x-2.5 px-3 rounded-lg text-left transition-colors cursor-pointer text-[12px] ${
-                        activeMenu === 'occupancy_market_intel'
-                          ? 'bg-[#F3E8FF] text-[#6D28D9] border-l-[2px] border-[#7C3AED] font-semibold'
-                          : 'text-[#374151] hover:bg-[#F3E8FF]/50 hover:text-[#6D28D9]'
-                      }`}
-                    >
-                      <Compass className="w-3.5 h-3.5 shrink-0" />
-                      <span className="truncate">Market Intelligence</span>
-                    </button>
-
-                    <button
-                      onClick={() => setActiveMenu('occupancy_movie_history')}
-                      className={`w-full h-[36px] flex items-center space-x-2.5 px-3 rounded-lg text-left transition-colors cursor-pointer text-[12px] ${
-                        activeMenu === 'occupancy_movie_history'
-                          ? 'bg-[#F3E8FF] text-[#6D28D9] border-l-[2px] border-[#7C3AED] font-semibold'
-                          : 'text-[#374151] hover:bg-[#F3E8FF]/50 hover:text-[#6D28D9]'
-                      }`}
-                    >
-                      <History className="w-3.5 h-3.5 shrink-0" />
-                      <span className="truncate">History Rekap Film</span>
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
+            {renderAccordionSection('occupancy', 'Okupansi Rate', Film, isOccupancyActive, (
+              <>
+                {renderSubMenuItem('occupancy_rekap', 'Rekap Okupansi Outlet', FileSpreadsheet, 0)}
+                {renderSubMenuItem('occupancy_market_intel', 'Market Intelligence', Compass, 1)}
+                {renderSubMenuItem('occupancy_movie_history', 'History Rekap Film', History, 2)}
+              </>
+            ))}
 
             {/* 3. CARD INSPECTION ACCORDION */}
-            <div className="overflow-hidden">
-              <button
-                onClick={() => {
-                  if (collapsed) {
-                    onToggleCollapse();
-                    setOpenGroup('inspection');
-                  } else {
-                    toggleGroup('inspection');
-                  }
-                }}
-                title="Card Inspection"
-                className={`w-full h-[42px] px-3.5 flex items-center justify-between rounded-lg transition-colors cursor-pointer text-left ${
-                  collapsed ? 'justify-center px-0' : ''
-                } ${
-                  isInspectionActive
-                    ? 'bg-[#3D1A5E] text-white border-l-[3px] border-[#FACC15] font-semibold'
-                    : 'text-[#374151] hover:bg-[#F3E8FF]/60 hover:text-[#4A1D6A]'
-                }`}
-              >
-                <div className={`flex items-center ${collapsed ? '' : 'space-x-3'} overflow-hidden`}>
-                  <ClipboardCheck className="w-4 h-4 shrink-0" />
-                  {!collapsed && <span className="truncate">Card Inspection</span>}
-                </div>
-                {!collapsed && (
-                  <ChevronDown
-                    className={`w-3.5 h-3.5 shrink-0 transition-transform duration-200 ${
-                      openGroup === 'inspection' ? 'rotate-180' : 'rotate-0'
-                    }`}
-                  />
-                )}
-              </button>
-
-              {!collapsed && (
-                <div
-                  className="overflow-hidden transition-all duration-300 ease-in-out"
-                  style={{
-                    maxHeight: openGroup === 'inspection' ? '200px' : '0px',
-                    opacity: openGroup === 'inspection' ? 1 : 0,
-                  }}
-                >
-                  <div className="pl-6 pr-1 py-1 space-y-0.5 border-l-2 border-[#E5E7EB] ml-4 mt-0.5">
-                    <button
-                      onClick={() => setActiveMenu('inspection_dashboard')}
-                      className={`w-full h-[36px] flex items-center space-x-2.5 px-3 rounded-lg text-left transition-colors cursor-pointer text-[12px] ${
-                        activeMenu === 'inspection_dashboard'
-                          ? 'bg-[#F3E8FF] text-[#6D28D9] border-l-[2px] border-[#7C3AED] font-semibold'
-                          : 'text-[#374151] hover:bg-[#F3E8FF]/50 hover:text-[#6D28D9]'
-                      }`}
-                    >
-                      <LayoutDashboard className="w-3.5 h-3.5 shrink-0" />
-                      <span className="truncate">Dashboard Higienitas</span>
-                    </button>
-
-                    <button
-                      onClick={() => setActiveMenu('inspection_form')}
-                      className={`w-full h-[36px] flex items-center space-x-2.5 px-3 rounded-lg text-left transition-colors cursor-pointer text-[12px] ${
-                        activeMenu === 'inspection_form'
-                          ? 'bg-[#F3E8FF] text-[#6D28D9] border-l-[2px] border-[#7C3AED] font-semibold'
-                          : 'text-[#374151] hover:bg-[#F3E8FF]/50 hover:text-[#6D28D9]'
-                      }`}
-                    >
-                      <CheckSquare className="w-3.5 h-3.5 shrink-0" />
-                      <span className="truncate">Form Inspeksi Toilet</span>
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
+            {renderAccordionSection('inspection', 'Card Inspection', ClipboardCheck, isInspectionActive, (
+              <>
+                {renderSubMenuItem('inspection_dashboard', 'Dashboard Higienitas', LayoutDashboard, 0)}
+                {renderSubMenuItem('inspection_form', 'Form Inspeksi Toilet', CheckSquare, 1)}
+              </>
+            ))}
 
             {/* 4. ACCOUNTING ACCORDION */}
-            <div className="overflow-hidden">
-              <button
-                onClick={() => {
-                  if (collapsed) {
-                    onToggleCollapse();
-                    setOpenGroup('accounting');
-                  } else {
-                    toggleGroup('accounting');
-                  }
-                }}
-                title="Accounting"
-                className={`w-full h-[42px] px-3.5 flex items-center justify-between rounded-lg transition-colors cursor-pointer text-left ${
-                  collapsed ? 'justify-center px-0' : ''
-                } ${
-                  isAccountingActive
-                    ? 'bg-[#3D1A5E] text-white border-l-[3px] border-[#FACC15] font-semibold'
-                    : 'text-[#374151] hover:bg-[#F3E8FF]/60 hover:text-[#4A1D6A]'
-                }`}
-              >
-                <div className={`flex items-center ${collapsed ? '' : 'space-x-3'} overflow-hidden`}>
-                  <Calculator className="w-4 h-4 shrink-0" />
-                  {!collapsed && <span className="truncate">Accounting</span>}
-                </div>
-                {!collapsed && (
-                  <ChevronDown
-                    className={`w-3.5 h-3.5 shrink-0 transition-transform duration-200 ${
-                      openGroup === 'accounting' ? 'rotate-180' : 'rotate-0'
-                    }`}
-                  />
-                )}
-              </button>
-
-              {!collapsed && (
-                <div
-                  className="overflow-hidden transition-all duration-300 ease-in-out"
-                  style={{
-                    maxHeight: openGroup === 'accounting' ? '200px' : '0px',
-                    opacity: openGroup === 'accounting' ? 1 : 0,
-                  }}
-                >
-                  <div className="pl-6 pr-1 py-1 space-y-0.5 border-l-2 border-[#E5E7EB] ml-4 mt-0.5">
-                    <button
-                      onClick={() => setActiveMenu('accounting_bopo')}
-                      className={`w-full h-[36px] flex items-center space-x-2.5 px-3 rounded-lg text-left transition-colors cursor-pointer text-[12px] ${
-                        activeMenu === 'accounting_bopo'
-                          ? 'bg-[#F3E8FF] text-[#6D28D9] border-l-[2px] border-[#7C3AED] font-semibold'
-                          : 'text-[#374151] hover:bg-[#F3E8FF]/50 hover:text-[#6D28D9]'
-                      }`}
-                    >
-                      <DollarSign className="w-3.5 h-3.5 shrink-0" />
-                      <span className="truncate">BOPO</span>
-                    </button>
-
-                    <button
-                      onClick={() => setActiveMenu('accounting_inventory')}
-                      className={`w-full h-[36px] flex items-center space-x-2.5 px-3 rounded-lg text-left transition-colors cursor-pointer text-[12px] ${
-                        activeMenu === 'accounting_inventory'
-                          ? 'bg-[#F3E8FF] text-[#6D28D9] border-l-[2px] border-[#7C3AED] font-semibold'
-                          : 'text-[#374151] hover:bg-[#F3E8FF]/50 hover:text-[#6D28D9]'
-                      }`}
-                    >
-                      <Boxes className="w-3.5 h-3.5 shrink-0" />
-                      <span className="truncate">Stok Gudang &amp; Opname</span>
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
+            {renderAccordionSection('accounting', 'Accounting', Calculator, isAccountingActive, (
+              <>
+                {renderSubMenuItem('accounting_bopo', 'BOPO', DollarSign, 0)}
+                {renderSubMenuItem('accounting_inventory', 'Stok Gudang & Opname', Boxes, 1)}
+              </>
+            ))}
 
             {/* 5. HC AREA ACCORDION */}
-            <div className="overflow-hidden">
-              <button
-                onClick={() => {
-                  if (collapsed) {
-                    onToggleCollapse();
-                    setOpenGroup('hc');
-                  } else {
-                    toggleGroup('hc');
-                  }
-                }}
-                title="HC Area"
-                className={`w-full h-[42px] px-3.5 flex items-center justify-between rounded-lg transition-colors cursor-pointer text-left ${
-                  collapsed ? 'justify-center px-0' : ''
-                } ${
-                  isHcActive
-                    ? 'bg-[#3D1A5E] text-white border-l-[3px] border-[#FACC15] font-semibold'
-                    : 'text-[#374151] hover:bg-[#F3E8FF]/60 hover:text-[#4A1D6A]'
-                }`}
-              >
-                <div className={`flex items-center ${collapsed ? '' : 'space-x-3'} overflow-hidden`}>
-                  <Users className="w-4 h-4 shrink-0" />
-                  {!collapsed && <span className="truncate">HC Area</span>}
-                </div>
-                {!collapsed && (
-                  <ChevronDown
-                    className={`w-3.5 h-3.5 shrink-0 transition-transform duration-200 ${
-                      openGroup === 'hc' ? 'rotate-180' : 'rotate-0'
-                    }`}
-                  />
-                )}
-              </button>
-
-              {!collapsed && (
-                <div
-                  className="overflow-hidden transition-all duration-300 ease-in-out"
-                  style={{
-                    maxHeight: openGroup === 'hc' ? '200px' : '0px',
-                    opacity: openGroup === 'hc' ? 1 : 0,
-                  }}
-                >
-                  <div className="pl-6 pr-1 py-1 space-y-0.5 border-l-2 border-[#E5E7EB] ml-4 mt-0.5">
-                    <button
-                      onClick={() => setActiveMenu('hc_employees')}
-                      className={`w-full h-[36px] flex items-center space-x-2.5 px-3 rounded-lg text-left transition-colors cursor-pointer text-[12px] ${
-                        activeMenu === 'hc_employees'
-                          ? 'bg-[#F3E8FF] text-[#6D28D9] border-l-[2px] border-[#7C3AED] font-semibold'
-                          : 'text-[#374151] hover:bg-[#F3E8FF]/50 hover:text-[#6D28D9]'
-                      }`}
-                    >
-                      <Users className="w-3.5 h-3.5 shrink-0" />
-                      <span className="truncate">Data Karyawan</span>
-                    </button>
-
-                    <button
-                      onClick={() => setActiveMenu('hc_kpi')}
-                      className={`w-full h-[36px] flex items-center space-x-2.5 px-3 rounded-lg text-left transition-colors cursor-pointer text-[12px] ${
-                        activeMenu === 'hc_kpi'
-                          ? 'bg-[#F3E8FF] text-[#6D28D9] border-l-[2px] border-[#7C3AED] font-semibold'
-                          : 'text-[#374151] hover:bg-[#F3E8FF]/50 hover:text-[#6D28D9]'
-                      }`}
-                    >
-                      <Target className="w-3.5 h-3.5 shrink-0" />
-                      <span className="truncate">KPI Karyawan</span>
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
+            {renderAccordionSection('hc', 'HC Area', Users, isHcActive, (
+              <>
+                {renderSubMenuItem('hc_employees', 'Data Karyawan', Users, 0)}
+                {renderSubMenuItem('hc_kpi', 'KPI Karyawan', Target, 1)}
+              </>
+            ))}
 
             {/* 6. LOST N FOUND STANDALONE MENU */}
             <div>
-              <button
-                onClick={() => setActiveMenu('lost_and_found')}
-                title="Lost N Found"
-                className={`w-full h-[42px] px-3.5 flex items-center rounded-lg transition-colors cursor-pointer text-left ${
-                  collapsed ? 'justify-center px-0' : 'space-x-3'
-                } ${
-                  activeMenu === 'lost_and_found'
-                    ? 'bg-[#3D1A5E] text-white border-l-[3px] border-[#FACC15] font-semibold'
-                    : 'text-[#374151] hover:bg-[#F3E8FF]/60 hover:text-[#4A1D6A]'
-                }`}
-              >
-                <PackageSearch className="w-4 h-4 shrink-0" />
-                {!collapsed && <span className="truncate">Lost N Found</span>}
-              </button>
+              {renderStandaloneMainButton('lost_and_found', 'Lost N Found', PackageSearch)}
             </div>
 
             {/* Admin Management */}
@@ -649,20 +435,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     Admin Control
                   </span>
                 )}
-                <button
-                  onClick={() => setActiveMenu('admin_users_outlets')}
-                  title="Kelola User & Outlet"
-                  className={`w-full h-[42px] px-3.5 flex items-center rounded-lg transition-colors cursor-pointer text-left ${
-                    collapsed ? 'justify-center px-0' : 'space-x-3'
-                  } ${
-                    activeMenu === 'admin_users_outlets'
-                      ? 'bg-[#3D1A5E] text-white border-l-[3px] border-[#FACC15] font-semibold'
-                      : 'text-[#374151] hover:bg-[#F3E8FF]/60 hover:text-[#4A1D6A]'
-                  }`}
-                >
-                  <ShieldCheck className="w-4 h-4 shrink-0" />
-                  {!collapsed && <span className="truncate">Kelola User & Outlet</span>}
-                </button>
+                {renderStandaloneMainButton('admin_users_outlets', 'Kelola User & Outlet', ShieldCheck)}
               </div>
             )}
           </>
@@ -671,16 +444,18 @@ export const Sidebar: React.FC<SidebarProps> = ({
         {/* Settings button - Admin only */}
         {isAdmin && (
           <div className="pt-1">
-            <button
+            <motion.button
+              whileHover={{ x: collapsed ? 0 : 3 }}
+              whileTap={{ scale: 0.96 }}
               onClick={onOpenSettings}
               title="Koneksi & OCR API"
-              className={`w-full h-[42px] px-3.5 flex items-center rounded-lg text-[#6B7280] hover:text-[#4A1D6A] hover:bg-[#F3E8FF]/60 transition-colors cursor-pointer text-left ${
+              className={`group w-full h-[42px] px-3.5 flex items-center rounded-xl text-[#6B7280] hover:text-[#4A1D6A] hover:bg-[#F3E8FF]/60 transition-colors duration-200 cursor-pointer text-left ${
                 collapsed ? 'justify-center px-0' : 'space-x-3'
               }`}
             >
-              <Settings className="w-4 h-4 shrink-0" />
+              <Settings className="w-4 h-4 shrink-0 transition-transform duration-500 group-hover:rotate-90" />
               {!collapsed && <span className="truncate">Koneksi & OCR API</span>}
-            </button>
+            </motion.button>
           </div>
         )}
       </nav>

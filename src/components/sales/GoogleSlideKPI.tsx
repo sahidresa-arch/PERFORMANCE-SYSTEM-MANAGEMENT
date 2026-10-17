@@ -1,11 +1,11 @@
 import React, { useState } from 'react';
+import { createPortal } from 'react-dom';
 import { StorageService } from '../../lib/storage';
 import { Outlet } from '../../types';
 import { exportKPIToPPTX } from '../../lib/pptxExport';
 import {
   Presentation,
   Download,
-  Maximize2,
   ChevronLeft,
   ChevronRight,
   ArrowRightLeft,
@@ -17,11 +17,8 @@ import {
   CreditCard,
   CheckCircle2,
   Trophy,
-  TrendingUp,
-  ArrowUpRight,
   Filter,
-  Building2,
-  Sparkles,
+  SlidersHorizontal,
 } from 'lucide-react';
 
 interface GoogleSlideKPIProps {
@@ -59,6 +56,13 @@ export const GoogleSlideKPI: React.FC<GoogleSlideKPIProps> = ({
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isExportingPPTX, setIsExportingPPTX] = useState(false);
 
+  // Slide Cleanliness / Element Display Options (Synced with PPTX Export)
+  const [showSummaryStrip, setShowSummaryStrip] = useState(true);
+  const [showBarValueLabels, setShowBarValueLabels] = useState(true);
+  const [showChartGrowthPills, setShowChartGrowthPills] = useState(false);
+  const [showInsightBox, setShowInsightBox] = useState(false);
+  const [showSlideHeaderMeta, setShowSlideHeaderMeta] = useState(false);
+
   // Filter comparison mode
   const [comparisonMode, setComparisonMode] = useState<ComparisonMode>('tahunan');
 
@@ -68,7 +72,6 @@ export const GoogleSlideKPI: React.FC<GoogleSlideKPIProps> = ({
 
   // Ranking indicator selection (Slide Ranking)
   const [selectedRankingIndicator, setSelectedRankingIndicator] = useState<RankingIndicator>('sph');
-  const [rankingAreaFilter, setRankingAreaFilter] = useState<string>('all');
 
   // Year vs Year parameters
   const [yearA, setYearA] = useState<number>(2025);
@@ -76,21 +79,21 @@ export const GoogleSlideKPI: React.FC<GoogleSlideKPIProps> = ({
 
   // Semester vs Semester parameters
   const [semYearA, setSemYearA] = useState<number>(2026);
-  const [semPeriodA, setSemPeriodA] = useState<number>(1); // 1: Jan-Jun, 2: Jul-Des
+  const [semPeriodA, setSemPeriodA] = useState<number>(1);
   const [semYearB, setSemYearB] = useState<number>(2026);
   const [semPeriodB, setSemPeriodB] = useState<number>(2);
 
-  // Kuartal vs Kuartal parameters (Q1: Jan-Mar, Q2: Apr-Jun, Q3: Jul-Sep, Q4: Okt-Des)
+  // Kuartal vs Kuartal parameters
   const [quarterYearA, setQuarterYearA] = useState<number>(2026);
-  const [quarterA, setQuarterA] = useState<number>(3); // Q3 (Jul-Sep)
+  const [quarterA, setQuarterA] = useState<number>(3);
   const [quarterYearB, setQuarterYearB] = useState<number>(2026);
-  const [quarterB, setQuarterB] = useState<number>(4); // Q4 (Okt-Des)
+  const [quarterB, setQuarterB] = useState<number>(4);
 
   // Month vs Month parameters
   const [monthYearA, setMonthYearA] = useState<number>(2026);
-  const [monthA, setMonthA] = useState<number>(8); // 8: September (0-indexed)
+  const [monthA, setMonthA] = useState<number>(8);
   const [monthYearB, setMonthYearB] = useState<number>(2026);
-  const [monthB, setMonthB] = useState<number>(9); // 9: Oktober (0-indexed)
+  const [monthB, setMonthB] = useState<number>(9);
 
   // Custom date range parameters (YYYY-MM-DD)
   const [customStartA, setCustomStartA] = useState<string>('2026-07-01');
@@ -98,28 +101,68 @@ export const GoogleSlideKPI: React.FC<GoogleSlideKPIProps> = ({
   const [customStartB, setCustomStartB] = useState<string>('2026-10-01');
   const [customEndB, setCustomEndB] = useState<string>('2026-10-09');
 
+  const [, setStorageTick] = useState(0);
+  React.useEffect(() => {
+    const handleStorageUpdate = () => setStorageTick((t) => t + 1);
+    window.addEventListener('cinema-xxi-storage-update', handleStorageUpdate);
+    window.addEventListener('storage', handleStorageUpdate);
+    return () => {
+      window.removeEventListener('cinema-xxi-storage-update', handleStorageUpdate);
+      window.removeEventListener('storage', handleStorageUpdate);
+    };
+  }, []);
+
   const currentUser = StorageService.getCurrentUser();
   const areas = StorageService.getAreas();
   const rawOutlets = StorageService.getOutlets();
   const isManagerOrCleaner = (currentUser?.role === 'manager' || currentUser?.role === 'cleaner') && currentUser?.outletId;
+  const userAssignedAreaIds = currentUser?.role === 'area_manager'
+    ? (currentUser.assignedAreas && currentUser.assignedAreas.length > 0
+        ? currentUser.assignedAreas
+        : (currentUser.areaId ? [currentUser.areaId] : []))
+    : null;
+
   const outlets = isManagerOrCleaner
     ? rawOutlets.filter((o) => o.id === currentUser.outletId)
+    : userAssignedAreaIds && userAssignedAreaIds.length > 0
+    ? rawOutlets.filter((o) => userAssignedAreaIds.includes(o.areaId))
     : rawOutlets;
   const allSales = StorageService.getDailySales();
 
-  // Filtered outlets based on area selection
   const areaFilteredOutlets = isManagerOrCleaner
     ? outlets
     : selectedAreaId === 'all'
     ? outlets
     : outlets.filter((o) => o.areaId === selectedAreaId);
 
-  // Target outlets for computation
   const targetOutlets: Outlet[] = selectedOutletId === 'all'
     ? areaFilteredOutlets
     : areaFilteredOutlets.filter((o) => o.id === selectedOutletId);
 
-  // Helper to aggregate sales for a specific date range & target outlets
+  // Target Head sesuai Database (Per Outlet -> outlet.targetHead, Per Area -> area.targetArea, Semua Wilayah -> Rp 24.359)
+  const getActiveTargetHead = (): number => {
+    if (selectedOutletId !== 'all') {
+      const foundOutlet = outlets.find((o) => o.id === selectedOutletId);
+      if (foundOutlet) return foundOutlet.targetHead;
+    }
+    if (selectedAreaId !== 'all') {
+      const foundArea = areas.find((a) => a.id === selectedAreaId);
+      if (foundArea && foundArea.targetArea > 0) return foundArea.targetArea;
+      if (selectedAreaId === 'area-bogor-1-depok') return 25504;
+      if (selectedAreaId === 'area-bogor-2') return 22375;
+    }
+    if (isManagerOrCleaner && targetOutlets.length === 1) {
+      return targetOutlets[0].targetHead;
+    }
+    if (userAssignedAreaIds && userAssignedAreaIds.length === 1) {
+      const assignedArea = areas.find((a) => a.id === userAssignedAreaIds[0]);
+      if (assignedArea && assignedArea.targetArea > 0) return assignedArea.targetArea;
+    }
+    return 24359; // Target SPH Semua Wilayah sesuai database
+  };
+
+  const avgTargetHead = getActiveTargetHead();
+
   const getAggregatedData = (
     predicate: (year: number, month0: number, day: number, dateStr: string) => boolean,
     label: string,
@@ -140,12 +183,11 @@ export const GoogleSlideKPI: React.FC<GoogleSlideKPIProps> = ({
       const d = parseInt(dStr, 10);
 
       if (predicate(y, m0, d, rec.date)) {
-        rec.shows.forEach((sh) => {
-          cinema += sh.omsetCinema || 0;
-          fnb += sh.omsetFnB || 0;
-          bill += sh.bill || 0;
-          penonton += sh.penonton || 0;
-        });
+        const dayTotals = StorageService.getLatestShowTotals(rec.shows);
+        cinema += dayTotals.omsetCinema;
+        fnb += dayTotals.omsetFnB;
+        bill += dayTotals.bill;
+        penonton += dayTotals.penonton;
       }
     });
 
@@ -153,11 +195,6 @@ export const GoogleSlideKPI: React.FC<GoogleSlideKPIProps> = ({
     const gbo = cinema > 0 ? Number(((fnb / cinema) * 100).toFixed(1)) : 0;
     const dayaSerap = penonton > 0 ? Number(((bill / penonton) * 100).toFixed(1)) : 0;
     const at = bill > 0 ? Math.round(fnb / bill) : 0;
-
-    // Target SPH (average across target outlets)
-    const avgTargetHead = targetOutlets.length > 0
-      ? Math.round(targetOutlets.reduce((acc, o) => acc + o.targetHead, 0) / targetOutlets.length)
-      : 30000;
     const achievement = avgTargetHead > 0 ? Number(((sph / avgTargetHead) * 100).toFixed(1)) : 0;
 
     return {
@@ -175,17 +212,16 @@ export const GoogleSlideKPI: React.FC<GoogleSlideKPIProps> = ({
     };
   };
 
-  // Compute Period A and Period B based on comparisonMode
   let periodAData: PeriodMetricsData;
   let periodBData: PeriodMetricsData;
   let comparisonTitle = '';
 
   const getQuarterMonths = (q: number): [number, number] => {
     switch (q) {
-      case 1: return [0, 2]; // Jan - Mar
-      case 2: return [3, 5]; // Apr - Jun
-      case 3: return [6, 8]; // Jul - Sep
-      case 4: default: return [9, 11]; // Okt - Des
+      case 1: return [0, 2];
+      case 2: return [3, 5];
+      case 3: return [6, 8];
+      case 4: default: return [9, 11];
     }
   };
 
@@ -200,16 +236,8 @@ export const GoogleSlideKPI: React.FC<GoogleSlideKPIProps> = ({
 
   if (comparisonMode === 'tahunan') {
     comparisonTitle = `Tahun ${yearA} vs Tahun ${yearB}`;
-    periodAData = getAggregatedData(
-      (y) => y === yearA,
-      `Tahun ${yearA}`,
-      `Jan - Des ${yearA}`
-    );
-    periodBData = getAggregatedData(
-      (y) => y === yearB,
-      `Tahun ${yearB}`,
-      `Jan - Des ${yearB}`
-    );
+    periodAData = getAggregatedData((y) => y === yearA, `Tahun ${yearA}`, `Jan - Des ${yearA}`);
+    periodBData = getAggregatedData((y) => y === yearB, `Tahun ${yearB}`, `Jan - Des ${yearB}`);
   } else if (comparisonMode === 'semester') {
     const semNameA = semPeriodA === 1 ? 'Semester 1 (Jan - Jun)' : 'Semester 2 (Jul - Des)';
     const semNameB = semPeriodB === 1 ? 'Semester 1 (Jan - Jun)' : 'Semester 2 (Jul - Des)';
@@ -253,24 +281,14 @@ export const GoogleSlideKPI: React.FC<GoogleSlideKPIProps> = ({
       'Rentang Tanggal B'
     );
   } else {
-    // Bulanan
     const mNameA = `${MONTH_NAMES[monthA]} ${monthYearA}`;
     const mNameB = `${MONTH_NAMES[monthB]} ${monthYearB}`;
     comparisonTitle = `${mNameA} vs ${mNameB}`;
 
-    periodAData = getAggregatedData(
-      (y, m0) => y === monthYearA && m0 === monthA,
-      mNameA,
-      `Bulan ${MONTH_NAMES[monthA]}`
-    );
-    periodBData = getAggregatedData(
-      (y, m0) => y === monthYearB && m0 === monthB,
-      mNameB,
-      `Bulan ${MONTH_NAMES[monthB]}`
-    );
+    periodAData = getAggregatedData((y, m0) => y === monthYearA && m0 === monthA, mNameA, `Bulan ${MONTH_NAMES[monthA]}`);
+    periodBData = getAggregatedData((y, m0) => y === monthYearB && m0 === monthB, mNameB, `Bulan ${MONTH_NAMES[monthB]}`);
   }
 
-  // Monthly / Period Breakdown Trend for both Period A and Period B to create side-by-side comparative charts
   let comparativeTrendData: Array<{
     monthIdx: number;
     monthName: string;
@@ -285,16 +303,8 @@ export const GoogleSlideKPI: React.FC<GoogleSlideKPIProps> = ({
     comparativeTrendData = [0, 1, 2].map((idx) => {
       const mA = qStartA + idx;
       const mB = qStartB + idx;
-      const dA = getAggregatedData(
-        (y, m0) => y === quarterYearA && m0 === mA,
-        MONTH_NAMES[mA],
-        MONTH_NAMES[mA]
-      );
-      const dB = getAggregatedData(
-        (y, m0) => y === quarterYearB && m0 === mB,
-        MONTH_NAMES[mB],
-        MONTH_NAMES[mB]
-      );
+      const dA = getAggregatedData((y, m0) => y === quarterYearA && m0 === mA, MONTH_NAMES[mA], MONTH_NAMES[mA]);
+      const dB = getAggregatedData((y, m0) => y === quarterYearB && m0 === mB, MONTH_NAMES[mB], MONTH_NAMES[mB]);
       return {
         monthIdx: idx,
         monthName: MONTH_NAMES[mB],
@@ -310,16 +320,8 @@ export const GoogleSlideKPI: React.FC<GoogleSlideKPIProps> = ({
       const mA = idx + offsetA;
       const mB = idx + offsetB;
 
-      const dA = getAggregatedData(
-        (y, m0) => y === semYearA && m0 === mA,
-        MONTH_NAMES[mA],
-        MONTH_NAMES[mA]
-      );
-      const dB = getAggregatedData(
-        (y, m0) => y === semYearB && m0 === mB,
-        MONTH_NAMES[mB],
-        MONTH_NAMES[mB]
-      );
+      const dA = getAggregatedData((y, m0) => y === semYearA && m0 === mA, MONTH_NAMES[mA], MONTH_NAMES[mA]);
+      const dB = getAggregatedData((y, m0) => y === semYearB && m0 === mB, MONTH_NAMES[mB], MONTH_NAMES[mB]);
 
       return {
         monthIdx: idx,
@@ -379,7 +381,6 @@ export const GoogleSlideKPI: React.FC<GoogleSlideKPIProps> = ({
       };
     });
   } else {
-    // 12 months (Tahunan) or monthly
     comparativeTrendData = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].map((mIdx) => {
       const predA = (y: number, m0: number) => y === yearA && m0 === mIdx;
       const predB = (y: number, m0: number) => y === yearB && m0 === mIdx;
@@ -397,7 +398,6 @@ export const GoogleSlideKPI: React.FC<GoogleSlideKPIProps> = ({
     });
   }
 
-  // For bulanan mode, create 6 date-interval blocks
   const weeklyComparisonData = [
     { label: 'Tgl 1-5', range: [1, 5] },
     { label: 'Tgl 6-10', range: [6, 10] },
@@ -423,25 +423,59 @@ export const GoogleSlideKPI: React.FC<GoogleSlideKPIProps> = ({
     };
   });
 
-  // Target Head for reference in charts
-  const avgTargetHead = targetOutlets.length > 0
-    ? Math.round(targetOutlets.reduce((acc, o) => acc + o.targetHead, 0) / targetOutlets.length)
-    : 30000;
-
-  // Selected outlet display name
   const outletDisplayName = selectedOutletId === 'all'
-    ? (selectedAreaId === 'all' ? `Seluruh Outlet (${outlets.length} Lokasi)` : `Wilayah: ${areas.find((a) => a.id === selectedAreaId)?.name || ''} (${targetOutlets.length} Lokasi)`)
+    ? (selectedAreaId === 'all' ? `Seluruh Wilayah (${outlets.length} Lokasi)` : `${areas.find((a) => a.id === selectedAreaId)?.name || 'Wilayah'} (${targetOutlets.length} Lokasi)`)
     : (outlets.find((o) => o.id === selectedOutletId)?.name || 'Outlet Terpilih');
 
   const slides = [
-    { id: 1, title: 'Ringkasan Eksekutif & Komparasi 4 Pilar KPI', tag: '1. Executive Summary' },
-    { id: 2, title: 'Analisis SPH (Spending Per Head / Penonton)', tag: '2. SPH (Head)' },
-    { id: 3, title: 'Analisis % GBO (Gross Box Office) Kontribusi FnB', tag: '3. % GBO' },
-    { id: 4, title: 'Analisis Daya Serap (Penetrasi Pembeli Struk Kasir)', tag: '4. Daya Serap' },
-    { id: 5, title: 'Analisis Average Transaksi (AT / Basket Size)', tag: '5. Average Transaksi' },
-    { id: 6, title: 'Volume Penonton & Perbandingan Omset Finansial', tag: '6. Volume & Omset' },
-    { id: 7, title: 'Peringkat Performa Outlet & Pencapaian Target', tag: '7. Ranking Outlet' },
-    { id: 8, title: 'Evaluasi Performa & Rencana Aksi Bisnis (Action Plan)', tag: '8. Evaluasi & Aksi' },
+    {
+      id: 1,
+      title: 'Executive KPI Comparison & Growth Overview',
+      subtitle: `Komparasi otomatis 5 indikator utama: ${comparisonTitle}`,
+      tag: '1. Executive Summary',
+    },
+    {
+      id: 2,
+      title: 'Analisis SPH (Spending Per Head) Cafe vs Target',
+      subtitle: 'Rata-rata pengeluaran F&B dari setiap 1 penonton bioskop (Omset F&B / Total Penonton Cinema).',
+      tag: '2. SPH (Head)',
+    },
+    {
+      id: 3,
+      title: 'Analisis % GBO (Gross Box Office) Kontribusi F&B',
+      subtitle: 'Persentase perbandingan omset F&B terhadap omset penjualan tiket cinema (Omset F&B / Omset Cinema × 100%).',
+      tag: '3. % GBO',
+    },
+    {
+      id: 4,
+      title: 'Analisis Daya Serap (Penetrasi Pembeli Struk Kasir)',
+      subtitle: 'Rasio jumlah struk transaksi Cafe dibandingkan total penonton bioskop (Bill / Total Penonton × 100%).',
+      tag: '4. Daya Serap',
+    },
+    {
+      id: 5,
+      title: 'Analisis Average Transaksi (AT / Basket Size) per Struk',
+      subtitle: 'Nilai rata-rata nominal rupiah per satu struk belanja kasir Cafe (Omset F&B / Total Struk Bill).',
+      tag: '5. Average Transaksi',
+    },
+    {
+      id: 6,
+      title: 'Volume Penonton & Perbandingan Omset Finansial',
+      subtitle: 'Komparasi menyeluruh volume penonton cinema, total transaksi kasir bill, dan pendapatan finansial.',
+      tag: '6. Volume & Omset',
+    },
+    {
+      id: 7,
+      title: `Peringkat Performa Outlet & Pencapaian Target (${periodBData.label})`,
+      subtitle: 'Urutan dan pemetaan performa seluruh outlet berdasarkan indikator terpilih.',
+      tag: '7. Ranking Outlet',
+    },
+    {
+      id: 8,
+      title: 'Evaluasi Performa & Rencana Aksi Bisnis (Action Plan)',
+      subtitle: `Sintesis analitis 4 pilar KPI (${periodAData.label} vs ${periodBData.label}) untuk strategi peningkatan omset F&B.`,
+      tag: '8. Evaluasi & Aksi',
+    },
   ];
 
   const handleNextSlide = () => {
@@ -452,11 +486,51 @@ export const GoogleSlideKPI: React.FC<GoogleSlideKPIProps> = ({
     if (currentSlide > 1) setCurrentSlide(currentSlide - 1);
   };
 
-  const toggleFullscreen = () => {
-    setIsFullscreen(!isFullscreen);
+  const toggleFullscreen = async () => {
+    const nextState = !isFullscreen;
+    setIsFullscreen(nextState);
+    try {
+      if (nextState) {
+        if (!document.fullscreenElement && document.documentElement.requestFullscreen) {
+          await document.documentElement.requestFullscreen();
+        }
+      } else {
+        if (document.fullscreenElement && document.exitFullscreen) {
+          await document.exitFullscreen();
+        }
+      }
+    } catch {
+      // Fallback to Portal full-viewport mode if browser blocks native requestFullscreen in iframe
+    }
   };
 
-  // Helper to compute percentage growth
+  React.useEffect(() => {
+    const handleFullscreenChange = () => {
+      if (!document.fullscreenElement && isFullscreen) {
+        // Keep portal state in sync if user exits native fullscreen via Esc
+      }
+    };
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (!isFullscreen) return;
+      if (e.key === 'Escape') {
+        setIsFullscreen(false);
+        if (document.fullscreenElement && document.exitFullscreen) {
+          document.exitFullscreen().catch(() => {});
+        }
+      } else if (e.key === 'ArrowRight') {
+        setCurrentSlide((prev) => (prev < slides.length ? prev + 1 : prev));
+      } else if (e.key === 'ArrowLeft') {
+        setCurrentSlide((prev) => (prev > 1 ? prev - 1 : prev));
+      }
+    };
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isFullscreen, slides.length]);
+
   const calcGrowth = (valA: number, valB: number) => {
     if (valA === 0) return valB > 0 ? '+100%' : '0%';
     const diff = ((valB - valA) / valA) * 100;
@@ -466,10 +540,7 @@ export const GoogleSlideKPI: React.FC<GoogleSlideKPIProps> = ({
 
   const isGrowthPositive = (valA: number, valB: number) => valB >= valA;
 
-  // Outlet performance list calculation for Ranking Slide
-  const rankingFilteredOutlets = rankingAreaFilter === 'all'
-    ? outlets
-    : outlets.filter((o) => o.areaId === rankingAreaFilter);
+  const rankingFilteredOutlets = areaFilteredOutlets;
 
   const outletRankingList = rankingFilteredOutlets.map((outlet) => {
     let oCinema = 0;
@@ -498,12 +569,11 @@ export const GoogleSlideKPI: React.FC<GoogleSlideKPIProps> = ({
       }
 
       if (matches) {
-        rec.shows.forEach((sh) => {
-          oCinema += sh.omsetCinema || 0;
-          oFnb += sh.omsetFnB || 0;
-          oBill += sh.bill || 0;
-          oPax += sh.penonton || 0;
-        });
+        const dayTotals = StorageService.getLatestShowTotals(rec.shows);
+        oCinema += dayTotals.omsetCinema;
+        oFnb += dayTotals.omsetFnB;
+        oBill += dayTotals.bill;
+        oPax += dayTotals.penonton;
       }
     });
 
@@ -540,7 +610,7 @@ export const GoogleSlideKPI: React.FC<GoogleSlideKPIProps> = ({
     }
   });
 
-  // PPTX Export Handler
+  // PPTX Export Handler (Synced with current display options)
   const handleExportPPTX = async () => {
     try {
       setIsExportingPPTX(true);
@@ -582,6 +652,13 @@ export const GoogleSlideKPI: React.FC<GoogleSlideKPIProps> = ({
         rankingData: rankingDataForExport,
         selectedRankingIndicator,
         trendData: trendList,
+        displayOptions: {
+          showSlideHeaderMeta,
+          showSummaryStrip,
+          showChartGrowthPills,
+          showBarValueLabels,
+          showInsightBox,
+        },
       });
     } catch (err) {
       console.error('Failed to export PPTX:', err);
@@ -590,8 +667,14 @@ export const GoogleSlideKPI: React.FC<GoogleSlideKPIProps> = ({
     }
   };
 
-  return (
-    <div className={`space-y-4 ${isFullscreen ? 'fixed inset-0 z-50 p-6 bg-[#f8fafc] overflow-y-auto' : ''}`}>
+  const deckContent = (
+    <div
+      className={`space-y-4 ${
+        isFullscreen
+          ? 'fixed inset-0 z-[9999] p-4 sm:p-6 bg-[#f8fafc] overflow-y-auto'
+          : ''
+      }`}
+    >
       {/* Top Presentation Bar with Live Filter Controls */}
       <div className="p-4 rounded-3xl border border-amber-200/90 bg-white text-slate-800 shadow-xs flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center space-x-3">
@@ -614,46 +697,17 @@ export const GoogleSlideKPI: React.FC<GoogleSlideKPIProps> = ({
         {/* Mode Perbandingan Selector */}
         <div className="flex flex-wrap items-center gap-2">
           <div className="flex items-center p-1 rounded-2xl bg-slate-100 border border-slate-200 text-xs font-bold text-slate-700">
-            <button
-              onClick={() => setComparisonMode('tahunan')}
-              className={`px-3 py-1.5 rounded-xl transition cursor-pointer ${
-                comparisonMode === 'tahunan' ? 'bg-amber-500 text-slate-950 font-black shadow-xs' : 'hover:text-slate-900'
-              }`}
-            >
-              Tahunan
-            </button>
-            <button
-              onClick={() => setComparisonMode('semester')}
-              className={`px-3 py-1.5 rounded-xl transition cursor-pointer ${
-                comparisonMode === 'semester' ? 'bg-amber-500 text-slate-950 font-black shadow-xs' : 'hover:text-slate-900'
-              }`}
-            >
-              Semester
-            </button>
-            <button
-              onClick={() => setComparisonMode('quartal')}
-              className={`px-3 py-1.5 rounded-xl transition cursor-pointer ${
-                comparisonMode === 'quartal' ? 'bg-amber-500 text-slate-950 font-black shadow-xs' : 'hover:text-slate-900'
-              }`}
-            >
-              Kuartal
-            </button>
-            <button
-              onClick={() => setComparisonMode('bulanan')}
-              className={`px-3 py-1.5 rounded-xl transition cursor-pointer ${
-                comparisonMode === 'bulanan' ? 'bg-amber-500 text-slate-950 font-black shadow-xs' : 'hover:text-slate-900'
-              }`}
-            >
-              Bulanan
-            </button>
-            <button
-              onClick={() => setComparisonMode('custom')}
-              className={`px-3 py-1.5 rounded-xl transition cursor-pointer ${
-                comparisonMode === 'custom' ? 'bg-amber-500 text-slate-950 font-black shadow-xs' : 'hover:text-slate-900'
-              }`}
-            >
-              Custom
-            </button>
+            {(['tahunan', 'semester', 'quartal', 'bulanan', 'custom'] as ComparisonMode[]).map((mode) => (
+              <button
+                key={mode}
+                onClick={() => setComparisonMode(mode)}
+                className={`px-3 py-1.5 rounded-xl transition cursor-pointer capitalize ${
+                  comparisonMode === mode ? 'bg-amber-500 text-slate-950 font-black shadow-xs' : 'hover:text-slate-900'
+                }`}
+              >
+                {mode === 'quartal' ? 'Kuartal' : mode}
+              </button>
+            ))}
           </div>
 
           <button
@@ -666,280 +720,438 @@ export const GoogleSlideKPI: React.FC<GoogleSlideKPIProps> = ({
           </button>
 
           <button
+            type="button"
             onClick={toggleFullscreen}
-            className="p-2 rounded-2xl border border-slate-300 bg-white text-slate-700 hover:bg-slate-100 cursor-pointer shadow-2xs"
-            title="Mode Layar Penuh"
+            className={`px-3.5 py-2 rounded-2xl border text-xs font-extrabold flex items-center space-x-2 cursor-pointer transition shadow-xs ${
+              isFullscreen
+                ? 'bg-amber-500 border-amber-600 text-slate-950 hover:bg-amber-400'
+                : 'bg-white border-slate-300 text-slate-800 hover:bg-amber-50 hover:border-amber-400 hover:text-slate-950'
+            }`}
+            title={isFullscreen ? 'Keluar Mode Layar Penuh (Esc)' : 'Mode Layar Penuh (Presentasi)'}
           >
-            <Maximize2 className="w-4 h-4" />
+            {isFullscreen ? (
+              <svg
+                className="w-4 h-4 shrink-0 text-slate-950"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.4"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M8 3v3a2 2 0 0 1-2 2H3" />
+                <path d="M21 8h-3a2 2 0 0 1-2-2V3" />
+                <path d="M3 16h3a2 2 0 0 1 2 2v3" />
+                <path d="M16 21v-3a2 2 0 0 1 2-2h3" />
+              </svg>
+            ) : (
+              <svg
+                className="w-4 h-4 shrink-0 text-amber-600"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.4"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M3 8V5a2 2 0 0 1 2-2h3" />
+                <path d="M16 3h3a2 2 0 0 1 2 2v3" />
+                <path d="M21 16v3a2 2 0 0 1-2 2h-3" />
+                <path d="M8 21H5a2 2 0 0 1-2-2v-3" />
+              </svg>
+            )}
+            <span>{isFullscreen ? 'Keluar Layar Penuh' : 'Layar Penuh'}</span>
           </button>
         </div>
       </div>
 
-      {/* Sub Filter Parameter Bar */}
-      <div className="px-5 py-3 rounded-2xl bg-amber-50/80 border border-amber-200/90 text-xs flex flex-wrap items-center justify-between gap-3 shadow-2xs">
-        <div className="flex items-center space-x-2 font-black text-amber-950">
-          <ArrowRightLeft className="w-4 h-4 text-amber-700" />
-          <span>Pengaturan Parameter Komparasi:</span>
+      {/* Sub Filter Parameter Bar & Clean Slide Display Toggles */}
+      <div className="px-5 py-3 rounded-2xl bg-amber-50/80 border border-amber-200/90 text-xs flex flex-col gap-2.5 shadow-2xs">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center space-x-2 font-black text-amber-950">
+            <ArrowRightLeft className="w-4 h-4 text-amber-700" />
+            <span>Parameter Komparasi:</span>
+          </div>
+
+          {comparisonMode === 'tahunan' && (
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-slate-600 font-semibold">Tahun A:</span>
+              <select
+                value={yearA}
+                onChange={(e) => setYearA(parseInt(e.target.value, 10))}
+                className="px-3 py-1 rounded-xl border border-slate-300 bg-white font-bold text-slate-800"
+              >
+                <option value={2024}>2024</option>
+                <option value={2025}>2025</option>
+                <option value={2026}>2026</option>
+              </select>
+              <span className="text-amber-800 font-black px-1.5">VS</span>
+              <span className="text-slate-600 font-semibold">Tahun B:</span>
+              <select
+                value={yearB}
+                onChange={(e) => setYearB(parseInt(e.target.value, 10))}
+                className="px-3 py-1 rounded-xl border border-slate-300 bg-white font-bold text-slate-800"
+              >
+                <option value={2025}>2025</option>
+                <option value={2026}>2026</option>
+              </select>
+            </div>
+          )}
+
+          {comparisonMode === 'semester' && (
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-slate-600 font-semibold">Periode A:</span>
+              <select
+                value={semYearA}
+                onChange={(e) => setSemYearA(parseInt(e.target.value, 10))}
+                className="px-2.5 py-1 rounded-xl border border-slate-300 bg-white font-bold text-slate-800"
+              >
+                <option value={2025}>2025</option>
+                <option value={2026}>2026</option>
+              </select>
+              <select
+                value={semPeriodA}
+                onChange={(e) => setSemPeriodA(parseInt(e.target.value, 10))}
+                className="px-2.5 py-1 rounded-xl border border-slate-300 bg-white font-bold text-slate-800"
+              >
+                <option value={1}>Semester 1 (Jan - Jun)</option>
+                <option value={2}>Semester 2 (Jul - Des)</option>
+              </select>
+              <span className="text-amber-800 font-black px-1.5">VS</span>
+              <span className="text-slate-600 font-semibold">Periode B:</span>
+              <select
+                value={semYearB}
+                onChange={(e) => setSemYearB(parseInt(e.target.value, 10))}
+                className="px-2.5 py-1 rounded-xl border border-slate-300 bg-white font-bold text-slate-800"
+              >
+                <option value={2025}>2025</option>
+                <option value={2026}>2026</option>
+              </select>
+              <select
+                value={semPeriodB}
+                onChange={(e) => setSemPeriodB(parseInt(e.target.value, 10))}
+                className="px-2.5 py-1 rounded-xl border border-slate-300 bg-white font-bold text-slate-800"
+              >
+                <option value={1}>Semester 1 (Jan - Jun)</option>
+                <option value={2}>Semester 2 (Jul - Des)</option>
+              </select>
+            </div>
+          )}
+
+          {comparisonMode === 'quartal' && (
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-slate-600 font-semibold">Kuartal A:</span>
+              <select
+                value={quarterYearA}
+                onChange={(e) => setQuarterYearA(parseInt(e.target.value, 10))}
+                className="px-2.5 py-1 rounded-xl border border-slate-300 bg-white font-bold text-slate-800"
+              >
+                <option value={2025}>2025</option>
+                <option value={2026}>2026</option>
+              </select>
+              <select
+                value={quarterA}
+                onChange={(e) => setQuarterA(parseInt(e.target.value, 10))}
+                className="px-2.5 py-1 rounded-xl border border-slate-300 bg-white font-bold text-slate-800"
+              >
+                <option value={1}>K1 (Jan - Mar)</option>
+                <option value={2}>K2 (Apr - Jun)</option>
+                <option value={3}>K3 (Jul - Sep)</option>
+                <option value={4}>K4 (Okt - Des)</option>
+              </select>
+              <span className="text-amber-800 font-black px-1.5">VS</span>
+              <span className="text-slate-600 font-semibold">Kuartal B:</span>
+              <select
+                value={quarterYearB}
+                onChange={(e) => setQuarterYearB(parseInt(e.target.value, 10))}
+                className="px-2.5 py-1 rounded-xl border border-slate-300 bg-white font-bold text-slate-800"
+              >
+                <option value={2025}>2025</option>
+                <option value={2026}>2026</option>
+              </select>
+              <select
+                value={quarterB}
+                onChange={(e) => setQuarterB(parseInt(e.target.value, 10))}
+                className="px-2.5 py-1 rounded-xl border border-slate-300 bg-white font-bold text-slate-800"
+              >
+                <option value={1}>K1 (Jan - Mar)</option>
+                <option value={2}>K2 (Apr - Jun)</option>
+                <option value={3}>K3 (Jul - Sep)</option>
+                <option value={4}>K4 (Okt - Des)</option>
+              </select>
+            </div>
+          )}
+
+          {comparisonMode === 'bulanan' && (
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-slate-600 font-semibold">Bulan A:</span>
+              <select
+                value={monthA}
+                onChange={(e) => setMonthA(parseInt(e.target.value, 10))}
+                className="px-2.5 py-1 rounded-xl border border-slate-300 bg-white font-bold text-slate-800"
+              >
+                {MONTH_NAMES.map((m, idx) => (
+                  <option key={idx} value={idx}>{m}</option>
+                ))}
+              </select>
+              <select
+                value={monthYearA}
+                onChange={(e) => setMonthYearA(parseInt(e.target.value, 10))}
+                className="px-2.5 py-1 rounded-xl border border-slate-300 bg-white font-bold text-slate-800"
+              >
+                <option value={2025}>2025</option>
+                <option value={2026}>2026</option>
+              </select>
+              <span className="text-amber-800 font-black px-1.5">VS</span>
+              <span className="text-slate-600 font-semibold">Bulan B:</span>
+              <select
+                value={monthB}
+                onChange={(e) => setMonthB(parseInt(e.target.value, 10))}
+                className="px-2.5 py-1 rounded-xl border border-slate-300 bg-white font-bold text-slate-800"
+              >
+                {MONTH_NAMES.map((m, idx) => (
+                  <option key={idx} value={idx}>{m}</option>
+                ))}
+              </select>
+              <select
+                value={monthYearB}
+                onChange={(e) => setMonthYearB(parseInt(e.target.value, 10))}
+                className="px-2.5 py-1 rounded-xl border border-slate-300 bg-white font-bold text-slate-800"
+              >
+                <option value={2025}>2025</option>
+                <option value={2026}>2026</option>
+              </select>
+            </div>
+          )}
+
+          {comparisonMode === 'custom' && (
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-slate-600 font-semibold">Rentang A:</span>
+              <input
+                type="date"
+                value={customStartA}
+                onChange={(e) => setCustomStartA(e.target.value)}
+                className="px-2.5 py-1 rounded-xl border border-slate-300 bg-white font-bold text-slate-800"
+              />
+              <span className="text-slate-400">s/d</span>
+              <input
+                type="date"
+                value={customEndA}
+                onChange={(e) => setCustomEndA(e.target.value)}
+                className="px-2.5 py-1 rounded-xl border border-slate-300 bg-white font-bold text-slate-800"
+              />
+              <span className="text-amber-800 font-black px-1.5">VS</span>
+              <span className="text-slate-600 font-semibold">Rentang B:</span>
+              <input
+                type="date"
+                value={customStartB}
+                onChange={(e) => setCustomStartB(e.target.value)}
+                className="px-2.5 py-1 rounded-xl border border-slate-300 bg-white font-bold text-slate-800"
+              />
+              <span className="text-slate-400">s/d</span>
+              <input
+                type="date"
+                value={customEndB}
+                onChange={(e) => setCustomEndB(e.target.value)}
+                className="px-2.5 py-1 rounded-xl border border-slate-300 bg-white font-bold text-slate-800"
+              />
+            </div>
+          )}
+
+          {/* Filter Wilayah & Outlet */}
+          <div className="flex flex-wrap items-center gap-2">
+            <Filter className="w-3.5 h-3.5 text-amber-700" />
+            <select
+              value={selectedAreaId}
+              onChange={(e) => {
+                setSelectedAreaId(e.target.value);
+                setSelectedOutletId('all');
+              }}
+              className="px-2.5 py-1 rounded-xl border border-slate-300 bg-white font-bold text-slate-800"
+            >
+              <option value="all">Semua Wilayah (Target Rp 24.359)</option>
+              {areas.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.name} (Target Rp {a.targetArea.toLocaleString('id-ID')})
+                </option>
+              ))}
+            </select>
+
+            <select
+              value={selectedOutletId}
+              onChange={(e) => setSelectedOutletId(e.target.value)}
+              className="px-2.5 py-1 rounded-xl border border-slate-300 bg-white font-bold text-slate-800 max-w-[230px]"
+            >
+              <option value="all">Semua Outlet ({areaFilteredOutlets.length})</option>
+              {areaFilteredOutlets.map((o) => (
+                <option key={o.id} value={o.id}>
+                  {o.name} (Target Rp {o.targetHead.toLocaleString('id-ID')})
+                </option>
+              ))}
+            </select>
+
+            <div className="text-[11px] font-extrabold text-amber-950 bg-amber-100 px-3 py-1 rounded-xl border border-amber-300 whitespace-nowrap flex items-center space-x-1.5">
+              <span>📍 {outletDisplayName}</span>
+              <span className="text-amber-500">•</span>
+              <span className="text-emerald-800 font-black">Target Head: Rp {avgTargetHead.toLocaleString('id-ID')}</span>
+            </div>
+          </div>
         </div>
 
-        {comparisonMode === 'tahunan' && (
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-slate-600 font-semibold">Tahun A:</span>
-            <select
-              value={yearA}
-              onChange={(e) => setYearA(parseInt(e.target.value, 10))}
-              className="px-3 py-1 rounded-xl border border-slate-300 bg-white font-bold text-slate-800"
-            >
-              <option value={2024}>2024</option>
-              <option value={2025}>2025</option>
-              <option value={2026}>2026</option>
-            </select>
-
-            <span className="text-amber-800 font-black px-1.5">VS</span>
-
-            <span className="text-slate-600 font-semibold">Tahun B:</span>
-            <select
-              value={yearB}
-              onChange={(e) => setYearB(parseInt(e.target.value, 10))}
-              className="px-3 py-1 rounded-xl border border-slate-300 bg-white font-bold text-slate-800"
-            >
-              <option value={2025}>2025</option>
-              <option value={2026}>2026</option>
-            </select>
+        {/* Clean Slide Element Toggles (Synced with PPTX Export) */}
+        <div className="pt-2 border-t border-amber-200/70 flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center space-x-1.5 text-[11px] font-bold text-slate-600">
+            <SlidersHorizontal className="w-3.5 h-3.5 text-amber-700" />
+            <span>Tampilan Elemen Slide & Export PPTX:</span>
           </div>
-        )}
-
-        {comparisonMode === 'semester' && (
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-slate-600 font-semibold">Periode A:</span>
-            <select
-              value={semYearA}
-              onChange={(e) => setSemYearA(parseInt(e.target.value, 10))}
-              className="px-2.5 py-1 rounded-xl border border-slate-300 bg-white font-bold text-slate-800"
+          <div className="flex flex-wrap items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => setShowSummaryStrip(!showSummaryStrip)}
+              className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition cursor-pointer ${
+                showSummaryStrip
+                  ? 'bg-amber-500/20 border-amber-400 text-amber-950'
+                  : 'bg-white border-slate-200 text-slate-400'
+              }`}
             >
-              <option value={2025}>2025</option>
-              <option value={2026}>2026</option>
-            </select>
-            <select
-              value={semPeriodA}
-              onChange={(e) => setSemPeriodA(parseInt(e.target.value, 10))}
-              className="px-2.5 py-1 rounded-xl border border-slate-300 bg-white font-bold text-slate-800"
+              {showSummaryStrip ? '✓' : '○'} Kartu Ringkasan Atas
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowBarValueLabels(!showBarValueLabels)}
+              className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition cursor-pointer ${
+                showBarValueLabels
+                  ? 'bg-amber-500/20 border-amber-400 text-amber-950'
+                  : 'bg-white border-slate-200 text-slate-400'
+              }`}
             >
-              <option value={1}>Semester 1 (Jan - Jun)</option>
-              <option value={2}>Semester 2 (Jul - Des)</option>
-            </select>
-
-            <span className="text-amber-800 font-black px-1.5">VS</span>
-
-            <span className="text-slate-600 font-semibold">Periode B:</span>
-            <select
-              value={semYearB}
-              onChange={(e) => setSemYearB(parseInt(e.target.value, 10))}
-              className="px-2.5 py-1 rounded-xl border border-slate-300 bg-white font-bold text-slate-800"
+              {showBarValueLabels ? '✓' : '○'} Angka Batang Grafik
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowChartGrowthPills(!showChartGrowthPills)}
+              className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition cursor-pointer ${
+                showChartGrowthPills
+                  ? 'bg-amber-500/20 border-amber-400 text-amber-950'
+                  : 'bg-white border-slate-200 text-slate-400'
+              }`}
             >
-              <option value={2025}>2025</option>
-              <option value={2026}>2026</option>
-            </select>
-            <select
-              value={semPeriodB}
-              onChange={(e) => setSemPeriodB(parseInt(e.target.value, 10))}
-              className="px-2.5 py-1 rounded-xl border border-slate-300 bg-white font-bold text-slate-800"
+              {showChartGrowthPills ? '✓' : '○'} Badge % Growth Grafik
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowInsightBox(!showInsightBox)}
+              className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition cursor-pointer ${
+                showInsightBox
+                  ? 'bg-amber-500/20 border-amber-400 text-amber-950'
+                  : 'bg-white border-slate-200 text-slate-400'
+              }`}
             >
-              <option value={1}>Semester 1 (Jan - Jun)</option>
-              <option value={2}>Semester 2 (Jul - Des)</option>
-            </select>
-          </div>
-        )}
-
-        {comparisonMode === 'quartal' && (
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-slate-600 font-semibold">Kuartal A:</span>
-            <select
-              value={quarterYearA}
-              onChange={(e) => setQuarterYearA(parseInt(e.target.value, 10))}
-              className="px-2.5 py-1 rounded-xl border border-slate-300 bg-white font-bold text-slate-800"
+              {showInsightBox ? '✓' : '○'} Kotak Insight Bawah
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowSlideHeaderMeta(!showSlideHeaderMeta)}
+              className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition cursor-pointer ${
+                showSlideHeaderMeta
+                  ? 'bg-amber-500/20 border-amber-400 text-amber-950'
+                  : 'bg-white border-slate-200 text-slate-400'
+              }`}
             >
-              <option value={2025}>2025</option>
-              <option value={2026}>2026</option>
-            </select>
-            <select
-              value={quarterA}
-              onChange={(e) => setQuarterA(parseInt(e.target.value, 10))}
-              className="px-2.5 py-1 rounded-xl border border-slate-300 bg-white font-bold text-slate-800"
-            >
-              <option value={1}>K1 (Jan - Mar)</option>
-              <option value={2}>K2 (Apr - Jun)</option>
-              <option value={3}>K3 (Jul - Sep)</option>
-              <option value={4}>K4 (Okt - Des)</option>
-            </select>
-
-            <span className="text-amber-800 font-black px-1.5">VS</span>
-
-            <span className="text-slate-600 font-semibold">Kuartal B:</span>
-            <select
-              value={quarterYearB}
-              onChange={(e) => setQuarterYearB(parseInt(e.target.value, 10))}
-              className="px-2.5 py-1 rounded-xl border border-slate-300 bg-white font-bold text-slate-800"
-            >
-              <option value={2025}>2025</option>
-              <option value={2026}>2026</option>
-            </select>
-            <select
-              value={quarterB}
-              onChange={(e) => setQuarterB(parseInt(e.target.value, 10))}
-              className="px-2.5 py-1 rounded-xl border border-slate-300 bg-white font-bold text-slate-800"
-            >
-              <option value={1}>K1 (Jan - Mar)</option>
-              <option value={2}>K2 (Apr - Jun)</option>
-              <option value={3}>K3 (Jul - Sep)</option>
-              <option value={4}>K4 (Okt - Des)</option>
-            </select>
-          </div>
-        )}
-
-        {comparisonMode === 'bulanan' && (
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-slate-600 font-semibold">Bulan A:</span>
-            <select
-              value={monthA}
-              onChange={(e) => setMonthA(parseInt(e.target.value, 10))}
-              className="px-2.5 py-1 rounded-xl border border-slate-300 bg-white font-bold text-slate-800"
-            >
-              {MONTH_NAMES.map((m, idx) => (
-                <option key={idx} value={idx}>{m}</option>
-              ))}
-            </select>
-            <select
-              value={monthYearA}
-              onChange={(e) => setMonthYearA(parseInt(e.target.value, 10))}
-              className="px-2.5 py-1 rounded-xl border border-slate-300 bg-white font-bold text-slate-800"
-            >
-              <option value={2025}>2025</option>
-              <option value={2026}>2026</option>
-            </select>
-
-            <span className="text-amber-800 font-black px-1.5">VS</span>
-
-            <span className="text-slate-600 font-semibold">Bulan B:</span>
-            <select
-              value={monthB}
-              onChange={(e) => setMonthB(parseInt(e.target.value, 10))}
-              className="px-2.5 py-1 rounded-xl border border-slate-300 bg-white font-bold text-slate-800"
-            >
-              {MONTH_NAMES.map((m, idx) => (
-                <option key={idx} value={idx}>{m}</option>
-              ))}
-            </select>
-            <select
-              value={monthYearB}
-              onChange={(e) => setMonthYearB(parseInt(e.target.value, 10))}
-              className="px-2.5 py-1 rounded-xl border border-slate-300 bg-white font-bold text-slate-800"
-            >
-              <option value={2025}>2025</option>
-              <option value={2026}>2026</option>
-            </select>
-          </div>
-        )}
-
-        {comparisonMode === 'custom' && (
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-slate-600 font-semibold">Rentang A:</span>
-            <input
-              type="date"
-              value={customStartA}
-              onChange={(e) => setCustomStartA(e.target.value)}
-              className="px-2.5 py-1 rounded-xl border border-slate-300 bg-white font-bold text-slate-800"
-            />
-            <span className="text-slate-400">s/d</span>
-            <input
-              type="date"
-              value={customEndA}
-              onChange={(e) => setCustomEndA(e.target.value)}
-              className="px-2.5 py-1 rounded-xl border border-slate-300 bg-white font-bold text-slate-800"
-            />
-
-            <span className="text-amber-800 font-black px-1.5">VS</span>
-
-            <span className="text-slate-600 font-semibold">Rentang B:</span>
-            <input
-              type="date"
-              value={customStartB}
-              onChange={(e) => setCustomStartB(e.target.value)}
-              className="px-2.5 py-1 rounded-xl border border-slate-300 bg-white font-bold text-slate-800"
-            />
-            <span className="text-slate-400">s/d</span>
-            <input
-              type="date"
-              value={customEndB}
-              onChange={(e) => setCustomEndB(e.target.value)}
-              className="px-2.5 py-1 rounded-xl border border-slate-300 bg-white font-bold text-slate-800"
-            />
-          </div>
-        )}
-
-        {/* Filter Wilayah & Outlet */}
-        <div className="flex items-center space-x-2">
-          <Filter className="w-3.5 h-3.5 text-amber-700" />
-          <select
-            value={selectedAreaId}
-            onChange={(e) => {
-              setSelectedAreaId(e.target.value);
-              setSelectedOutletId('all');
-            }}
-            className="px-2.5 py-1 rounded-xl border border-slate-300 bg-white font-bold text-slate-800"
-          >
-            <option value="all">Semua Wilayah</option>
-            {areas.map((a) => (
-              <option key={a.id} value={a.id}>{a.name}</option>
-            ))}
-          </select>
-
-          <select
-            value={selectedOutletId}
-            onChange={(e) => setSelectedOutletId(e.target.value)}
-            className="px-2.5 py-1 rounded-xl border border-slate-300 bg-white font-bold text-slate-800 max-w-[180px]"
-          >
-            <option value="all">Semua Outlet</option>
-            {areaFilteredOutlets.map((o) => (
-              <option key={o.id} value={o.id}>{o.name}</option>
-            ))}
-          </select>
-
-          <div className="text-[11px] font-extrabold text-amber-900 bg-amber-100 px-3 py-1 rounded-xl border border-amber-300 whitespace-nowrap">
-            📍 {outletDisplayName}
+              {showSlideHeaderMeta ? '✓' : '○'} Info Outlet di Tiap Slide
+            </button>
           </div>
         </div>
       </div>
 
-      {/* 16:9 Spacious Slide Canvas Container (Higher min height min-h-[740px]) */}
-      <div className="rounded-3xl border border-amber-200/90 bg-white text-slate-800 shadow-md p-6 sm:p-8 transition min-h-[740px] flex flex-col justify-between">
+      {/* 16:9 Spacious Slide Canvas Container */}
+      <div className="rounded-3xl border border-amber-200/90 bg-white text-slate-800 shadow-md p-6 sm:p-8 transition min-h-[700px] flex flex-col justify-between">
         <div>
-          {/* Slide Indicator & Navigation Header */}
-          <div className="flex items-center justify-between pb-4 border-b border-slate-200 mb-6">
-            <div className="flex items-center space-x-3">
-              <span className="px-3 py-1 rounded-lg bg-amber-500 text-slate-950 font-black text-xs uppercase tracking-wider shadow-2xs">
-                SLIDE {currentSlide} / {slides.length}
-              </span>
-              <h3 className="text-sm sm:text-base font-black uppercase tracking-wide text-slate-900">
-                {slides[currentSlide - 1].title}
-              </h3>
+          {/* Unified Clean Slide Header (Single Title without Redundant Duplication) */}
+          <div className="flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-slate-200 mb-5">
+            <div>
+              <div className="flex items-center space-x-2.5">
+                <span className="px-2.5 py-0.5 rounded-md bg-amber-500 text-slate-950 font-black text-[11px] uppercase tracking-wider">
+                  {currentSlide} / {slides.length}
+                </span>
+                <h1 className="text-lg sm:text-xl font-black uppercase tracking-tight text-slate-900">
+                  {slides[currentSlide - 1].title}
+                </h1>
+              </div>
+              <p className="text-xs text-slate-500 mt-1">
+                {slides[currentSlide - 1].subtitle}
+              </p>
             </div>
 
-            <div className="flex items-center space-x-2">
-              <button
-                onClick={handlePrevSlide}
-                disabled={currentSlide === 1}
-                className="p-2 rounded-xl border border-slate-300 bg-slate-50 disabled:opacity-30 text-slate-700 hover:bg-slate-100 cursor-pointer transition"
-              >
-                <ChevronLeft className="w-5 h-5" />
-              </button>
-              <button
-                onClick={handleNextSlide}
-                disabled={currentSlide === slides.length}
-                className="p-2 rounded-xl border border-slate-300 bg-slate-50 disabled:opacity-30 text-slate-700 hover:bg-slate-100 cursor-pointer transition"
-              >
-                <ChevronRight className="w-5 h-5" />
-              </button>
+            <div className="flex items-center space-x-2.5">
+              {(showSlideHeaderMeta || currentSlide === 1) && (
+                <div className="hidden sm:flex items-center space-x-2 px-3 py-1.5 rounded-xl bg-amber-50 border border-amber-200 text-xs">
+                  <span className="font-extrabold text-slate-900">{outletDisplayName}</span>
+                  <span className="text-amber-400">•</span>
+                  <span className="font-bold text-amber-900">Target SPH: Rp {avgTargetHead.toLocaleString('id-ID')}</span>
+                </div>
+              )}
+
+              <div className="flex items-center space-x-1.5">
+                <button
+                  type="button"
+                  onClick={toggleFullscreen}
+                  className={`p-2 rounded-xl border cursor-pointer transition ${
+                    isFullscreen
+                      ? 'bg-amber-500 border-amber-600 text-slate-950 hover:bg-amber-400'
+                      : 'border-slate-300 bg-slate-50 text-slate-700 hover:bg-amber-50 hover:border-amber-400 hover:text-amber-900'
+                  }`}
+                  title={isFullscreen ? 'Keluar Mode Layar Penuh (Esc)' : 'Mode Layar Penuh'}
+                >
+                  {isFullscreen ? (
+                    <svg
+                      className="w-4 h-4"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2.3"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <path d="M8 3v3a2 2 0 0 1-2 2H3" />
+                      <path d="M21 8h-3a2 2 0 0 1-2-2V3" />
+                      <path d="M3 16h3a2 2 0 0 1 2 2v3" />
+                      <path d="M16 21v-3a2 2 0 0 1 2-2h3" />
+                    </svg>
+                  ) : (
+                    <svg
+                      className="w-4 h-4"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2.3"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <path d="M3 8V5a2 2 0 0 1 2-2h3" />
+                      <path d="M16 3h3a2 2 0 0 1 2 2v3" />
+                      <path d="M21 16v3a2 2 0 0 1-2 2h-3" />
+                      <path d="M8 21H5a2 2 0 0 1-2-2v-3" />
+                    </svg>
+                  )}
+                </button>
+                <button
+                  onClick={handlePrevSlide}
+                  disabled={currentSlide === 1}
+                  className="p-2 rounded-xl border border-slate-300 bg-slate-50 disabled:opacity-30 text-slate-700 hover:bg-slate-100 cursor-pointer transition"
+                  title="Slide Sebelumnya"
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                </button>
+                <button
+                  onClick={handleNextSlide}
+                  disabled={currentSlide === slides.length}
+                  className="p-2 rounded-xl border border-slate-300 bg-slate-50 disabled:opacity-30 text-slate-700 hover:bg-slate-100 cursor-pointer transition"
+                  title="Slide Selanjutnya"
+                >
+                  <ChevronRight className="w-4 h-4" />
+                </button>
+              </div>
             </div>
           </div>
 
@@ -947,47 +1159,11 @@ export const GoogleSlideKPI: React.FC<GoogleSlideKPIProps> = ({
           {/* SLIDE 1: Executive KPI Comparison & Growth Overview */}
           {/* ========================================================================= */}
           {currentSlide === 1 && (
-            <div className="space-y-6">
-              {/* Executive Header Banner with Context Card & Quick Outlet Pill Chips */}
-              <div className="bg-gradient-to-r from-amber-50 via-orange-50 to-amber-50/30 p-5 rounded-2xl border border-amber-200/80 space-y-4">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div>
-                    <h1 className="text-2xl sm:text-3xl font-black uppercase tracking-tight text-slate-900 flex items-center space-x-2">
-                      <span>Executive KPI Comparison & Growth Overview</span>
-                    </h1>
-                    <p className="text-xs font-medium text-slate-600 mt-1">
-                      Komparasi otomatis 4 pilar indikator: <span className="text-amber-900 font-extrabold">{comparisonTitle}</span>
-                    </p>
-                  </div>
-
-                  {/* Executive Context Card (Kartu Ringkasan Info Outlet & Grade) */}
-                  <div className="p-3 bg-white/95 rounded-2xl border border-amber-300 shadow-2xs flex items-center space-x-3 text-xs">
-                    <div className="w-10 h-10 rounded-xl bg-amber-500 text-slate-950 flex items-center justify-center font-black shrink-0 shadow-2xs">
-                      <Building2 className="w-5 h-5" />
-                    </div>
-                    <div>
-                      <div className="flex items-center space-x-2">
-                        <span className="font-extrabold text-slate-900 text-sm">{outletDisplayName}</span>
-                        {selectedOutletId !== 'all' && (
-                          <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-amber-100 text-amber-900 border border-amber-300">
-                            Grade {outlets.find((o) => o.id === selectedOutletId)?.class || 'A'}
-                          </span>
-                        )}
-                      </div>
-                      <div className="text-[11px] text-slate-500 font-semibold flex items-center space-x-3 mt-0.5">
-                        <span>🎯 Target SPH: <strong>Rp {avgTargetHead.toLocaleString('id-ID')}</strong></span>
-                        <span>&bull;</span>
-                        <span>🎬 {targetOutlets.length} Outlet Terakumulasi</span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
+            <div className="space-y-5">
               {/* 5 KPI Cards */}
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
                 {/* 1. Penonton (Pax) */}
-                <div className="p-4 rounded-2xl bg-[#f4f7ff] border-2 border-blue-300 shadow-sm relative flex flex-col justify-between space-y-3">
+                <div className="p-4 rounded-2xl bg-[#f4f7ff] border-2 border-blue-300 shadow-xs flex flex-col justify-between space-y-3">
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-black text-blue-950 uppercase tracking-wide flex items-center space-x-1">
                       <Users className="w-4 h-4 text-blue-600" />
@@ -1000,20 +1176,20 @@ export const GoogleSlideKPI: React.FC<GoogleSlideKPIProps> = ({
                     </span>
                   </div>
                   <div>
-                    <p className="text-3xl font-black text-blue-800 tracking-tight">
-                      {periodBData.penonton.toLocaleString('id-ID')} <span className="text-sm font-bold text-slate-500">Pax</span>
+                    <p className="text-2xl sm:text-3xl font-black text-blue-800 tracking-tight">
+                      {periodBData.penonton.toLocaleString('id-ID')} <span className="text-xs font-bold text-slate-500">Pax</span>
                     </p>
                     <p className="text-xs font-semibold text-slate-500 mt-1">
                       {periodAData.label}: <span className="font-bold text-slate-700">{periodAData.penonton.toLocaleString('id-ID')} Pax</span>
                     </p>
                   </div>
-                  <div className="text-xs text-blue-950 bg-blue-50/80 p-2.5 rounded-xl border border-blue-200/80 font-medium">
+                  <div className="text-xs text-blue-950 bg-blue-50/80 p-2 rounded-xl border border-blue-200/80 font-medium">
                     Total Tiket Penonton Cinema XXI
                   </div>
                 </div>
 
                 {/* 2. Head (SPH) */}
-                <div className="p-4 rounded-2xl bg-[#fffdfa] border-2 border-amber-300 shadow-sm relative flex flex-col justify-between space-y-3">
+                <div className="p-4 rounded-2xl bg-[#fffdfa] border-2 border-amber-300 shadow-xs flex flex-col justify-between space-y-3">
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-black text-amber-950 uppercase tracking-wide flex items-center space-x-1">
                       <Target className="w-4 h-4 text-amber-600" />
@@ -1026,20 +1202,20 @@ export const GoogleSlideKPI: React.FC<GoogleSlideKPIProps> = ({
                     </span>
                   </div>
                   <div>
-                    <p className="text-3xl font-black text-amber-800 tracking-tight">
+                    <p className="text-2xl sm:text-3xl font-black text-amber-800 tracking-tight">
                       Rp {periodBData.sph.toLocaleString('id-ID')}
                     </p>
                     <p className="text-xs font-semibold text-slate-500 mt-1">
                       {periodAData.label}: <span className="font-bold text-slate-700">Rp {periodAData.sph.toLocaleString('id-ID')}</span>
                     </p>
                   </div>
-                  <div className="text-xs text-slate-700 bg-amber-50/80 p-2.5 rounded-xl border border-amber-200/80">
-                    Target Head: <span className="font-extrabold text-slate-900">Rp {avgTargetHead.toLocaleString('id-ID')}</span> &bull; Ach: <span className="font-black text-amber-900">{periodBData.achievement}%</span>
+                  <div className="text-xs text-slate-700 bg-amber-50/80 p-2 rounded-xl border border-amber-200/80">
+                    Target: <span className="font-extrabold text-slate-900">Rp {avgTargetHead.toLocaleString('id-ID')}</span> &bull; Ach: <span className="font-black text-amber-900">{periodBData.achievement}%</span>
                   </div>
                 </div>
 
                 {/* 3. GBO (%) */}
-                <div className="p-4 rounded-2xl bg-[#faf7ff] border-2 border-purple-300 shadow-sm relative flex flex-col justify-between space-y-3">
+                <div className="p-4 rounded-2xl bg-[#faf7ff] border-2 border-purple-300 shadow-xs flex flex-col justify-between space-y-3">
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-black text-purple-950 uppercase tracking-wide flex items-center space-x-1">
                       <Percent className="w-4 h-4 text-purple-600" />
@@ -1052,20 +1228,20 @@ export const GoogleSlideKPI: React.FC<GoogleSlideKPIProps> = ({
                     </span>
                   </div>
                   <div>
-                    <p className="text-3xl font-black text-purple-800 tracking-tight">
+                    <p className="text-2xl sm:text-3xl font-black text-purple-800 tracking-tight">
                       {periodBData.gbo}%
                     </p>
                     <p className="text-xs font-semibold text-slate-500 mt-1">
                       {periodAData.label}: <span className="font-bold text-slate-700">{periodAData.gbo}%</span>
                     </p>
                   </div>
-                  <div className="text-xs text-purple-950 bg-purple-50/80 p-2.5 rounded-xl border border-purple-200/80 font-medium">
-                    Rasio Omset F&B terhadap Ticket Box Office
+                  <div className="text-xs text-purple-950 bg-purple-50/80 p-2 rounded-xl border border-purple-200/80 font-medium">
+                    Rasio Omset F&B terhadap Box Office
                   </div>
                 </div>
 
                 {/* 4. Daya Serap (%) */}
-                <div className="p-4 rounded-2xl bg-[#f5fbf7] border-2 border-emerald-300 shadow-sm relative flex flex-col justify-between space-y-3">
+                <div className="p-4 rounded-2xl bg-[#f5fbf7] border-2 border-emerald-300 shadow-xs flex flex-col justify-between space-y-3">
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-black text-emerald-950 uppercase tracking-wide flex items-center space-x-1">
                       <Users className="w-4 h-4 text-emerald-600" />
@@ -1078,24 +1254,24 @@ export const GoogleSlideKPI: React.FC<GoogleSlideKPIProps> = ({
                     </span>
                   </div>
                   <div>
-                    <p className="text-3xl font-black text-emerald-800 tracking-tight">
+                    <p className="text-2xl sm:text-3xl font-black text-emerald-800 tracking-tight">
                       {periodBData.dayaSerap}%
                     </p>
                     <p className="text-xs font-semibold text-slate-500 mt-1">
                       {periodAData.label}: <span className="font-bold text-slate-700">{periodAData.dayaSerap}%</span>
                     </p>
                   </div>
-                  <div className="text-xs text-emerald-950 bg-emerald-50/80 p-2.5 rounded-xl border border-emerald-200/80 font-medium">
+                  <div className="text-xs text-emerald-950 bg-emerald-50/80 p-2 rounded-xl border border-emerald-200/80 font-medium">
                     Rasio Bill Kasir terhadap Penonton XXI
                   </div>
                 </div>
 
                 {/* 5. AT (Average Transaksi) */}
-                <div className="p-4 rounded-2xl bg-[#f4fafc] border-2 border-cyan-300 shadow-sm relative flex flex-col justify-between space-y-3">
+                <div className="p-4 rounded-2xl bg-[#f4fafc] border-2 border-cyan-300 shadow-xs flex flex-col justify-between space-y-3">
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-black text-cyan-950 uppercase tracking-wide flex items-center space-x-1">
                       <CreditCard className="w-4 h-4 text-cyan-600" />
-                      <span>5. Average Transaksi</span>
+                      <span>5. Avg Transaksi</span>
                     </span>
                     <span className={`text-xs font-black px-2 py-0.5 rounded-full ${
                       isGrowthPositive(periodAData.at, periodBData.at) ? 'bg-emerald-100 text-emerald-900 border border-emerald-300' : 'bg-rose-100 text-rose-900 border border-rose-300'
@@ -1104,227 +1280,15 @@ export const GoogleSlideKPI: React.FC<GoogleSlideKPIProps> = ({
                     </span>
                   </div>
                   <div>
-                    <p className="text-3xl font-black text-cyan-800 tracking-tight">
+                    <p className="text-2xl sm:text-3xl font-black text-cyan-800 tracking-tight">
                       Rp {periodBData.at.toLocaleString('id-ID')}
                     </p>
                     <p className="text-xs font-semibold text-slate-500 mt-1">
                       {periodAData.label}: <span className="font-bold text-slate-700">Rp {periodAData.at.toLocaleString('id-ID')}</span>
                     </p>
                   </div>
-                  <div className="text-xs text-cyan-950 bg-cyan-50/80 p-2.5 rounded-xl border border-cyan-200/80 font-medium">
+                  <div className="text-xs text-cyan-950 bg-cyan-50/80 p-2 rounded-xl border border-cyan-200/80 font-medium">
                     Nilai Keranjang Belanja per Struk Kasir
-                  </div>
-                </div>
-              </div>
-
-              {/* Taller Comparative Bar Visualizer for the 5 Main Pillars */}
-              <div className="p-6 rounded-2xl bg-slate-50/80 border border-slate-200 shadow-xs space-y-4">
-                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 pb-3">
-                  <div className="flex items-center space-x-2">
-                    <BarChart3 className="w-5 h-5 text-amber-700" />
-                    <span className="text-sm font-black uppercase text-slate-900 tracking-tight">
-                      Grafik Pembanding 5 Indikator Utama: {periodAData.label} vs {periodBData.label}
-                    </span>
-                  </div>
-                  <div className="flex items-center space-x-4 text-xs font-extrabold">
-                    <span className="flex items-center space-x-1.5">
-                      <span className="w-3.5 h-3.5 rounded-xs bg-slate-300 inline-block"></span>
-                      <span className="text-slate-600">{periodAData.label}</span>
-                    </span>
-                    <span className="flex items-center space-x-1.5">
-                      <span className="w-3.5 h-3.5 rounded-xs bg-amber-500 inline-block"></span>
-                      <span className="text-slate-900">{periodBData.label}</span>
-                    </span>
-                  </div>
-                </div>
-
-                {/* 5 Pillars Paired Bar Charts with Exact Number Callouts */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 pt-2">
-                  {/* Penonton Bar */}
-                  <div className="p-3.5 rounded-xl bg-blue-50/60 border border-blue-200 flex flex-col justify-between h-56">
-                    <div className="flex justify-between items-center text-xs font-black uppercase text-blue-950">
-                      <span>Penonton (Pax)</span>
-                      <span className={`px-2 py-0.5 rounded font-extrabold text-[11px] ${periodBData.penonton >= periodAData.penonton ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'}`}>
-                        {calcGrowth(periodAData.penonton, periodBData.penonton)}
-                      </span>
-                    </div>
-                    <div className="h-36 flex items-end justify-center gap-2 pt-4">
-                      <div className="flex-1 flex flex-col items-center justify-end h-full">
-                        <span className="text-[10px] font-extrabold text-slate-600 mb-1">
-                          {(periodAData.penonton / 1000).toFixed(1)}k
-                        </span>
-                        <div
-                          style={{
-                            height: `${Math.min(100, Math.max(14, (periodAData.penonton / Math.max(periodAData.penonton, periodBData.penonton, 1)) * 100))}%`,
-                          }}
-                          className="w-full bg-slate-300 rounded-t-md transition-all hover:bg-slate-400"
-                        ></div>
-                        <span className="text-[9px] font-bold text-slate-500 mt-1 truncate max-w-[60px]">{periodAData.label}</span>
-                      </div>
-                      <div className="flex-1 flex flex-col items-center justify-end h-full">
-                        <span className="text-[10px] font-black text-blue-900 mb-1">
-                          {(periodBData.penonton / 1000).toFixed(1)}k
-                        </span>
-                        <div
-                          style={{
-                            height: `${Math.min(100, Math.max(14, (periodBData.penonton / Math.max(periodAData.penonton, periodBData.penonton, 1)) * 100))}%`,
-                          }}
-                          className="w-full bg-gradient-to-t from-blue-700 to-blue-400 rounded-t-md shadow-xs transition-all"
-                        ></div>
-                        <span className="text-[9px] font-bold text-blue-950 mt-1 truncate max-w-[60px]">{periodBData.label}</span>
-                      </div>
-                    </div>
-                    <div className="text-[10px] text-center text-slate-600 font-bold border-t border-blue-200/60 pt-1 mt-1">
-                      Selisih: {(periodBData.penonton - periodAData.penonton).toLocaleString('id-ID')} Pax
-                    </div>
-                  </div>
-
-                  {/* SPH Bar */}
-                  <div className="p-3.5 rounded-xl bg-amber-50/60 border border-amber-200 flex flex-col justify-between h-56">
-                    <div className="flex justify-between items-center text-xs font-black uppercase text-amber-950">
-                      <span>SPH (Rp/Head)</span>
-                      <span className={`px-2 py-0.5 rounded font-extrabold text-[11px] ${periodBData.sph >= periodAData.sph ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'}`}>
-                        {calcGrowth(periodAData.sph, periodBData.sph)}
-                      </span>
-                    </div>
-                    <div className="h-36 flex items-end justify-center gap-2 pt-4">
-                      <div className="flex-1 flex flex-col items-center justify-end h-full">
-                        <span className="text-[10px] font-extrabold text-slate-600 mb-1">
-                          {(periodAData.sph / 1000).toFixed(1)}k
-                        </span>
-                        <div
-                          style={{
-                            height: `${Math.min(100, Math.max(14, (periodAData.sph / Math.max(periodAData.sph, periodBData.sph, avgTargetHead, 1)) * 100))}%`,
-                          }}
-                          className="w-full bg-slate-300 rounded-t-md transition-all hover:bg-slate-400"
-                        ></div>
-                        <span className="text-[9px] font-bold text-slate-500 mt-1 truncate max-w-[60px]">{periodAData.label}</span>
-                      </div>
-                      <div className="flex-1 flex flex-col items-center justify-end h-full">
-                        <span className="text-[10px] font-black text-amber-900 mb-1">
-                          {(periodBData.sph / 1000).toFixed(1)}k
-                        </span>
-                        <div
-                          style={{
-                            height: `${Math.min(100, Math.max(14, (periodBData.sph / Math.max(periodAData.sph, periodBData.sph, avgTargetHead, 1)) * 100))}%`,
-                          }}
-                          className="w-full bg-gradient-to-t from-amber-600 to-amber-400 rounded-t-md shadow-xs transition-all"
-                        ></div>
-                        <span className="text-[9px] font-bold text-amber-950 mt-1 truncate max-w-[60px]">{periodBData.label}</span>
-                      </div>
-                    </div>
-                    <div className="text-[10px] text-center text-slate-600 font-bold border-t border-amber-200/60 pt-1 mt-1">
-                      Target: Rp {avgTargetHead.toLocaleString('id-ID')}
-                    </div>
-                  </div>
-
-                  {/* GBO Bar */}
-                  <div className="p-3.5 rounded-xl bg-purple-50/60 border border-purple-200 flex flex-col justify-between h-56">
-                    <div className="flex justify-between items-center text-xs font-black uppercase text-purple-950">
-                      <span>% GBO (Ratio)</span>
-                      <span className={`px-2 py-0.5 rounded font-extrabold text-[11px] ${periodBData.gbo >= periodAData.gbo ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'}`}>
-                        {calcGrowth(periodAData.gbo, periodBData.gbo)}
-                      </span>
-                    </div>
-                    <div className="h-36 flex items-end justify-center gap-2 pt-4">
-                      <div className="flex-1 flex flex-col items-center justify-end h-full">
-                        <span className="text-[10px] font-extrabold text-slate-600 mb-1">{periodAData.gbo}%</span>
-                        <div
-                          style={{
-                            height: `${Math.min(100, Math.max(14, (periodAData.gbo / Math.max(periodAData.gbo, periodBData.gbo, 50, 1)) * 100))}%`,
-                          }}
-                          className="w-full bg-slate-300 rounded-t-md transition-all hover:bg-slate-400"
-                        ></div>
-                        <span className="text-[9px] font-bold text-slate-500 mt-1 truncate max-w-[60px]">{periodAData.label}</span>
-                      </div>
-                      <div className="flex-1 flex flex-col items-center justify-end h-full">
-                        <span className="text-[10px] font-black text-purple-900 mb-1">{periodBData.gbo}%</span>
-                        <div
-                          style={{
-                            height: `${Math.min(100, Math.max(14, (periodBData.gbo / Math.max(periodAData.gbo, periodBData.gbo, 50, 1)) * 100))}%`,
-                          }}
-                          className="w-full bg-gradient-to-t from-purple-700 to-purple-400 rounded-t-md shadow-xs transition-all"
-                        ></div>
-                        <span className="text-[9px] font-bold text-purple-950 mt-1 truncate max-w-[60px]">{periodBData.label}</span>
-                      </div>
-                    </div>
-                    <div className="text-[10px] text-center text-slate-600 font-bold border-t border-purple-200/60 pt-1 mt-1">
-                      Delta: {(periodBData.gbo - periodAData.gbo).toFixed(1)}%
-                    </div>
-                  </div>
-
-                  {/* Daya Serap Bar */}
-                  <div className="p-3.5 rounded-xl bg-emerald-50/60 border border-emerald-200 flex flex-col justify-between h-56">
-                    <div className="flex justify-between items-center text-xs font-black uppercase text-emerald-950">
-                      <span>Daya Serap (%)</span>
-                      <span className={`px-2 py-0.5 rounded font-extrabold text-[11px] ${periodBData.dayaSerap >= periodAData.dayaSerap ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'}`}>
-                        {calcGrowth(periodAData.dayaSerap, periodBData.dayaSerap)}
-                      </span>
-                    </div>
-                    <div className="h-36 flex items-end justify-center gap-2 pt-4">
-                      <div className="flex-1 flex flex-col items-center justify-end h-full">
-                        <span className="text-[10px] font-extrabold text-slate-600 mb-1">{periodAData.dayaSerap}%</span>
-                        <div
-                          style={{
-                            height: `${Math.min(100, Math.max(14, (periodAData.dayaSerap / Math.max(periodAData.dayaSerap, periodBData.dayaSerap, 30, 1)) * 100))}%`,
-                          }}
-                          className="w-full bg-slate-300 rounded-t-md transition-all hover:bg-slate-400"
-                        ></div>
-                        <span className="text-[9px] font-bold text-slate-500 mt-1 truncate max-w-[60px]">{periodAData.label}</span>
-                      </div>
-                      <div className="flex-1 flex flex-col items-center justify-end h-full">
-                        <span className="text-[10px] font-black text-emerald-900 mb-1">{periodBData.dayaSerap}%</span>
-                        <div
-                          style={{
-                            height: `${Math.min(100, Math.max(14, (periodBData.dayaSerap / Math.max(periodAData.dayaSerap, periodBData.dayaSerap, 30, 1)) * 100))}%`,
-                          }}
-                          className="w-full bg-gradient-to-t from-emerald-600 to-emerald-400 rounded-t-md shadow-xs transition-all"
-                        ></div>
-                        <span className="text-[9px] font-bold text-emerald-950 mt-1 truncate max-w-[60px]">{periodBData.label}</span>
-                      </div>
-                    </div>
-                    <div className="text-[10px] text-center text-slate-600 font-bold border-t border-emerald-200/60 pt-1 mt-1">
-                      Delta: {(periodBData.dayaSerap - periodAData.dayaSerap).toFixed(1)}%
-                    </div>
-                  </div>
-
-                  {/* AT Bar */}
-                  <div className="p-3.5 rounded-xl bg-cyan-50/60 border border-cyan-200 flex flex-col justify-between h-56">
-                    <div className="flex justify-between items-center text-xs font-black uppercase text-cyan-950">
-                      <span>AT (Basket Size)</span>
-                      <span className={`px-2 py-0.5 rounded font-extrabold text-[11px] ${periodBData.at >= periodAData.at ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'}`}>
-                        {calcGrowth(periodAData.at, periodBData.at)}
-                      </span>
-                    </div>
-                    <div className="h-36 flex items-end justify-center gap-2 pt-4">
-                      <div className="flex-1 flex flex-col items-center justify-end h-full">
-                        <span className="text-[10px] font-extrabold text-slate-600 mb-1">
-                          {(periodAData.at / 1000).toFixed(1)}k
-                        </span>
-                        <div
-                          style={{
-                            height: `${Math.min(100, Math.max(14, (periodAData.at / Math.max(periodAData.at, periodBData.at, 100000, 1)) * 100))}%`,
-                          }}
-                          className="w-full bg-slate-300 rounded-t-md transition-all hover:bg-slate-400"
-                        ></div>
-                        <span className="text-[9px] font-bold text-slate-500 mt-1 truncate max-w-[60px]">{periodAData.label}</span>
-                      </div>
-                      <div className="flex-1 flex flex-col items-center justify-end h-full">
-                        <span className="text-[10px] font-black text-cyan-900 mb-1">
-                          {(periodBData.at / 1000).toFixed(1)}k
-                        </span>
-                        <div
-                          style={{
-                            height: `${Math.min(100, Math.max(14, (periodBData.at / Math.max(periodAData.at, periodBData.at, 100000, 1)) * 100))}%`,
-                          }}
-                          className="w-full bg-gradient-to-t from-cyan-600 to-cyan-400 rounded-t-md shadow-xs transition-all"
-                        ></div>
-                        <span className="text-[9px] font-bold text-cyan-950 mt-1 truncate max-w-[60px]">{periodBData.label}</span>
-                      </div>
-                    </div>
-                    <div className="text-[10px] text-center text-slate-600 font-bold border-t border-cyan-200/60 pt-1 mt-1">
-                      Selisih: Rp {(periodBData.at - periodAData.at).toLocaleString('id-ID')}
-                    </div>
                   </div>
                 </div>
               </div>
@@ -1337,65 +1301,65 @@ export const GoogleSlideKPI: React.FC<GoogleSlideKPIProps> = ({
                 </h3>
                 <div className="overflow-x-auto">
                   <table className="w-full text-xs text-left">
-                    <thead className="bg-slate-100 border-b border-slate-200 font-black text-[10px] text-slate-600 uppercase">
+                    <thead className="bg-slate-900 text-white font-black text-[10px] uppercase">
                       <tr>
-                        <th className="p-2.5">Indikator KPI</th>
-                        <th className="p-2.5 text-right">{periodAData.label}</th>
-                        <th className="p-2.5 text-right">{periodBData.label}</th>
-                        <th className="p-2.5 text-right">Selisih (+ / -)</th>
-                        <th className="p-2.5 text-center">Pertumbuhan (%)</th>
+                        <th className="p-3 rounded-tl-xl">Indikator KPI Utama</th>
+                        <th className="p-3 text-right">{periodAData.label}</th>
+                        <th className="p-3 text-right">{periodBData.label}</th>
+                        <th className="p-3 text-right">Selisih (Delta)</th>
+                        <th className="p-3 text-center rounded-tr-xl">Pertumbuhan (%)</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-200 font-semibold text-slate-800">
                       <tr>
-                        <td className="p-2.5 font-bold text-blue-900 flex items-center space-x-2">
+                        <td className="p-3 font-bold text-blue-900 flex items-center space-x-2">
                           <span className="w-2 h-2 rounded-full bg-blue-600"></span>
-                          <span>Penonton (Pax Tiket)</span>
+                          <span>1. Penonton (Pax Tiket)</span>
                         </td>
-                        <td className="p-2.5 text-right">{periodAData.penonton.toLocaleString('id-ID')} Pax</td>
-                        <td className="p-2.5 text-right font-black text-blue-800">{periodBData.penonton.toLocaleString('id-ID')} Pax</td>
-                        <td className="p-2.5 text-right font-bold">{(periodBData.penonton - periodAData.penonton).toLocaleString('id-ID')} Pax</td>
-                        <td className="p-2.5 text-center font-extrabold text-emerald-700">{calcGrowth(periodAData.penonton, periodBData.penonton)}</td>
+                        <td className="p-3 text-right">{periodAData.penonton.toLocaleString('id-ID')} Pax</td>
+                        <td className="p-3 text-right font-black text-blue-800">{periodBData.penonton.toLocaleString('id-ID')} Pax</td>
+                        <td className="p-3 text-right font-bold">{(periodBData.penonton - periodAData.penonton).toLocaleString('id-ID')} Pax</td>
+                        <td className="p-3 text-center font-extrabold text-emerald-700">{calcGrowth(periodAData.penonton, periodBData.penonton)}</td>
                       </tr>
-                      <tr>
-                        <td className="p-2.5 font-bold text-amber-900 flex items-center space-x-2">
+                      <tr className="bg-slate-50/70">
+                        <td className="p-3 font-bold text-amber-900 flex items-center space-x-2">
                           <span className="w-2 h-2 rounded-full bg-amber-500"></span>
-                          <span>SPH (Spending Per Head)</span>
+                          <span>2. SPH (Spending Per Head)</span>
                         </td>
-                        <td className="p-2.5 text-right">Rp {periodAData.sph.toLocaleString('id-ID')}</td>
-                        <td className="p-2.5 text-right font-black text-amber-800">Rp {periodBData.sph.toLocaleString('id-ID')}</td>
-                        <td className="p-2.5 text-right font-bold">Rp {(periodBData.sph - periodAData.sph).toLocaleString('id-ID')}</td>
-                        <td className="p-2.5 text-center font-extrabold text-emerald-700">{calcGrowth(periodAData.sph, periodBData.sph)}</td>
+                        <td className="p-3 text-right">Rp {periodAData.sph.toLocaleString('id-ID')}</td>
+                        <td className="p-3 text-right font-black text-amber-800">Rp {periodBData.sph.toLocaleString('id-ID')}</td>
+                        <td className="p-3 text-right font-bold">Rp {(periodBData.sph - periodAData.sph).toLocaleString('id-ID')}</td>
+                        <td className="p-3 text-center font-extrabold text-emerald-700">{calcGrowth(periodAData.sph, periodBData.sph)}</td>
                       </tr>
                       <tr>
-                        <td className="p-2.5 font-bold text-purple-900 flex items-center space-x-2">
+                        <td className="p-3 font-bold text-purple-900 flex items-center space-x-2">
                           <span className="w-2 h-2 rounded-full bg-purple-600"></span>
-                          <span>% GBO (FnB vs Ticket)</span>
+                          <span>3. % GBO (F&B vs Ticket)</span>
                         </td>
-                        <td className="p-2.5 text-right">{periodAData.gbo}%</td>
-                        <td className="p-2.5 text-right font-black text-purple-800">{periodBData.gbo}%</td>
-                        <td className="p-2.5 text-right font-bold">{(periodBData.gbo - periodAData.gbo).toFixed(1)}%</td>
-                        <td className="p-2.5 text-center font-extrabold text-emerald-700">{calcGrowth(periodAData.gbo, periodBData.gbo)}</td>
+                        <td className="p-3 text-right">{periodAData.gbo}%</td>
+                        <td className="p-3 text-right font-black text-purple-800">{periodBData.gbo}%</td>
+                        <td className="p-3 text-right font-bold">{(periodBData.gbo - periodAData.gbo).toFixed(1)}%</td>
+                        <td className="p-3 text-center font-extrabold text-emerald-700">{calcGrowth(periodAData.gbo, periodBData.gbo)}</td>
                       </tr>
-                      <tr>
-                        <td className="p-2.5 font-bold text-emerald-900 flex items-center space-x-2">
+                      <tr className="bg-slate-50/70">
+                        <td className="p-3 font-bold text-emerald-900 flex items-center space-x-2">
                           <span className="w-2 h-2 rounded-full bg-emerald-600"></span>
-                          <span>Daya Serap (Bill / Penonton)</span>
+                          <span>4. Daya Serap (Bill / Penonton)</span>
                         </td>
-                        <td className="p-2.5 text-right">{periodAData.dayaSerap}%</td>
-                        <td className="p-2.5 text-right font-black text-emerald-800">{periodBData.dayaSerap}%</td>
-                        <td className="p-2.5 text-right font-bold">{(periodBData.dayaSerap - periodAData.dayaSerap).toFixed(1)}%</td>
-                        <td className="p-2.5 text-center font-extrabold text-emerald-700">{calcGrowth(periodAData.dayaSerap, periodBData.dayaSerap)}</td>
+                        <td className="p-3 text-right">{periodAData.dayaSerap}%</td>
+                        <td className="p-3 text-right font-black text-emerald-800">{periodBData.dayaSerap}%</td>
+                        <td className="p-3 text-right font-bold">{(periodBData.dayaSerap - periodAData.dayaSerap).toFixed(1)}%</td>
+                        <td className="p-3 text-center font-extrabold text-emerald-700">{calcGrowth(periodAData.dayaSerap, periodBData.dayaSerap)}</td>
                       </tr>
                       <tr>
-                        <td className="p-2.5 font-bold text-cyan-900 flex items-center space-x-2">
+                        <td className="p-3 font-bold text-cyan-900 flex items-center space-x-2">
                           <span className="w-2 h-2 rounded-full bg-cyan-600"></span>
-                          <span>Average Transaksi (AT)</span>
+                          <span>5. Average Transaksi (AT)</span>
                         </td>
-                        <td className="p-2.5 text-right">Rp {periodAData.at.toLocaleString('id-ID')}</td>
-                        <td className="p-2.5 text-right font-black text-cyan-800">Rp {periodBData.at.toLocaleString('id-ID')}</td>
-                        <td className="p-2.5 text-right font-bold">Rp {(periodBData.at - periodAData.at).toLocaleString('id-ID')}</td>
-                        <td className="p-2.5 text-center font-extrabold text-emerald-700">{calcGrowth(periodAData.at, periodBData.at)}</td>
+                        <td className="p-3 text-right">Rp {periodAData.at.toLocaleString('id-ID')}</td>
+                        <td className="p-3 text-right font-black text-cyan-800">Rp {periodBData.at.toLocaleString('id-ID')}</td>
+                        <td className="p-3 text-right font-bold">Rp {(periodBData.at - periodAData.at).toLocaleString('id-ID')}</td>
+                        <td className="p-3 text-center font-extrabold text-emerald-700">{calcGrowth(periodAData.at, periodBData.at)}</td>
                       </tr>
                     </tbody>
                   </table>
@@ -1405,71 +1369,56 @@ export const GoogleSlideKPI: React.FC<GoogleSlideKPIProps> = ({
           )}
 
           {/* ========================================================================= */}
-          {/* ========================================================================= */}
           {/* SLIDE 2: Analisis SPH (Spending Per Head / Penonton) */}
           {/* ========================================================================= */}
           {currentSlide === 2 && (
-            <div className="space-y-5">
-              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 pb-3">
-                <div>
-                  <h1 className="text-2xl font-black uppercase tracking-tight text-slate-900 flex items-center space-x-2">
-                    <Target className="w-6 h-6 text-amber-600" />
-                    <span>Analisis SPH (Spending Per Head) Cafe vs Target</span>
-                  </h1>
-                  <p className="text-xs text-slate-500 mt-1">
-                    SPH mengukur rata-rata pengeluaran F&B dari setiap 1 penonton bioskop (Omset F&B / Total Penonton Cinema).
-                  </p>
-                </div>
-                <div className="px-3.5 py-1.5 rounded-xl bg-amber-100 text-amber-950 text-xs font-black border border-amber-300 shadow-2xs">
-                  Target Head: Rp {avgTargetHead.toLocaleString('id-ID')}
-                </div>
-              </div>
-
-              {/* Top Horizontal KPI Summary Strip */}
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                <div className="p-3.5 rounded-2xl bg-[#fffdfa] border border-amber-300/80 shadow-2xs space-y-1">
-                  <span className="text-[10px] font-black uppercase tracking-wider text-slate-500 block">{periodBData.label} (Realisasi)</span>
-                  <p className="text-xl font-black text-amber-800 tracking-tight">
-                    Rp {periodBData.sph.toLocaleString('id-ID')}
-                  </p>
-                </div>
-
-                <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-200 shadow-2xs space-y-1">
-                  <span className="text-[10px] font-black uppercase tracking-wider text-slate-500 block">{periodAData.label} (Pembanding)</span>
-                  <div className="flex items-center justify-between">
-                    <p className="text-xl font-black text-slate-800 tracking-tight">
-                      Rp {periodAData.sph.toLocaleString('id-ID')}
+            <div className="space-y-4">
+              {showSummaryStrip && (
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                  <div className="p-3.5 rounded-2xl bg-[#fffdfa] border border-amber-300/80 shadow-2xs space-y-1">
+                    <span className="text-[10px] font-black uppercase tracking-wider text-slate-500 block">{periodBData.label} (Realisasi)</span>
+                    <p className="text-xl font-black text-amber-800 tracking-tight">
+                      Rp {periodBData.sph.toLocaleString('id-ID')}
                     </p>
-                    <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${
-                      isGrowthPositive(periodAData.sph, periodBData.sph) ? 'bg-emerald-100 text-emerald-900 border border-emerald-300' : 'bg-rose-100 text-rose-900 border border-rose-300'
-                    }`}>
-                      {calcGrowth(periodAData.sph, periodBData.sph)}
-                    </span>
+                  </div>
+
+                  <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-200 shadow-2xs space-y-1">
+                    <span className="text-[10px] font-black uppercase tracking-wider text-slate-500 block">{periodAData.label} (Pembanding)</span>
+                    <div className="flex items-center justify-between">
+                      <p className="text-xl font-black text-slate-800 tracking-tight">
+                        Rp {periodAData.sph.toLocaleString('id-ID')}
+                      </p>
+                      <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${
+                        isGrowthPositive(periodAData.sph, periodBData.sph) ? 'bg-emerald-100 text-emerald-900 border border-emerald-300' : 'bg-rose-100 text-rose-900 border border-rose-300'
+                      }`}>
+                        {calcGrowth(periodAData.sph, periodBData.sph)}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="p-3.5 rounded-2xl bg-emerald-50/80 border border-emerald-200/90 shadow-2xs space-y-1">
+                    <span className="text-[10px] font-black uppercase tracking-wider text-emerald-950 block">Pencapaian Target Head</span>
+                    <div className="flex items-center justify-between">
+                      <p className="text-xl font-black text-emerald-800 tracking-tight">
+                        {periodBData.achievement}%
+                      </p>
+                      <span className={`text-[10px] font-black px-2 py-0.5 rounded-md ${periodBData.sph >= avgTargetHead ? 'bg-emerald-200 text-emerald-950' : 'bg-rose-200 text-rose-950'}`}>
+                        {periodBData.sph >= avgTargetHead ? 'Tercapai' : 'Bawah Target'}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="p-3.5 rounded-2xl bg-amber-50/60 border border-amber-200 shadow-2xs space-y-1">
+                    <span className="text-[10px] font-black uppercase tracking-wider text-amber-950 block">Selisih vs Target</span>
+                    <p className="text-xl font-black text-amber-900 tracking-tight">
+                      {periodBData.sph >= avgTargetHead ? '+' : ''}Rp {(periodBData.sph - avgTargetHead).toLocaleString('id-ID')}
+                    </p>
                   </div>
                 </div>
+              )}
 
-                <div className="p-3.5 rounded-2xl bg-emerald-50/80 border border-emerald-200/90 shadow-2xs space-y-1">
-                  <span className="text-[10px] font-black uppercase tracking-wider text-emerald-950 block">Pencapaian Target Head</span>
-                  <div className="flex items-center justify-between">
-                    <p className="text-xl font-black text-emerald-800 tracking-tight">
-                      {periodBData.achievement}%
-                    </p>
-                    <span className={`text-[10px] font-black px-2 py-0.5 rounded-md ${periodBData.sph >= avgTargetHead ? 'bg-emerald-200 text-emerald-950' : 'bg-rose-200 text-rose-950'}`}>
-                      {periodBData.sph >= avgTargetHead ? 'Tercapai' : 'Bawah Target'}
-                    </span>
-                  </div>
-                </div>
-
-                <div className="p-3.5 rounded-2xl bg-amber-50/60 border border-amber-200 shadow-2xs space-y-1">
-                  <span className="text-[10px] font-black uppercase tracking-wider text-amber-950 block">Selisih</span>
-                  <p className="text-xl font-black text-amber-900 tracking-tight">
-                    {periodBData.sph >= avgTargetHead ? '+' : ''}Rp {(periodBData.sph - avgTargetHead).toLocaleString('id-ID')}
-                  </p>
-                </div>
-              </div>
-
-              {/* Dominant Full-Width High-Height Bar Chart (h-[380px]) */}
-              <div className="p-6 rounded-2xl bg-white border border-slate-200 shadow-sm space-y-4">
+              {/* Dominant Full-Width Comparative Bar Chart */}
+              <div className="p-5 rounded-2xl bg-white border border-slate-200 shadow-xs space-y-4">
                 <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-3">
                   <span className="text-xs font-black text-slate-900 uppercase flex items-center space-x-2 tracking-wide">
                     <BarChart3 className="w-4 h-4 text-amber-600" />
@@ -1485,7 +1434,7 @@ export const GoogleSlideKPI: React.FC<GoogleSlideKPIProps> = ({
                       <span className="text-amber-950">{periodBData.label}</span>
                     </span>
                     <span className="text-emerald-800 font-black bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-300">
-                      Garis Target: Rp {avgTargetHead.toLocaleString('id-ID')}
+                      Target: Rp {avgTargetHead.toLocaleString('id-ID')}
                     </span>
                   </div>
                 </div>
@@ -1496,67 +1445,71 @@ export const GoogleSlideKPI: React.FC<GoogleSlideKPIProps> = ({
                     ...sphChartItems.map((x) => Math.max(x.periodA.sph, x.periodB.sph)),
                     avgTargetHead
                   );
-                  const maxSPH = Math.ceil((rawMax * 1.08) / 1000) * 1000;
-                  const targetPct = Math.min(95, Math.max(5, (avgTargetHead / maxSPH) * 100));
+                  const maxSPH = Math.ceil((rawMax * 1.15) / 1000) * 1000;
+                  const targetPct = Math.min(92, Math.max(5, (avgTargetHead / maxSPH) * 100));
 
                   return (
-                    <div className="space-y-3">
-                      <div className="relative h-[400px] border border-slate-200 bg-slate-50/50 p-5 rounded-2xl flex flex-col justify-between shadow-xs">
-                        {/* Top Growth Pill Row */}
-                        <div className="w-full flex items-center justify-between gap-2 z-10 pb-2">
-                          {sphChartItems.map((item, idx) => (
-                            <div key={idx} className="flex-1 flex justify-center">
-                              <span className="text-[11px] sm:text-xs font-black text-amber-950 bg-amber-100 px-2 py-0.5 rounded-lg shadow-2xs whitespace-nowrap border border-amber-300">
-                                {calcGrowth(item.periodA.sph, item.periodB.sph)}
-                              </span>
-                            </div>
-                          ))}
-                        </div>
+                    <div className="space-y-2.5">
+                      <div className="relative h-[380px] border border-slate-200 bg-slate-50/50 p-4 rounded-2xl flex flex-col justify-between">
+                        {showChartGrowthPills && (
+                          <div className="w-full flex items-center justify-between gap-1 z-10 pb-2">
+                            {sphChartItems.map((item, idx) => (
+                              <div key={idx} className="flex-1 flex justify-center">
+                                <span className="text-[10px] font-black text-amber-950 bg-amber-100 px-1.5 py-0.5 rounded-md border border-amber-300 whitespace-nowrap">
+                                  {calcGrowth(item.periodA.sph, item.periodB.sph)}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
 
-                        {/* Main Plot Area containing Target Line & Bars (Exact 1:1 Height Reference Frame) */}
-                        <div className="relative flex-1 w-full flex items-end">
+                        <div className="relative flex-1 w-full flex items-end pt-6">
                           {/* Target dashed line indicator */}
                           <div
                             style={{ bottom: `${targetPct}%` }}
                             className="absolute inset-x-0 border-t-2 border-dashed border-emerald-600 z-20 pointer-events-none flex justify-end"
                           >
-                            <span className="text-[11px] sm:text-xs font-black text-emerald-950 bg-emerald-100/95 px-2.5 py-0.5 rounded-md -mt-3.5 mr-1 border border-emerald-400 shadow-xs backdrop-blur-xs">
-                              Garis Target Head: Rp {avgTargetHead.toLocaleString('id-ID')}
+                            <span className="text-[10px] font-black text-emerald-950 bg-emerald-100/95 px-2 py-0.5 rounded-md -mt-3 mr-1 border border-emerald-400 shadow-2xs">
+                              Target: Rp {avgTargetHead.toLocaleString('id-ID')}
                             </span>
                           </div>
 
-                          <div className="w-full h-full flex items-end justify-between gap-2 z-10">
+                          <div className="w-full h-full flex items-end justify-between gap-1.5 sm:gap-2 z-10">
                             {sphChartItems.map((item, idx) => {
                               const heightA = maxSPH > 0 ? (item.periodA.sph / maxSPH) * 100 : 0;
                               const heightB = maxSPH > 0 ? (item.periodB.sph / maxSPH) * 100 : 0;
 
                               return (
-                                <div key={idx} className="flex-1 h-full flex items-end justify-center gap-1 sm:gap-2">
+                                <div key={idx} className="flex-1 h-full flex items-end justify-center gap-1">
                                   {/* Bar A */}
-                                  <div className="w-1/2 max-w-[80px] h-full relative flex items-end justify-center">
-                                    <span
-                                      style={{ bottom: `${heightA}%` }}
-                                      className="absolute mb-1 text-xs sm:text-sm font-black text-slate-800 bg-white/95 px-2 py-0.5 rounded-lg border border-slate-300 whitespace-nowrap z-30 shadow-xs"
-                                    >
-                                      {(item.periodA.sph / 1000).toFixed(1)}k
-                                    </span>
+                                  <div className="w-1/2 max-w-[44px] h-full relative flex items-end justify-center">
+                                    {showBarValueLabels && item.periodA.sph > 0 && (
+                                      <span
+                                        style={{ bottom: `${heightA}%` }}
+                                        className="absolute mb-1 text-[10px] font-extrabold text-slate-600 whitespace-nowrap z-30"
+                                      >
+                                        {(item.periodA.sph / 1000).toFixed(1)}k
+                                      </span>
+                                    )}
                                     <div
                                       style={{ height: `${Math.max(3, heightA)}%` }}
-                                      className="w-full rounded-t-lg bg-slate-300 transition-all group-hover:bg-slate-400 border-t border-x border-slate-400 shadow-sm"
+                                      className="w-full rounded-t-md bg-slate-300 border-t border-x border-slate-400"
                                       title={`${periodAData.label}: Rp ${item.periodA.sph.toLocaleString('id-ID')}`}
                                     ></div>
                                   </div>
                                   {/* Bar B */}
-                                  <div className="w-1/2 max-w-[80px] h-full relative flex items-end justify-center">
-                                    <span
-                                      style={{ bottom: `${heightB}%` }}
-                                      className="absolute mb-1 text-xs sm:text-sm font-black text-slate-900 bg-white/95 px-2 py-0.5 rounded-lg border border-slate-300 shadow-xs whitespace-nowrap z-30"
-                                    >
-                                      {(item.periodB.sph / 1000).toFixed(1)}k
-                                    </span>
+                                  <div className="w-1/2 max-w-[44px] h-full relative flex items-end justify-center">
+                                    {showBarValueLabels && item.periodB.sph > 0 && (
+                                      <span
+                                        style={{ bottom: `${heightB}%` }}
+                                        className="absolute mb-1 text-[10px] font-black text-slate-900 whitespace-nowrap z-30"
+                                      >
+                                        {(item.periodB.sph / 1000).toFixed(1)}k
+                                      </span>
+                                    )}
                                     <div
                                       style={{ height: `${Math.max(3, heightB)}%` }}
-                                      className={`w-full rounded-t-lg transition-all shadow-md ${
+                                      className={`w-full rounded-t-md shadow-xs ${
                                         item.periodB.sph >= avgTargetHead
                                           ? 'bg-gradient-to-t from-emerald-700 via-emerald-600 to-emerald-400 border-t border-x border-emerald-500'
                                           : 'bg-gradient-to-t from-amber-600 via-amber-500 to-yellow-400 border-t border-x border-amber-500'
@@ -1571,8 +1524,7 @@ export const GoogleSlideKPI: React.FC<GoogleSlideKPIProps> = ({
                         </div>
                       </div>
 
-                      {/* Month Labels aligned exactly with plot columns */}
-                      <div className="flex justify-between gap-2 px-5 text-xs sm:text-sm text-slate-900 font-black">
+                      <div className="flex justify-between gap-1.5 px-4 text-xs text-slate-900 font-black">
                         {sphChartItems.map((item, idx) => (
                           <div key={idx} className="flex-1 text-center truncate">
                             {'shortName' in item ? item.shortName : item.label}
@@ -1584,13 +1536,14 @@ export const GoogleSlideKPI: React.FC<GoogleSlideKPIProps> = ({
                 })()}
               </div>
 
-              {/* Compact Bottom Action Insight Box */}
-              <div className="p-3.5 rounded-2xl bg-amber-50 border border-amber-200 text-xs text-amber-950 flex items-start space-x-3 shadow-2xs">
-                <Lightbulb className="w-5 h-5 text-amber-700 shrink-0 mt-0.5" />
-                <div>
-                  <span className="font-extrabold uppercase tracking-wide">Insight Pembanding SPH:</span> Grafik komparatif menegaskan tren SPH antara {periodAData.label} dan {periodBData.label}. Outlet yang konsisten berada di atas garis target Rp {avgTargetHead.toLocaleString('id-ID')} terbukti aktif menawarkan upselling paket combo promo snack dan minuman.
+              {showInsightBox && (
+                <div className="p-3.5 rounded-2xl bg-amber-50 border border-amber-200 text-xs text-amber-950 flex items-start space-x-3">
+                  <Lightbulb className="w-5 h-5 text-amber-700 shrink-0 mt-0.5" />
+                  <div>
+                    <span className="font-extrabold uppercase tracking-wide">Insight Pembanding SPH:</span> Grafik komparatif menegaskan tren SPH antara {periodAData.label} dan {periodBData.label}. Outlet yang konsisten berada di atas garis target Rp {avgTargetHead.toLocaleString('id-ID')} terbukti aktif menawarkan upselling paket combo promo snack dan minuman.
+                  </div>
                 </div>
-              </div>
+              )}
             </div>
           )}
 
@@ -1598,48 +1551,38 @@ export const GoogleSlideKPI: React.FC<GoogleSlideKPIProps> = ({
           {/* SLIDE 3: Analisis GBO (%) Kontribusi FnB vs Cinema */}
           {/* ========================================================================= */}
           {currentSlide === 3 && (
-            <div className="space-y-5">
-              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 pb-3">
-                <div>
-                  <h1 className="text-2xl font-black uppercase tracking-tight text-slate-900 flex items-center space-x-2">
-                    <Percent className="w-6 h-6 text-purple-600" />
-                    <span>Analisis % GBO (Gross Box Office) Kontribusi F&B</span>
-                  </h1>
-                  <p className="text-xs text-slate-500 mt-1">
-                    Rasio GBO mengukur persentase perbandingan omset F&B terhadap omset penjualan tiket cinema (Omset F&B / Omset Cinema * 100%).
-                  </p>
-                </div>
-                <div className="px-3.5 py-1.5 rounded-xl bg-purple-100 text-purple-950 text-xs font-black border border-purple-300 shadow-2xs">
-                  Benchmark Industri: 40% - 60%
-                </div>
-              </div>
-
-              {/* Top Horizontal KPI Summary Strip */}
-              <div className="grid grid-cols-2 gap-3">
-                <div className="p-3.5 rounded-2xl bg-[#faf7ff] border border-purple-300/80 shadow-2xs space-y-1">
-                  <span className="text-[10px] font-black uppercase tracking-wider text-purple-950 block">{periodBData.label} (Rasio GBO)</span>
-                  <p className="text-xl font-black text-purple-800 tracking-tight">
-                    {periodBData.gbo}%
-                  </p>
-                </div>
-
-                <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-200 shadow-2xs space-y-1">
-                  <span className="text-[10px] font-black uppercase tracking-wider text-slate-500 block">{periodAData.label} (Pembanding)</span>
-                  <div className="flex items-center justify-between">
-                    <p className="text-xl font-black text-slate-800 tracking-tight">
-                      {periodAData.gbo}%
+            <div className="space-y-4">
+              {showSummaryStrip && (
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div className="p-3.5 rounded-2xl bg-[#faf7ff] border border-purple-300/80 shadow-2xs space-y-1">
+                    <span className="text-[10px] font-black uppercase tracking-wider text-purple-950 block">{periodBData.label} (Rasio GBO)</span>
+                    <p className="text-xl font-black text-purple-800 tracking-tight">
+                      {periodBData.gbo}%
                     </p>
-                    <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${
-                      isGrowthPositive(periodAData.gbo, periodBData.gbo) ? 'bg-emerald-100 text-emerald-900 border border-emerald-300' : 'bg-rose-100 text-rose-900 border border-rose-300'
-                    }`}>
-                      {calcGrowth(periodAData.gbo, periodBData.gbo)}
-                    </span>
+                  </div>
+
+                  <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-200 shadow-2xs space-y-1">
+                    <span className="text-[10px] font-black uppercase tracking-wider text-slate-500 block">{periodAData.label} (Pembanding)</span>
+                    <div className="flex items-center justify-between">
+                      <p className="text-xl font-black text-slate-800 tracking-tight">
+                        {periodAData.gbo}%
+                      </p>
+                      <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${
+                        isGrowthPositive(periodAData.gbo, periodBData.gbo) ? 'bg-emerald-100 text-emerald-900 border border-emerald-300' : 'bg-rose-100 text-rose-900 border border-rose-300'
+                      }`}>
+                        {calcGrowth(periodAData.gbo, periodBData.gbo)}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="p-3.5 rounded-2xl bg-purple-50/70 border border-purple-200 shadow-2xs space-y-1">
+                    <span className="text-[10px] font-black uppercase tracking-wider text-purple-950 block">Benchmark Industri</span>
+                    <p className="text-xl font-black text-purple-900 tracking-tight">40% – 60%</p>
                   </div>
                 </div>
-              </div>
+              )}
 
-              {/* Dominant Full-Width High-Height Bar Chart (h-[380px]) */}
-              <div className="p-6 rounded-2xl bg-white border border-slate-200 shadow-sm space-y-4">
+              <div className="p-5 rounded-2xl bg-white border border-slate-200 shadow-xs space-y-4">
                 <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-3">
                   <span className="text-xs font-black text-slate-900 uppercase flex items-center space-x-2 tracking-wide">
                     <BarChart3 className="w-4 h-4 text-purple-600" />
@@ -1663,56 +1606,58 @@ export const GoogleSlideKPI: React.FC<GoogleSlideKPIProps> = ({
                     ...gboChartItems.map((x) => Math.max(x.periodA.gbo, x.periodB.gbo)),
                     40
                   );
-                  const maxGBO = Math.ceil(rawMax * 1.12);
+                  const maxGBO = Math.ceil(rawMax * 1.15);
 
                   return (
-                    <div className="space-y-3">
-                      <div className="relative h-[400px] border border-slate-200 bg-slate-50/50 p-5 rounded-2xl flex flex-col justify-between shadow-xs">
-                        {/* Top Growth Pill Row */}
-                        <div className="w-full flex items-center justify-between gap-2 z-10 pb-2">
-                          {gboChartItems.map((item, idx) => (
-                            <div key={idx} className="flex-1 flex justify-center">
-                              <span className="text-[11px] sm:text-xs font-black text-purple-950 bg-purple-100 px-2 py-0.5 rounded-lg shadow-2xs whitespace-nowrap border border-purple-300">
-                                {calcGrowth(item.periodA.gbo, item.periodB.gbo)}
-                              </span>
-                            </div>
-                          ))}
-                        </div>
+                    <div className="space-y-2.5">
+                      <div className="relative h-[380px] border border-slate-200 bg-slate-50/50 p-4 rounded-2xl flex flex-col justify-between">
+                        {showChartGrowthPills && (
+                          <div className="w-full flex items-center justify-between gap-1 z-10 pb-2">
+                            {gboChartItems.map((item, idx) => (
+                              <div key={idx} className="flex-1 flex justify-center">
+                                <span className="text-[10px] font-black text-purple-950 bg-purple-100 px-1.5 py-0.5 rounded-md border border-purple-300 whitespace-nowrap">
+                                  {calcGrowth(item.periodA.gbo, item.periodB.gbo)}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
 
-                        {/* Main Plot Area containing Bars */}
-                        <div className="relative flex-1 w-full flex items-end">
-                          <div className="w-full h-full flex items-end justify-between gap-2 z-10">
+                        <div className="relative flex-1 w-full flex items-end pt-6">
+                          <div className="w-full h-full flex items-end justify-between gap-1.5 sm:gap-2 z-10">
                             {gboChartItems.map((item, idx) => {
                               const heightA = maxGBO > 0 ? (item.periodA.gbo / maxGBO) * 100 : 0;
                               const heightB = maxGBO > 0 ? (item.periodB.gbo / maxGBO) * 100 : 0;
 
                               return (
-                                <div key={idx} className="flex-1 h-full flex items-end justify-center gap-1 sm:gap-2">
-                                  {/* Bar A */}
-                                  <div className="w-1/2 max-w-[80px] h-full relative flex items-end justify-center">
-                                    <span
-                                      style={{ bottom: `${heightA}%` }}
-                                      className="absolute mb-1 text-xs sm:text-sm font-black text-slate-800 bg-white/95 px-2 py-0.5 rounded-lg border border-slate-300 whitespace-nowrap z-30 shadow-xs"
-                                    >
-                                      {item.periodA.gbo}%
-                                    </span>
+                                <div key={idx} className="flex-1 h-full flex items-end justify-center gap-1">
+                                  <div className="w-1/2 max-w-[44px] h-full relative flex items-end justify-center">
+                                    {showBarValueLabels && item.periodA.gbo > 0 && (
+                                      <span
+                                        style={{ bottom: `${heightA}%` }}
+                                        className="absolute mb-1 text-[10px] font-extrabold text-slate-600 whitespace-nowrap z-30"
+                                      >
+                                        {item.periodA.gbo}%
+                                      </span>
+                                    )}
                                     <div
                                       style={{ height: `${Math.max(3, heightA)}%` }}
-                                      className="w-full rounded-t-lg bg-slate-300 transition-all group-hover:bg-slate-400 border-t border-x border-slate-400 shadow-sm"
+                                      className="w-full rounded-t-md bg-slate-300 border-t border-x border-slate-400"
                                       title={`${periodAData.label}: ${item.periodA.gbo}%`}
                                     ></div>
                                   </div>
-                                  {/* Bar B */}
-                                  <div className="w-1/2 max-w-[80px] h-full relative flex items-end justify-center">
-                                    <span
-                                      style={{ bottom: `${heightB}%` }}
-                                      className="absolute mb-1 text-xs sm:text-sm font-black text-purple-950 bg-white/95 px-2 py-0.5 rounded-lg border border-purple-200 shadow-xs whitespace-nowrap z-30"
-                                    >
-                                      {item.periodB.gbo}%
-                                    </span>
+                                  <div className="w-1/2 max-w-[44px] h-full relative flex items-end justify-center">
+                                    {showBarValueLabels && item.periodB.gbo > 0 && (
+                                      <span
+                                        style={{ bottom: `${heightB}%` }}
+                                        className="absolute mb-1 text-[10px] font-black text-purple-950 whitespace-nowrap z-30"
+                                      >
+                                        {item.periodB.gbo}%
+                                      </span>
+                                    )}
                                     <div
                                       style={{ height: `${Math.max(3, heightB)}%` }}
-                                      className="w-full rounded-t-lg transition-all shadow-md bg-gradient-to-t from-purple-800 via-purple-600 to-purple-400 border-t border-x border-purple-500"
+                                      className="w-full rounded-t-md shadow-xs bg-gradient-to-t from-purple-800 via-purple-600 to-purple-400 border-t border-x border-purple-500"
                                       title={`${periodBData.label}: ${item.periodB.gbo}%`}
                                     ></div>
                                   </div>
@@ -1723,8 +1668,7 @@ export const GoogleSlideKPI: React.FC<GoogleSlideKPIProps> = ({
                         </div>
                       </div>
 
-                      {/* Month Labels aligned exactly with plot columns */}
-                      <div className="flex justify-between gap-2 px-5 text-xs sm:text-sm text-slate-900 font-black">
+                      <div className="flex justify-between gap-1.5 px-4 text-xs text-slate-900 font-black">
                         {gboChartItems.map((item, idx) => (
                           <div key={idx} className="flex-1 text-center truncate">
                             {'shortName' in item ? item.shortName : item.label}
@@ -1736,59 +1680,55 @@ export const GoogleSlideKPI: React.FC<GoogleSlideKPIProps> = ({
                 })()}
               </div>
 
-              <div className="p-3.5 rounded-2xl bg-purple-50 border border-purple-200 text-xs text-purple-950 flex items-start space-x-3 shadow-2xs">
-                <Lightbulb className="w-5 h-5 text-purple-700 shrink-0 mt-0.5" />
-                <div>
-                  <span className="font-extrabold uppercase tracking-wide">Insight Pembanding GBO:</span> Kenaikan % GBO menandakan porsi kontribusi F&B semakin besar terhadap tiket cinema. Rasio yang stabil di atas 40% menegaskan daya tarik ragam menu F&B bioskop XXI.
+              {showInsightBox && (
+                <div className="p-3.5 rounded-2xl bg-purple-50 border border-purple-200 text-xs text-purple-950 flex items-start space-x-3">
+                  <Lightbulb className="w-5 h-5 text-purple-700 shrink-0 mt-0.5" />
+                  <div>
+                    <span className="font-extrabold uppercase tracking-wide">Insight Pembanding GBO:</span> Kenaikan % GBO menandakan porsi kontribusi F&B semakin besar terhadap tiket cinema. Rasio yang stabil di atas 40% menegaskan daya tarik ragam menu F&B bioskop XXI.
+                  </div>
                 </div>
-              </div>
+              )}
             </div>
           )}
 
           {/* ========================================================================= */}
-          {/* ========================================================================= */}
           {/* SLIDE 4: Analisis Daya Serap (%) Penetrasi Pembeli Struk Kasir */}
           {/* ========================================================================= */}
           {currentSlide === 4 && (
-            <div className="space-y-5">
-              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 pb-3">
-                <div>
-                  <h1 className="text-2xl font-black uppercase tracking-tight text-slate-900 flex items-center space-x-2">
-                    <Users className="w-6 h-6 text-emerald-600" />
-                    <span>Analisis Daya Serap (Penetrasi Pembeli Struk Kasir)</span>
-                  </h1>
-                  <p className="text-xs text-slate-500 mt-1">
-                    Daya Serap mengukur rasio jumlah struk transaksi Cafe dibandingkan total penonton bioskop (Bill / Total Penonton * 100%).
-                  </p>
-                </div>
-              </div>
-
-              {/* Top Horizontal KPI Summary Strip */}
-              <div className="grid grid-cols-2 gap-3">
-                <div className="p-3.5 rounded-2xl bg-[#f5fbf7] border border-emerald-300/80 shadow-2xs space-y-1">
-                  <span className="text-[10px] font-black uppercase tracking-wider text-emerald-950 block">{periodBData.label} (Daya Serap)</span>
-                  <p className="text-xl font-black text-emerald-800 tracking-tight">
-                    {periodBData.dayaSerap}%
-                  </p>
-                </div>
-
-                <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-200 shadow-2xs space-y-1">
-                  <span className="text-[10px] font-black uppercase tracking-wider text-slate-500 block">{periodAData.label} (Pembanding)</span>
-                  <div className="flex items-center justify-between">
-                    <p className="text-xl font-black text-slate-800 tracking-tight">
-                      {periodAData.dayaSerap}%
+            <div className="space-y-4">
+              {showSummaryStrip && (
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div className="p-3.5 rounded-2xl bg-[#f5fbf7] border border-emerald-300/80 shadow-2xs space-y-1">
+                    <span className="text-[10px] font-black uppercase tracking-wider text-emerald-950 block">{periodBData.label} (Daya Serap)</span>
+                    <p className="text-xl font-black text-emerald-800 tracking-tight">
+                      {periodBData.dayaSerap}%
                     </p>
-                    <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${
-                      isGrowthPositive(periodAData.dayaSerap, periodBData.dayaSerap) ? 'bg-emerald-100 text-emerald-900 border border-emerald-300' : 'bg-rose-100 text-rose-900 border border-rose-300'
-                    }`}>
-                      {calcGrowth(periodAData.dayaSerap, periodBData.dayaSerap)}
-                    </span>
+                  </div>
+
+                  <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-200 shadow-2xs space-y-1">
+                    <span className="text-[10px] font-black uppercase tracking-wider text-slate-500 block">{periodAData.label} (Pembanding)</span>
+                    <div className="flex items-center justify-between">
+                      <p className="text-xl font-black text-slate-800 tracking-tight">
+                        {periodAData.dayaSerap}%
+                      </p>
+                      <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${
+                        isGrowthPositive(periodAData.dayaSerap, periodBData.dayaSerap) ? 'bg-emerald-100 text-emerald-900 border border-emerald-300' : 'bg-rose-100 text-rose-900 border border-rose-300'
+                      }`}>
+                        {calcGrowth(periodAData.dayaSerap, periodBData.dayaSerap)}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="p-3.5 rounded-2xl bg-emerald-50/70 border border-emerald-200 shadow-2xs space-y-1">
+                    <span className="text-[10px] font-black uppercase tracking-wider text-emerald-950 block">Total Struk vs Penonton</span>
+                    <p className="text-base font-black text-emerald-900 tracking-tight">
+                      {periodBData.bill.toLocaleString('id-ID')} Bill / {periodBData.penonton.toLocaleString('id-ID')} Pax
+                    </p>
                   </div>
                 </div>
-              </div>
+              )}
 
-              {/* Dominant Full-Width High-Height Bar Chart (h-[380px]) */}
-              <div className="p-6 rounded-2xl bg-white border border-slate-200 shadow-sm space-y-4">
+              <div className="p-5 rounded-2xl bg-white border border-slate-200 shadow-xs space-y-4">
                 <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-3">
                   <span className="text-xs font-black text-slate-900 uppercase flex items-center space-x-2 tracking-wide">
                     <BarChart3 className="w-4 h-4 text-emerald-600" />
@@ -1812,56 +1752,58 @@ export const GoogleSlideKPI: React.FC<GoogleSlideKPIProps> = ({
                     ...dsChartItems.map((x) => Math.max(x.periodA.dayaSerap, x.periodB.dayaSerap)),
                     25
                   );
-                  const maxDS = Math.ceil(rawMax * 1.12);
+                  const maxDS = Math.ceil(rawMax * 1.15);
 
                   return (
-                    <div className="space-y-3">
-                      <div className="relative h-[400px] border border-slate-200 bg-slate-50/50 p-5 rounded-2xl flex flex-col justify-between shadow-xs">
-                        {/* Top Growth Pill Row */}
-                        <div className="w-full flex items-center justify-between gap-2 z-10 pb-2">
-                          {dsChartItems.map((item, idx) => (
-                            <div key={idx} className="flex-1 flex justify-center">
-                              <span className="text-[11px] sm:text-xs font-black text-emerald-950 bg-emerald-100 px-2 py-0.5 rounded-lg shadow-2xs whitespace-nowrap border border-emerald-300">
-                                {calcGrowth(item.periodA.dayaSerap, item.periodB.dayaSerap)}
-                              </span>
-                            </div>
-                          ))}
-                        </div>
+                    <div className="space-y-2.5">
+                      <div className="relative h-[380px] border border-slate-200 bg-slate-50/50 p-4 rounded-2xl flex flex-col justify-between">
+                        {showChartGrowthPills && (
+                          <div className="w-full flex items-center justify-between gap-1 z-10 pb-2">
+                            {dsChartItems.map((item, idx) => (
+                              <div key={idx} className="flex-1 flex justify-center">
+                                <span className="text-[10px] font-black text-emerald-950 bg-emerald-100 px-1.5 py-0.5 rounded-md border border-emerald-300 whitespace-nowrap">
+                                  {calcGrowth(item.periodA.dayaSerap, item.periodB.dayaSerap)}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
 
-                        {/* Main Plot Area containing Bars */}
-                        <div className="relative flex-1 w-full flex items-end">
-                          <div className="w-full h-full flex items-end justify-between gap-2 z-10">
+                        <div className="relative flex-1 w-full flex items-end pt-6">
+                          <div className="w-full h-full flex items-end justify-between gap-1.5 sm:gap-2 z-10">
                             {dsChartItems.map((item, idx) => {
                               const heightA = maxDS > 0 ? (item.periodA.dayaSerap / maxDS) * 100 : 0;
                               const heightB = maxDS > 0 ? (item.periodB.dayaSerap / maxDS) * 100 : 0;
 
                               return (
-                                <div key={idx} className="flex-1 h-full flex items-end justify-center gap-1 sm:gap-2">
-                                  {/* Bar A */}
-                                  <div className="w-1/2 max-w-[80px] h-full relative flex items-end justify-center">
-                                    <span
-                                      style={{ bottom: `${heightA}%` }}
-                                      className="absolute mb-1 text-xs sm:text-sm font-black text-slate-800 bg-white/95 px-2 py-0.5 rounded-lg border border-slate-300 whitespace-nowrap z-30 shadow-xs"
-                                    >
-                                      {item.periodA.dayaSerap}%
-                                    </span>
+                                <div key={idx} className="flex-1 h-full flex items-end justify-center gap-1">
+                                  <div className="w-1/2 max-w-[44px] h-full relative flex items-end justify-center">
+                                    {showBarValueLabels && item.periodA.dayaSerap > 0 && (
+                                      <span
+                                        style={{ bottom: `${heightA}%` }}
+                                        className="absolute mb-1 text-[10px] font-extrabold text-slate-600 whitespace-nowrap z-30"
+                                      >
+                                        {item.periodA.dayaSerap}%
+                                      </span>
+                                    )}
                                     <div
                                       style={{ height: `${Math.max(3, heightA)}%` }}
-                                      className="w-full rounded-t-lg bg-slate-300 transition-all group-hover:bg-slate-400 border-t border-x border-slate-400 shadow-sm"
+                                      className="w-full rounded-t-md bg-slate-300 border-t border-x border-slate-400"
                                       title={`${periodAData.label}: ${item.periodA.dayaSerap}%`}
                                     ></div>
                                   </div>
-                                  {/* Bar B */}
-                                  <div className="w-1/2 max-w-[80px] h-full relative flex items-end justify-center">
-                                    <span
-                                      style={{ bottom: `${heightB}%` }}
-                                      className="absolute mb-1 text-xs sm:text-sm font-black text-emerald-950 bg-white/95 px-2 py-0.5 rounded-lg border border-emerald-200 shadow-xs whitespace-nowrap z-30"
-                                    >
-                                      {item.periodB.dayaSerap}%
-                                    </span>
+                                  <div className="w-1/2 max-w-[44px] h-full relative flex items-end justify-center">
+                                    {showBarValueLabels && item.periodB.dayaSerap > 0 && (
+                                      <span
+                                        style={{ bottom: `${heightB}%` }}
+                                        className="absolute mb-1 text-[10px] font-black text-emerald-950 whitespace-nowrap z-30"
+                                      >
+                                        {item.periodB.dayaSerap}%
+                                      </span>
+                                    )}
                                     <div
                                       style={{ height: `${Math.max(3, heightB)}%` }}
-                                      className="w-full rounded-t-lg transition-all shadow-md bg-gradient-to-t from-emerald-800 via-emerald-600 to-emerald-400 border-t border-x border-emerald-500"
+                                      className="w-full rounded-t-md shadow-xs bg-gradient-to-t from-emerald-800 via-emerald-600 to-emerald-400 border-t border-x border-emerald-500"
                                       title={`${periodBData.label}: ${item.periodB.dayaSerap}%`}
                                     ></div>
                                   </div>
@@ -1872,8 +1814,7 @@ export const GoogleSlideKPI: React.FC<GoogleSlideKPIProps> = ({
                         </div>
                       </div>
 
-                      {/* Month Labels aligned exactly with plot columns */}
-                      <div className="flex justify-between gap-2 px-5 text-xs sm:text-sm text-slate-900 font-black">
+                      <div className="flex justify-between gap-1.5 px-4 text-xs text-slate-900 font-black">
                         {dsChartItems.map((item, idx) => (
                           <div key={idx} className="flex-1 text-center truncate">
                             {'shortName' in item ? item.shortName : item.label}
@@ -1885,12 +1826,14 @@ export const GoogleSlideKPI: React.FC<GoogleSlideKPIProps> = ({
                 })()}
               </div>
 
-              <div className="p-3.5 rounded-2xl bg-emerald-50 border border-emerald-200 text-xs text-emerald-950 flex items-start space-x-3 shadow-2xs">
-                <Lightbulb className="w-5 h-5 text-emerald-700 shrink-0 mt-0.5" />
-                <div>
-                  <span className="font-extrabold uppercase tracking-wide">Insight Pembanding Daya Serap:</span> Peningkatan indikator Daya Serap merefleksikan keberhasilan mendorong penonton bioskop singgah dan bertransaksi di kasir Cafe XXI, terutama sebelum jam tayang show film dimulai.
+              {showInsightBox && (
+                <div className="p-3.5 rounded-2xl bg-emerald-50 border border-emerald-200 text-xs text-emerald-950 flex items-start space-x-3">
+                  <Lightbulb className="w-5 h-5 text-emerald-700 shrink-0 mt-0.5" />
+                  <div>
+                    <span className="font-extrabold uppercase tracking-wide">Insight Pembanding Daya Serap:</span> Peningkatan indikator Daya Serap merefleksikan keberhasilan mendorong penonton bioskop singgah dan bertransaksi di kasir Cafe XXI, terutama sebelum jam tayang show film dimulai.
+                  </div>
                 </div>
-              </div>
+              )}
             </div>
           )}
 
@@ -1898,55 +1841,40 @@ export const GoogleSlideKPI: React.FC<GoogleSlideKPIProps> = ({
           {/* SLIDE 5: Analisis Average Transaksi (AT / Basket Size) */}
           {/* ========================================================================= */}
           {currentSlide === 5 && (
-            <div className="space-y-5">
-              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 pb-3">
-                <div>
-                  <h1 className="text-2xl font-black uppercase tracking-tight text-slate-900 flex items-center space-x-2">
-                    <CreditCard className="w-6 h-6 text-cyan-600" />
-                    <span>Analisis Average Transaksi (AT / Basket Size) per Struk</span>
-                  </h1>
-                  <p className="text-xs text-slate-500 mt-1">
-                    AT mencerminkan nilai rata-rata nominal rupiah per satu struk belanja kasir Cafe (Omset F&B / Total Struk Bill).
-                  </p>
-                </div>
-                <div className="px-3.5 py-1.5 rounded-xl bg-cyan-100 text-cyan-950 text-xs font-black border border-cyan-300 shadow-2xs">
-                  Target Basket Size: Rp 100.000+
-                </div>
-              </div>
-
-              {/* Top Horizontal KPI Summary Strip */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <div className="p-3.5 rounded-2xl bg-[#f4fafc] border border-cyan-300/80 shadow-2xs space-y-1">
-                  <span className="text-[10px] font-black uppercase tracking-wider text-cyan-950 block">{periodBData.label} (Nilai AT)</span>
-                  <p className="text-xl font-black text-cyan-800 tracking-tight">
-                    Rp {periodBData.at.toLocaleString('id-ID')}
-                  </p>
-                </div>
-
-                <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-200 shadow-2xs space-y-1">
-                  <span className="text-[10px] font-black uppercase tracking-wider text-slate-500 block">{periodAData.label} (Pembanding)</span>
-                  <div className="flex items-center justify-between">
-                    <p className="text-xl font-black text-slate-800 tracking-tight">
-                      Rp {periodAData.at.toLocaleString('id-ID')}
+            <div className="space-y-4">
+              {showSummaryStrip && (
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div className="p-3.5 rounded-2xl bg-[#f4fafc] border border-cyan-300/80 shadow-2xs space-y-1">
+                    <span className="text-[10px] font-black uppercase tracking-wider text-cyan-950 block">{periodBData.label} (Nilai AT)</span>
+                    <p className="text-xl font-black text-cyan-800 tracking-tight">
+                      Rp {periodBData.at.toLocaleString('id-ID')}
                     </p>
-                    <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${
-                      isGrowthPositive(periodAData.at, periodBData.at) ? 'bg-emerald-100 text-emerald-900 border border-emerald-300' : 'bg-rose-100 text-rose-900 border border-rose-300'
-                    }`}>
-                      {calcGrowth(periodAData.at, periodBData.at)}
-                    </span>
+                  </div>
+
+                  <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-200 shadow-2xs space-y-1">
+                    <span className="text-[10px] font-black uppercase tracking-wider text-slate-500 block">{periodAData.label} (Pembanding)</span>
+                    <div className="flex items-center justify-between">
+                      <p className="text-xl font-black text-slate-800 tracking-tight">
+                        Rp {periodAData.at.toLocaleString('id-ID')}
+                      </p>
+                      <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${
+                        isGrowthPositive(periodAData.at, periodBData.at) ? 'bg-emerald-100 text-emerald-900 border border-emerald-300' : 'bg-rose-100 text-rose-900 border border-rose-300'
+                      }`}>
+                        {calcGrowth(periodAData.at, periodBData.at)}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="p-3.5 rounded-2xl bg-cyan-50/80 border border-cyan-200/90 shadow-2xs space-y-1">
+                    <span className="text-[10px] font-black uppercase tracking-wider text-cyan-950 block">Selisih Rupiah per Struk</span>
+                    <p className="text-xl font-black text-cyan-900 tracking-tight">
+                      {periodBData.at >= periodAData.at ? '+' : ''}Rp {(periodBData.at - periodAData.at).toLocaleString('id-ID')}
+                    </p>
                   </div>
                 </div>
+              )}
 
-                <div className="p-3.5 rounded-2xl bg-cyan-50/80 border border-cyan-200/90 shadow-2xs space-y-1">
-                  <span className="text-[10px] font-black uppercase tracking-wider text-cyan-950 block">Selisih Rupiah per Struk</span>
-                  <p className="text-xl font-black text-cyan-900 tracking-tight">
-                    +Rp {(periodBData.at - periodAData.at).toLocaleString('id-ID')}
-                  </p>
-                </div>
-              </div>
-
-              {/* Dominant Full-Width High-Height Bar Chart (h-[380px]) */}
-              <div className="p-6 rounded-2xl bg-white border border-slate-200 shadow-sm space-y-4">
+              <div className="p-5 rounded-2xl bg-white border border-slate-200 shadow-xs space-y-4">
                 <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-3">
                   <span className="text-xs font-black text-slate-900 uppercase flex items-center space-x-2 tracking-wide">
                     <BarChart3 className="w-4 h-4 text-cyan-600" />
@@ -1970,56 +1898,58 @@ export const GoogleSlideKPI: React.FC<GoogleSlideKPIProps> = ({
                     ...atChartItems.map((x) => Math.max(x.periodA.at, x.periodB.at)),
                     50000
                   );
-                  const maxAT = Math.ceil((rawMax * 1.12) / 1000) * 1000;
+                  const maxAT = Math.ceil((rawMax * 1.15) / 1000) * 1000;
 
                   return (
-                    <div className="space-y-3">
-                      <div className="relative h-[400px] border border-slate-200 bg-slate-50/50 p-5 rounded-2xl flex flex-col justify-between shadow-xs">
-                        {/* Top Growth Pill Row */}
-                        <div className="w-full flex items-center justify-between gap-2 z-10 pb-2">
-                          {atChartItems.map((item, idx) => (
-                            <div key={idx} className="flex-1 flex justify-center">
-                              <span className="text-[11px] sm:text-xs font-black text-cyan-950 bg-cyan-100 px-2 py-0.5 rounded-lg shadow-2xs whitespace-nowrap border border-cyan-300">
-                                {calcGrowth(item.periodA.at, item.periodB.at)}
-                              </span>
-                            </div>
-                          ))}
-                        </div>
+                    <div className="space-y-2.5">
+                      <div className="relative h-[380px] border border-slate-200 bg-slate-50/50 p-4 rounded-2xl flex flex-col justify-between">
+                        {showChartGrowthPills && (
+                          <div className="w-full flex items-center justify-between gap-1 z-10 pb-2">
+                            {atChartItems.map((item, idx) => (
+                              <div key={idx} className="flex-1 flex justify-center">
+                                <span className="text-[10px] font-black text-cyan-950 bg-cyan-100 px-1.5 py-0.5 rounded-md border border-cyan-300 whitespace-nowrap">
+                                  {calcGrowth(item.periodA.at, item.periodB.at)}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
 
-                        {/* Main Plot Area containing Bars */}
-                        <div className="relative flex-1 w-full flex items-end">
-                          <div className="w-full h-full flex items-end justify-between gap-2 z-10">
+                        <div className="relative flex-1 w-full flex items-end pt-6">
+                          <div className="w-full h-full flex items-end justify-between gap-1.5 sm:gap-2 z-10">
                             {atChartItems.map((item, idx) => {
                               const heightA = maxAT > 0 ? (item.periodA.at / maxAT) * 100 : 0;
                               const heightB = maxAT > 0 ? (item.periodB.at / maxAT) * 100 : 0;
 
                               return (
-                                <div key={idx} className="flex-1 h-full flex items-end justify-center gap-1 sm:gap-2">
-                                  {/* Bar A */}
-                                  <div className="w-1/2 max-w-[80px] h-full relative flex items-end justify-center">
-                                    <span
-                                      style={{ bottom: `${heightA}%` }}
-                                      className="absolute mb-1 text-xs sm:text-sm font-black text-slate-800 bg-white/95 px-2 py-0.5 rounded-lg border border-slate-300 whitespace-nowrap z-30 shadow-xs"
-                                    >
-                                      {(item.periodA.at / 1000).toFixed(0)}k
-                                    </span>
+                                <div key={idx} className="flex-1 h-full flex items-end justify-center gap-1">
+                                  <div className="w-1/2 max-w-[44px] h-full relative flex items-end justify-center">
+                                    {showBarValueLabels && item.periodA.at > 0 && (
+                                      <span
+                                        style={{ bottom: `${heightA}%` }}
+                                        className="absolute mb-1 text-[10px] font-extrabold text-slate-600 whitespace-nowrap z-30"
+                                      >
+                                        {(item.periodA.at / 1000).toFixed(0)}k
+                                      </span>
+                                    )}
                                     <div
                                       style={{ height: `${Math.max(3, heightA)}%` }}
-                                      className="w-full rounded-t-lg bg-slate-300 transition-all group-hover:bg-slate-400 border-t border-x border-slate-400 shadow-sm"
+                                      className="w-full rounded-t-md bg-slate-300 border-t border-x border-slate-400"
                                       title={`${periodAData.label}: Rp ${item.periodA.at.toLocaleString('id-ID')}`}
                                     ></div>
                                   </div>
-                                  {/* Bar B */}
-                                  <div className="w-1/2 max-w-[80px] h-full relative flex items-end justify-center">
-                                    <span
-                                      style={{ bottom: `${heightB}%` }}
-                                      className="absolute mb-1 text-xs sm:text-sm font-black text-cyan-950 bg-white/95 px-2 py-0.5 rounded-lg border border-cyan-200 shadow-xs whitespace-nowrap z-30"
-                                    >
-                                      {(item.periodB.at / 1000).toFixed(0)}k
-                                    </span>
+                                  <div className="w-1/2 max-w-[44px] h-full relative flex items-end justify-center">
+                                    {showBarValueLabels && item.periodB.at > 0 && (
+                                      <span
+                                        style={{ bottom: `${heightB}%` }}
+                                        className="absolute mb-1 text-[10px] font-black text-cyan-950 whitespace-nowrap z-30"
+                                      >
+                                        {(item.periodB.at / 1000).toFixed(0)}k
+                                      </span>
+                                    )}
                                     <div
                                       style={{ height: `${Math.max(3, heightB)}%` }}
-                                      className="w-full rounded-t-lg transition-all shadow-md bg-gradient-to-t from-cyan-800 via-cyan-600 to-cyan-400 border-t border-x border-cyan-500"
+                                      className="w-full rounded-t-md shadow-xs bg-gradient-to-t from-cyan-800 via-cyan-600 to-cyan-400 border-t border-x border-cyan-500"
                                       title={`${periodBData.label}: Rp ${item.periodB.at.toLocaleString('id-ID')}`}
                                     ></div>
                                   </div>
@@ -2030,8 +1960,7 @@ export const GoogleSlideKPI: React.FC<GoogleSlideKPIProps> = ({
                         </div>
                       </div>
 
-                      {/* Month Labels aligned exactly with plot columns */}
-                      <div className="flex justify-between gap-2 px-5 text-xs sm:text-sm text-slate-900 font-black">
+                      <div className="flex justify-between gap-1.5 px-4 text-xs text-slate-900 font-black">
                         {atChartItems.map((item, idx) => (
                           <div key={idx} className="flex-1 text-center truncate">
                             {'shortName' in item ? item.shortName : item.label}
@@ -2043,12 +1972,14 @@ export const GoogleSlideKPI: React.FC<GoogleSlideKPIProps> = ({
                 })()}
               </div>
 
-              <div className="p-3.5 rounded-2xl bg-cyan-50 border border-cyan-200 text-xs text-cyan-950 flex items-start space-x-3 shadow-2xs">
-                <Lightbulb className="w-5 h-5 text-cyan-700 shrink-0 mt-0.5" />
-                <div>
-                  <span className="font-extrabold uppercase tracking-wide">Insight Pembanding AT:</span> Kenaikan nilai transaksi per struk (Basket Size) membuktikan keberhasilan program paket bundling promo combo snack XXI, minuman berukuran jumbo, serta penawaran merchandise edisi film terbatas.
+              {showInsightBox && (
+                <div className="p-3.5 rounded-2xl bg-cyan-50 border border-cyan-200 text-xs text-cyan-950 flex items-start space-x-3">
+                  <Lightbulb className="w-5 h-5 text-cyan-700 shrink-0 mt-0.5" />
+                  <div>
+                    <span className="font-extrabold uppercase tracking-wide">Insight Pembanding AT:</span> Kenaikan nilai transaksi per struk (Basket Size) membuktikan keberhasilan program paket bundling promo combo snack XXI, minuman berukuran jumbo, serta penawaran merchandise edisi film terbatas.
+                  </div>
                 </div>
-              </div>
+              )}
             </div>
           )}
 
@@ -2056,21 +1987,12 @@ export const GoogleSlideKPI: React.FC<GoogleSlideKPIProps> = ({
           {/* SLIDE 6: Volume Penonton & Perbandingan Omset Finansial */}
           {/* ========================================================================= */}
           {currentSlide === 6 && (
-            <div className="space-y-6">
-              <div className="border-b border-slate-200 pb-3">
-                <h1 className="text-2xl font-black uppercase tracking-tight text-slate-900">
-                  Volume Penonton & Perbandingan Omset Finansial
-                </h1>
-                <p className="text-xs text-slate-500 mt-1">
-                  Komparasi menyeluruh volume penonton cinema, total transaksi kasir bill, dan pendapatan finansial.
-                </p>
-              </div>
-
+            <div className="space-y-5">
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                 <div className="p-5 rounded-2xl bg-[#faf8f4] border border-slate-300 space-y-2 shadow-2xs">
                   <span className="text-xs uppercase font-extrabold text-slate-500">Penonton Cinema</span>
-                  <p className="text-2xl font-black text-slate-900">{periodBData.penonton.toLocaleString('id-ID')} penonton</p>
-                  <p className="text-xs text-slate-500 font-medium">Vs {periodAData.label}: {periodAData.penonton.toLocaleString('id-ID')} penonton</p>
+                  <p className="text-2xl font-black text-slate-900">{periodBData.penonton.toLocaleString('id-ID')} Pax</p>
+                  <p className="text-xs text-slate-500 font-medium">Vs {periodAData.label}: {periodAData.penonton.toLocaleString('id-ID')} Pax</p>
                   <span className="text-xs font-black text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full inline-block">
                     {calcGrowth(periodAData.penonton, periodBData.penonton)}
                   </span>
@@ -2078,8 +2000,8 @@ export const GoogleSlideKPI: React.FC<GoogleSlideKPIProps> = ({
 
                 <div className="p-5 rounded-2xl bg-[#faf8f4] border border-slate-300 space-y-2 shadow-2xs">
                   <span className="text-xs uppercase font-extrabold text-slate-500">Total Struk Kasir (Bill)</span>
-                  <p className="text-2xl font-black text-slate-900">{periodBData.bill.toLocaleString('id-ID')} bill</p>
-                  <p className="text-xs text-slate-500 font-medium">Vs {periodAData.label}: {periodAData.bill.toLocaleString('id-ID')} bill</p>
+                  <p className="text-2xl font-black text-slate-900">{periodBData.bill.toLocaleString('id-ID')} Bill</p>
+                  <p className="text-xs text-slate-500 font-medium">Vs {periodAData.label}: {periodAData.bill.toLocaleString('id-ID')} Bill</p>
                   <span className="text-xs font-black text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full inline-block">
                     {calcGrowth(periodAData.bill, periodBData.bill)}
                   </span>
@@ -2104,7 +2026,6 @@ export const GoogleSlideKPI: React.FC<GoogleSlideKPIProps> = ({
                 </div>
               </div>
 
-              {/* Revenue Contribution Ratio Progress Bar */}
               <div className="p-6 rounded-2xl bg-white border border-slate-200 shadow-xs space-y-4">
                 <span className="text-xs font-black uppercase tracking-wide text-slate-900 block">
                   Proporsi Total Pendapatan Finansial ({periodBData.label}): F&B Cafe vs Ticket Box Office
@@ -2140,15 +2061,28 @@ export const GoogleSlideKPI: React.FC<GoogleSlideKPIProps> = ({
           {/* ========================================================================= */}
           {currentSlide === 7 && (
             <div className="space-y-4">
-              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-3">
-                <div>
-                  <h2 className="text-xl sm:text-2xl font-black uppercase text-slate-900 flex items-center space-x-2">
-                    <Trophy className="w-6 h-6 text-amber-500" />
-                    <span>Peringkat Performa Outlet & Pencapaian Target ({periodBData.label})</span>
-                  </h2>
-                  <p className="text-xs text-slate-500 mt-0.5">
-                    Urutan dan pemetaan performa seluruh outlet berdasarkan indikator terpilih.
-                  </p>
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="flex flex-wrap items-center gap-2 text-xs font-bold text-slate-600">
+                  <div className="flex items-center space-x-1.5">
+                    <Trophy className="w-4 h-4 text-amber-500" />
+                    <span>Total {outletRankingList.length} Outlet</span>
+                  </div>
+                  <span className="text-slate-300">|</span>
+                  {areas.map((areaItem) => {
+                    const isSelectedArea = selectedAreaId === areaItem.id;
+                    return (
+                      <span
+                        key={areaItem.id}
+                        className={`px-2.5 py-0.5 rounded-lg text-[11px] font-extrabold border ${
+                          isSelectedArea
+                            ? 'bg-amber-100 border-amber-400 text-amber-950'
+                            : 'bg-slate-50 border-slate-200 text-slate-700'
+                        }`}
+                      >
+                        {areaItem.name}: Target Rp {areaItem.targetArea.toLocaleString('id-ID')}
+                      </span>
+                    );
+                  })}
                 </div>
 
                 <div className="flex items-center space-x-2">
@@ -2171,14 +2105,14 @@ export const GoogleSlideKPI: React.FC<GoogleSlideKPIProps> = ({
 
               <div className="overflow-x-auto max-h-[500px] rounded-2xl border border-slate-200 shadow-2xs">
                 <table className="w-full text-xs text-left">
-                  <thead className="uppercase text-[10px] font-black border-b border-slate-200 bg-slate-100 text-slate-700 sticky top-0 z-10">
+                  <thead className="uppercase text-[10px] font-black border-b border-slate-200 bg-slate-900 text-white sticky top-0 z-10">
                     <tr>
                       <th className="py-3 px-3 text-center">Rank</th>
                       <th className="py-3 px-3">Nama Outlet</th>
                       <th className="py-3 px-3">Wilayah Area</th>
                       <th className="py-3 px-3 text-right">Penonton</th>
                       <th className="py-3 px-3 text-right">Target SPH</th>
-                      <th className="py-3 px-3 text-right text-amber-900">SPH Realisasi</th>
+                      <th className="py-3 px-3 text-right text-amber-300">SPH Realisasi</th>
                       <th className="py-3 px-3 text-center">% Ach</th>
                       <th className="py-3 px-3 text-center">% GBO</th>
                       <th className="py-3 px-3 text-center">Daya Serap</th>
@@ -2243,22 +2177,7 @@ export const GoogleSlideKPI: React.FC<GoogleSlideKPIProps> = ({
           {/* SLIDE 8: Evaluasi Performa & Rencana Aksi Bisnis (Action Plan) */}
           {/* ========================================================================= */}
           {currentSlide === 8 && (
-            <div className="space-y-6">
-              <div className="flex items-center space-x-3 border-b border-slate-200 pb-3">
-                <span className="p-2.5 rounded-2xl bg-amber-500 text-slate-950 font-black shadow-xs">
-                  <CheckCircle2 className="w-6 h-6" />
-                </span>
-                <div>
-                  <h1 className="text-2xl font-black uppercase tracking-tight text-slate-900">
-                    Evaluasi Performa & Rencana Aksi Bisnis (Action Plan)
-                  </h1>
-                  <p className="text-xs text-slate-500">
-                    Sintesis analitis 4 pilar KPI ({periodAData.label} vs {periodBData.label}) untuk strategi peningkatan omset F&B.
-                  </p>
-                </div>
-              </div>
-
-              {/* 4 Cards Matrix Evaluasi */}
+            <div className="space-y-5">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
                 {/* Evaluasi 1: SPH */}
                 <div className="p-5 rounded-2xl bg-amber-50/80 border border-amber-200/90 space-y-3 shadow-2xs">
@@ -2345,6 +2264,7 @@ export const GoogleSlideKPI: React.FC<GoogleSlideKPIProps> = ({
               <div className="p-5 rounded-2xl bg-slate-900 text-white flex flex-wrap items-center justify-between gap-4 shadow-md">
                 <div className="space-y-1 max-w-2xl">
                   <div className="flex items-center space-x-2">
+                    <CheckCircle2 className="w-5 h-5 text-amber-400" />
                     <span className="text-amber-400 font-black text-base">Kesimpulan Rapat Executive & Direction</span>
                     <span className="text-[10px] px-2.5 py-0.5 rounded-full bg-emerald-500 text-slate-950 font-black uppercase">SIAP DIEKSEKUSI</span>
                   </div>
@@ -2365,7 +2285,7 @@ export const GoogleSlideKPI: React.FC<GoogleSlideKPIProps> = ({
         </div>
 
         {/* Bottom Slide Navigation Tabs */}
-        <div className="mt-8 pt-4 border-t border-slate-200 flex flex-wrap items-center justify-between gap-2">
+        <div className="mt-6 pt-4 border-t border-slate-200 flex flex-wrap items-center justify-between gap-2">
           <button
             onClick={handlePrevSlide}
             disabled={currentSlide === 1}
@@ -2401,4 +2321,6 @@ export const GoogleSlideKPI: React.FC<GoogleSlideKPIProps> = ({
       </div>
     </div>
   );
+
+  return isFullscreen ? createPortal(deckContent, document.body) : deckContent;
 };

@@ -96,10 +96,12 @@ export const ExecutiveDashboard: React.FC<ExecutiveDashboardProps> = ({
     targetArea
   );
 
-  // Per-show aggregation for timeline
-  const showSummary = [1, 2, 3, 4, 5].map((showNum) => {
+  // Per-show aggregation for timeline with Head SPH & Growth %
+  const showSummaryRaw = [1, 2, 3, 4, 5].map((showNum) => {
     let showCin = 0;
     let showFnB = 0;
+    let showPnt = 0;
+    let showBll = 0;
     let lockedCount = 0;
     let filledCount = 0;
 
@@ -112,17 +114,51 @@ export const ExecutiveDashboard: React.FC<ExecutiveDashboardProps> = ({
           if (sh.isLocked) lockedCount++;
           showCin += sh.omsetCinema || 0;
           showFnB += sh.omsetFnB || 0;
+          showPnt += sh.penonton || 0;
+          showBll += sh.bill || 0;
         }
       }
     });
+
+    const head = showPnt > 0 ? Math.round(showFnB / showPnt) : 0;
 
     return {
       showNumber: showNum,
       omsetCinema: showCin,
       omsetFnB: showFnB,
+      penonton: showPnt,
+      bill: showBll,
+      head,
       filledCount,
       lockedCount,
       status: lockedCount > 0 ? 'locked' : filledCount > 0 ? 'active' : 'pending',
+    };
+  });
+
+  const showSummary = showSummaryRaw.map((sh, idx) => {
+    let growth = 0;
+    let compareLabel = '';
+
+    if (idx === 0) {
+      if (targetArea > 0 && sh.head > 0) {
+        growth = ((sh.head - targetArea) / targetArea) * 100;
+        compareLabel = 'vs Target';
+      }
+    } else {
+      const prev = showSummaryRaw[idx - 1];
+      if (prev && prev.head > 0 && sh.head > 0) {
+        growth = ((sh.head - prev.head) / prev.head) * 100;
+        compareLabel = `vs Show ${prev.showNumber}`;
+      } else if (targetArea > 0 && sh.head > 0) {
+        growth = ((sh.head - targetArea) / targetArea) * 100;
+        compareLabel = 'vs Target';
+      }
+    }
+
+    return {
+      ...sh,
+      growth,
+      compareLabel,
     };
   });
 
@@ -362,12 +398,14 @@ export const ExecutiveDashboard: React.FC<ExecutiveDashboardProps> = ({
             {showSummary.map((sh) => {
               const isLocked = sh.status === 'locked';
               const isActive = sh.status === 'active';
+              const isGrowthPositive = sh.growth > 0;
+              const isGrowthNegative = sh.growth < 0;
 
               return (
                 <div
                   key={sh.showNumber}
                   onClick={() => onNavigate('sales_input')}
-                  className={`p-2.5 sm:p-3 rounded-lg border text-left transition cursor-pointer relative overflow-hidden flex-1 ${
+                  className={`p-2.5 sm:p-3 rounded-xl border text-left transition cursor-pointer relative overflow-hidden flex-1 shadow-2xs hover:shadow-md ${
                     isLocked
                       ? 'bg-amber-50/90 border-amber-300 text-slate-900'
                       : isActive
@@ -375,26 +413,47 @@ export const ExecutiveDashboard: React.FC<ExecutiveDashboardProps> = ({
                       : 'bg-slate-50 border-slate-200 text-slate-500'
                   }`}
                 >
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-extrabold uppercase">
-                      Show {sh.showNumber}
+                  <div className="flex items-center justify-between gap-1">
+                    <span className="text-xs font-black uppercase text-slate-900">
+                      SHOW {sh.showNumber}
                     </span>
-                    {isLocked ? (
-                      <Lock className="w-3.5 h-3.5 text-amber-700 shrink-0" />
-                    ) : isActive ? (
-                      <CheckCircle2 className="w-3.5 h-3.5 text-blue-600 shrink-0" />
-                    ) : (
-                      <Clock className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                    )}
+                    <div className="flex items-center space-x-1">
+                      {isLocked ? (
+                        <Lock className="w-3.5 h-3.5 text-amber-700 shrink-0" />
+                      ) : isActive ? (
+                        <CheckCircle2 className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                      ) : (
+                        <Clock className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                      )}
+                    </div>
                   </div>
 
-                  <div className="mt-1.5">
-                    <p className="text-xs font-bold tracking-tight text-slate-800">
-                      F&amp;B: Rp {(sh.omsetFnB / 1000).toFixed(0)}rb
+                  <div className="mt-2 space-y-1">
+                    <div className="flex items-center justify-between gap-1">
+                      <span className="text-[10px] uppercase font-bold text-slate-500">HEAD (SPH):</span>
+                      <span
+                        title={sh.compareLabel}
+                        className={`text-[10px] font-black px-1.5 py-0.5 rounded-md flex items-center gap-0.5 ${
+                          isGrowthPositive
+                            ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+                            : isGrowthNegative
+                            ? 'bg-rose-100 text-rose-800 border border-rose-200'
+                            : 'bg-slate-100 text-slate-600 border border-slate-200'
+                        }`}
+                      >
+                        {isGrowthPositive ? '▲ ' : isGrowthNegative ? '▼ ' : ''}
+                        {sh.growth > 0 ? `+${sh.growth.toFixed(1)}%` : `${sh.growth.toFixed(1)}%`}
+                      </span>
+                    </div>
+
+                    <p className="text-sm sm:text-base font-black tracking-tight text-amber-950">
+                      Rp {sh.head.toLocaleString('id-ID')}
                     </p>
-                    <p className="text-[10px] text-slate-500 mt-0.5">
-                      {sh.lockedCount}/{filteredOutlets.length} outlet terkunci
-                    </p>
+
+                    <div className="flex items-center justify-between text-[10px] text-slate-500 pt-1 border-t border-slate-200/60">
+                      <span className="font-semibold text-slate-700">{sh.penonton.toLocaleString('id-ID')} Head</span>
+                      <span className="text-slate-400">{sh.lockedCount}/{filteredOutlets.length} kunci</span>
+                    </div>
                   </div>
                 </div>
               );

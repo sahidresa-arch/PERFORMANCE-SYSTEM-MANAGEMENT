@@ -1,7 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
+import * as XLSX from 'xlsx';
 import { User, Outlet, Employee } from '../../types';
 import { StorageService } from '../../lib/storage';
-import { INITIAL_AREAS, INITIAL_OUTLETS } from '../../lib/constants';
+import { exportToPrettyExcel } from '../../lib/excelExport';
+import { INITIAL_AREAS } from '../../lib/constants';
 import {
   Users,
   Filter,
@@ -17,8 +19,35 @@ import {
   AlertTriangle,
   Award,
   CheckCircle2,
+  ArrowRightLeft,
+  UserX,
+  Clock,
+  Building2,
   FileSpreadsheet,
 } from 'lucide-react';
+
+export const JABATAN_OPTIONS = [
+  'Regional Manager',
+  'Cinema Area Manager',
+  'Cinema Manager',
+  'Cinema Assistant Manager',
+  'Cinema Supervisor',
+  'Technical Team Lead',
+  'Technical',
+  'Guide',
+  'Cafe Commis',
+  'Cafe Mixologist',
+  'Cafe Cashier',
+  'Premiere Waiters',
+  'Premiere Barista',
+  'Premiere Chef De Partie',
+  'Premiere Commis',
+  'Premiere Cook Helper',
+  'Hello Sunday Waiters',
+  'Hello Sunday Cook Helper',
+  'Hello Sunday Barista',
+  'Customer Relation',
+];
 
 interface EmployeesViewProps {
   currentUser: User | null;
@@ -27,36 +56,56 @@ interface EmployeesViewProps {
 
 export const EmployeesView: React.FC<EmployeesViewProps> = ({ currentUser, selectedDate }) => {
   const [employees, setEmployees] = useState<Employee[]>(() => StorageService.getEmployees());
-  const [outlets, setOutlets] = useState<Outlet[]>(() => StorageService.getOutlets());
+  const [outlets] = useState<Outlet[]>(() => StorageService.getOutlets());
   const areas = INITIAL_AREAS;
 
   const [selectedAreaId, setSelectedAreaId] = useState<string>('all');
   const [selectedOutletId, setSelectedOutletId] = useState<string>('all');
   const [selectedDivisi, setSelectedDivisi] = useState<string>('all');
+  const [selectedSisaKontrak, setSelectedSisaKontrak] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState<string>('');
 
+  // Add / Edit Modal State
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingEmployee, setEditingEmployee] = useState<Employee | null>(null);
+
+  // Delete Modal State
+  const [deletingEmployee, setDeletingEmployee] = useState<Employee | null>(null);
+
+  // Mutasi Modal State
+  const [isMutasiModalOpen, setIsMutasiModalOpen] = useState(false);
+  const [mutasiEmployee, setMutasiEmployee] = useState<Employee | null>(null);
+  const [mutasiTargetOutletId, setMutasiTargetOutletId] = useState<string>('');
+  const [mutasiDate, setMutasiDate] = useState<string>(selectedDate ? selectedDate.substring(0, 10) : new Date().toISOString().substring(0, 10));
+  const [mutasiNotes, setMutasiNotes] = useState<string>('');
+
+  // Terminate Modal State
+  const [isTerminateModalOpen, setIsTerminateModalOpen] = useState(false);
+  const [terminateEmployee, setTerminateEmployee] = useState<Employee | null>(null);
+  const [terminateCategory, setTerminateCategory] = useState<string>('Resign (Mengundurkan Diri)');
+  const [terminateDate, setTerminateDate] = useState<string>(selectedDate ? selectedDate.substring(0, 10) : new Date().toISOString().substring(0, 10));
+  const [terminateNotes, setTerminateNotes] = useState<string>('');
 
   // Form State
   const [formData, setFormData] = useState<Partial<Employee>>({
     nik: 'XXI-' + Math.floor(100000 + Math.random() * 900000),
     name: '',
-    jabatan: 'Staff Bioskop',
+    jabatan: 'Cinema Manager',
     divisi: 'Cinema',
     outletId: outlets[0]?.id || 'the-park-sawangan-xxi',
     gender: 'L',
+    tanggalLahir: '',
     statusKerja: 'Kontrak',
-    tanggalKontrak: '2026-01-01',
+    tanggalKontrak: selectedDate ? selectedDate.substring(0, 10) : '2026-01-01',
     habisKontrak: '2026-12-31',
-    phone: '081234567890',
+    phone: '-',
   });
 
   const [successMsg, setSuccessMsg] = useState('');
 
   const showToast = (msg: string) => {
     setSuccessMsg(msg);
-    setTimeout(() => setSuccessMsg(''), 3000);
+    setTimeout(() => setSuccessMsg(''), 3500);
   };
 
   const isManagerOrCleaner = (currentUser?.role === 'manager' || currentUser?.role === 'cleaner') && currentUser?.outletId;
@@ -77,6 +126,42 @@ export const EmployeesView: React.FC<EmployeesViewProps> = ({ currentUser, selec
     }
     if (selectedOutletId !== 'all' && emp.outletId !== selectedOutletId) return false;
     if (selectedDivisi !== 'all' && emp.divisi !== selectedDivisi) return false;
+
+    // Filter Sisa Kontrak < 3 Bulan
+    if (selectedSisaKontrak === 'under3months') {
+      if (
+        emp.statusKerja === 'Tetap' ||
+        emp.statusKerja === 'Terminate' ||
+        emp.statusKerja === 'Resign' ||
+        emp.habisKontrak === '-' ||
+        emp.habisKontrak.includes('Tetap')
+      ) {
+        return false;
+      }
+      const today = new Date();
+      const end = new Date(emp.habisKontrak);
+      if (isNaN(end.getTime())) return false;
+      const diffTime = end.getTime() - today.getTime();
+      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+      if (diffDays > 90) return false; // More than 3 months
+    } else if (selectedSisaKontrak === 'expired') {
+      if (
+        emp.statusKerja === 'Tetap' ||
+        emp.statusKerja === 'Terminate' ||
+        emp.statusKerja === 'Resign' ||
+        emp.habisKontrak === '-' ||
+        emp.habisKontrak.includes('Tetap')
+      ) {
+        return false;
+      }
+      const today = new Date();
+      const end = new Date(emp.habisKontrak);
+      if (isNaN(end.getTime())) return false;
+      const diffTime = end.getTime() - today.getTime();
+      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+      if (diffDays >= 0) return false; // Not expired
+    }
+
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
       return (
@@ -93,21 +178,26 @@ export const EmployeesView: React.FC<EmployeesViewProps> = ({ currentUser, selec
     setFormData({
       nik: 'XXI-' + Math.floor(100000 + Math.random() * 900000),
       name: '',
-      jabatan: 'Staff Bioskop',
+      jabatan: 'Cinema Manager',
       divisi: 'Cinema',
       outletId: currentUser?.outletId || outlets[0]?.id || 'the-park-sawangan-xxi',
       gender: 'L',
+      tanggalLahir: '',
       statusKerja: 'Kontrak',
       tanggalKontrak: selectedDate ? selectedDate.substring(0, 10) : '2026-01-01',
       habisKontrak: '2026-12-31',
-      phone: '081234567890',
+      phone: '-',
     });
     setIsModalOpen(true);
   };
 
   const handleOpenEdit = (emp: Employee) => {
     setEditingEmployee(emp);
-    setFormData(emp);
+    setFormData({
+      ...emp,
+      tanggalLahir: emp.tanggalLahir && emp.tanggalLahir !== '-' ? emp.tanggalLahir : '',
+      habisKontrak: emp.statusKerja === 'Tetap' ? '-' : emp.habisKontrak,
+    });
     setIsModalOpen(true);
   };
 
@@ -115,17 +205,24 @@ export const EmployeesView: React.FC<EmployeesViewProps> = ({ currentUser, selec
     e.preventDefault();
     if (!formData.name || !formData.nik) return;
 
+    const cleanNik = formData.nik.trim();
+    const existingByNik = employees.find((emp) => emp.nik?.trim() === cleanNik);
+    const targetId = editingEmployee?.id || existingByNik?.id || `emp_${Date.now()}`;
+
+    const isPermanent = formData.statusKerja === 'Tetap';
+
     const record: Employee = {
-      id: editingEmployee ? editingEmployee.id : `emp_${Date.now()}`,
-      nik: formData.nik || '',
-      name: formData.name || '',
-      jabatan: formData.jabatan || 'Staff',
+      id: targetId,
+      nik: cleanNik,
+      name: formData.name.trim(),
+      jabatan: formData.jabatan || 'Cinema Manager',
       divisi: (formData.divisi as any) || 'Cinema',
-      outletId: formData.outletId || outlets[0].id,
+      outletId: formData.outletId || outlets[0]?.id || 'the-park-sawangan-xxi',
       gender: (formData.gender as any) || 'L',
+      tanggalLahir: formData.tanggalLahir?.trim() ? formData.tanggalLahir.trim() : '-',
       statusKerja: (formData.statusKerja as any) || 'Kontrak',
       tanggalKontrak: formData.tanggalKontrak || '2026-01-01',
-      habisKontrak: formData.habisKontrak || '2026-12-31',
+      habisKontrak: isPermanent ? '-' : formData.habisKontrak || '-',
       phone: formData.phone || '-',
       photoUrl: formData.photoUrl,
     };
@@ -133,26 +230,175 @@ export const EmployeesView: React.FC<EmployeesViewProps> = ({ currentUser, selec
     const updated = StorageService.saveEmployee(record);
     setEmployees(updated);
     setIsModalOpen(false);
+    setEditingEmployee(null);
     showToast(`Data karyawan ${record.name} berhasil disimpan!`);
   };
 
-  const handleDelete = (id: string, name: string) => {
-    if (confirm(`Yakin ingin menghapus data karyawan ${name}?`)) {
-      const updated = StorageService.deleteEmployee(id);
-      setEmployees(updated);
-      showToast(`Karyawan ${name} berhasil dihapus.`);
-    }
+  const handleConfirmDelete = () => {
+    if (!deletingEmployee) return;
+    const name = deletingEmployee.name;
+    const updated = StorageService.deleteEmployee(deletingEmployee.id);
+    setEmployees(updated);
+    setDeletingEmployee(null);
+    showToast(`Karyawan ${name} berhasil dihapus dari sistem.`);
   };
 
-  const calculateSisaKontrak = (habisKontrakDate: string) => {
+  // Mutasi Workflow
+  const handleOpenMutasi = (emp: Employee) => {
+    setMutasiEmployee(emp);
+    const availableTargets = outlets.filter((o) => o.id !== emp.outletId);
+    setMutasiTargetOutletId(availableTargets[0]?.id || emp.outletId);
+    setMutasiDate(selectedDate ? selectedDate.substring(0, 10) : new Date().toISOString().substring(0, 10));
+    setMutasiNotes('');
+    setIsMutasiModalOpen(true);
+  };
+
+  const handleProcessMutasi = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!mutasiEmployee || !mutasiTargetOutletId) return;
+
+    const targetOutletObj = outlets.find((o) => o.id === mutasiTargetOutletId);
+    const updatedRecord: Employee = {
+      ...mutasiEmployee,
+      outletId: mutasiTargetOutletId,
+    };
+
+    const updatedList = StorageService.saveEmployee(updatedRecord);
+    setEmployees(updatedList);
+    setIsMutasiModalOpen(false);
+    showToast(
+      `Mutasi Berhasil: Karyawan ${mutasiEmployee.name} dimutasi ke outlet ${targetOutletObj?.name || mutasiTargetOutletId} efektif per ${mutasiDate}.`
+    );
+  };
+
+  // Terminate Workflow
+  const handleOpenTerminate = (emp: Employee) => {
+    setTerminateEmployee(emp);
+    setTerminateCategory('Resign (Mengundurkan Diri)');
+    setTerminateDate(selectedDate ? selectedDate.substring(0, 10) : new Date().toISOString().substring(0, 10));
+    setTerminateNotes('');
+    setIsTerminateModalOpen(true);
+  };
+
+  const handleProcessTerminate = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!terminateEmployee) return;
+
+    const updatedRecord: Employee = {
+      ...terminateEmployee,
+      statusKerja: 'Terminate',
+      habisKontrak: terminateDate,
+    };
+
+    const updatedList = StorageService.saveEmployee(updatedRecord);
+    setEmployees(updatedList);
+    setIsTerminateModalOpen(false);
+    showToast(
+      `Termination Berhasil: Status ${terminateEmployee.name} diubah menjadi Terminate (${terminateCategory}) efektif per ${terminateDate}.`
+    );
+  };
+
+  const calculateSisaKontrak = (emp: Employee) => {
+    if (emp.statusKerja === 'Tetap' || emp.habisKontrak === '-' || emp.habisKontrak.includes('Tetap')) {
+      return { text: '-', urgent: false };
+    }
+    if (emp.statusKerja === 'Terminate' || emp.statusKerja === 'Resign') {
+      return { text: 'Non-Aktif', urgent: false };
+    }
+
     const today = new Date();
-    const end = new Date(habisKontrakDate);
+    const end = new Date(emp.habisKontrak);
+    if (isNaN(end.getTime())) return { text: '-', urgent: false };
+
     const diffTime = end.getTime() - today.getTime();
     const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
     if (diffDays < 0) return { text: 'Habis Masa Kontrak', urgent: true };
     if (diffDays <= 30) return { text: `${diffDays} Hari lagi`, urgent: true };
+    if (diffDays <= 90) return { text: `${Math.floor(diffDays / 30)} Bulan (${diffDays} Hari)`, urgent: true };
+    
     const months = Math.floor(diffDays / 30);
     return { text: `${months} Bulan (${diffDays} Hari)`, urgent: false };
+  };
+
+  // Count metrics for quick filter badges
+  const under3MonthsCount = employees.filter((e) => {
+    if (
+      e.statusKerja === 'Tetap' ||
+      e.statusKerja === 'Terminate' ||
+      e.statusKerja === 'Resign' ||
+      e.habisKontrak === '-' ||
+      e.habisKontrak.includes('Tetap')
+    ) {
+      return false;
+    }
+    const today = new Date();
+    const end = new Date(e.habisKontrak);
+    if (isNaN(end.getTime())) return false;
+    const diffDays = Math.ceil((end.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+    return diffDays <= 90;
+  }).length;
+
+  const handleExportXls = () => {
+    const dataToExport = filteredEmployees.map((emp, index) => {
+      const outletObj = outlets.find((o) => o.id === emp.outletId);
+      const areaObj = areas.find((a) => a.id === outletObj?.areaId);
+      const isPermanent = emp.statusKerja === 'Tetap';
+      const sisa = calculateSisaKontrak(emp);
+      const displayHabisKontrak = isPermanent ? '-' : emp.habisKontrak || '-';
+
+      return {
+        'No': index + 1,
+        'NIK': emp.nik || '-',
+        'Nama Karyawan': emp.name,
+        'Jabatan': emp.jabatan,
+        'Divisi': emp.divisi,
+        'Outlet': outletObj?.name || emp.outletId,
+        'Wilayah (Area)': areaObj?.name || '-',
+        'Gender': emp.gender === 'L' ? 'Laki-laki (L)' : 'Perempuan (P)',
+        'Tanggal Lahir': emp.tanggalLahir && emp.tanggalLahir !== '-' ? emp.tanggalLahir : '-',
+        'Status Kerja': emp.statusKerja,
+        'Tanggal Mulai Kontrak': emp.tanggalKontrak || '-',
+        'Habis Kontrak': displayHabisKontrak,
+        'Sisa Kontrak / Status': sisa.text,
+        'No. Telepon': emp.phone || '-',
+      };
+    });
+
+    const areaName = selectedAreaId === 'all' ? 'Semua Wilayah' : (areas.find((a) => a.id === selectedAreaId)?.name || 'Area');
+    const outletName = selectedOutletId === 'all' ? 'Semua Outlet' : (outlets.find((o) => o.id === selectedOutletId)?.name || 'Outlet');
+    const divisiName = selectedDivisi === 'all' ? 'Semua Divisi' : selectedDivisi;
+    const sisaKontrakName = selectedSisaKontrak === 'all' ? 'Semua Status Kontrak' : selectedSisaKontrak === 'under3months' ? 'Sisa Kontrak < 3 Bulan' : 'Habis Masa Kontrak';
+
+    const areaLabel = areaName.replace(/[^a-zA-Z0-9]/g, '_');
+    const outletLabel = outletName.replace(/[^a-zA-Z0-9]/g, '_');
+    const filename = `Data_Karyawan_XXI_${areaLabel}_${outletLabel}_${new Date().toISOString().substring(0, 10)}.xlsx`;
+
+    exportToPrettyExcel({
+      title: 'CINEMA XXI - DATABASE DATA KARYAWAN OPERASIONAL',
+      subtitle: `Wilayah: ${areaName} | Outlet: ${outletName} | Divisi: ${divisiName}`,
+      metaInfo: `Filter Sisa Kontrak: ${sisaKontrakName} | Total Karyawan: ${dataToExport.length} Orang`,
+      sheetName: 'Data Karyawan',
+      filename,
+      data: dataToExport,
+      columnWidths: {
+        'No': 6,
+        'NIK': 18,
+        'Nama Karyawan': 30,
+        'Jabatan': 26,
+        'Divisi': 15,
+        'Outlet': 28,
+        'Wilayah (Area)': 22,
+        'Gender': 18,
+        'Tanggal Lahir': 18,
+        'Status Kerja': 16,
+        'Tanggal Mulai Kontrak': 20,
+        'Habis Kontrak': 20,
+        'Sisa Kontrak / Status': 25,
+        'No. Telepon': 18,
+      },
+    });
+
+    showToast(`Berhasil mengunduh Excel Data Karyawan (${dataToExport.length} orang)`);
   };
 
   return (
@@ -168,27 +414,36 @@ export const EmployeesView: React.FC<EmployeesViewProps> = ({ currentUser, selec
             Data Karyawan Cinema XXI
           </h1>
           <p className="text-purple-200 text-sm mt-1">
-            Pusat database kepegawaian, masa kontrak kerja, dan penempatan outlet operasional.
+            Pusat database kepegawaian, pengelolaan kontrak kerja, mutasi antar outlet, dan workflow termination.
           </p>
         </div>
-        <button
-          onClick={handleOpenAdd}
-          className="bg-[#FACC15] hover:bg-yellow-400 text-slate-900 px-5 py-3 rounded-xl font-bold text-xs flex items-center space-x-2 shadow-lg transition cursor-pointer shrink-0"
-        >
-          <Plus className="w-4 h-4" />
-          <span>Tambah Karyawan Baru</span>
-        </button>
+        <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+          <button
+            onClick={handleExportXls}
+            className="bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-3 rounded-xl font-bold text-xs flex items-center space-x-2 shadow-lg transition cursor-pointer"
+          >
+            <FileSpreadsheet className="w-4 h-4" />
+            <span>Download XLS Data Karyawan</span>
+          </button>
+          <button
+            onClick={handleOpenAdd}
+            className="bg-[#FACC15] hover:bg-yellow-400 text-slate-900 px-4 py-3 rounded-xl font-bold text-xs flex items-center space-x-2 shadow-lg transition cursor-pointer"
+          >
+            <Plus className="w-4 h-4" />
+            <span>Tambah Karyawan Baru</span>
+          </button>
+        </div>
       </div>
 
       {successMsg && (
         <div className="bg-emerald-50 text-emerald-800 p-4 rounded-xl border border-emerald-200 text-xs font-bold flex items-center space-x-2 shadow-sm animate-pulse">
-          <CheckCircle2 className="w-5 h-5 text-emerald-600" />
+          <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
           <span>{successMsg}</span>
         </div>
       )}
 
       {/* Filters & Search Bar */}
-      <div className="bg-white rounded-2xl p-4 shadow-sm border border-slate-200 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 items-center">
+      <div className="bg-white rounded-2xl p-4 shadow-sm border border-slate-200 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-4 items-center">
         <div className="space-y-1">
           <label className="block text-[11px] font-bold text-slate-500 uppercase flex items-center">
             <Filter className="w-3 h-3 text-purple-600 mr-1" /> Wilayah (Area)
@@ -209,7 +464,7 @@ export const EmployeesView: React.FC<EmployeesViewProps> = ({ currentUser, selec
 
         <div className="space-y-1">
           <label className="block text-[11px] font-bold text-slate-500 uppercase flex items-center">
-            <Users className="w-3 h-3 text-purple-600 mr-1" /> Outlet
+            <Building2 className="w-3 h-3 text-purple-600 mr-1" /> Outlet
           </label>
           <select
             value={selectedOutletId}
@@ -245,14 +500,34 @@ export const EmployeesView: React.FC<EmployeesViewProps> = ({ currentUser, selec
           </select>
         </div>
 
-        <div className="space-y-1 lg:col-span-2">
+        {/* Filter Under Sisa Kontrak 3 Bulan */}
+        <div className="space-y-1">
           <label className="block text-[11px] font-bold text-slate-500 uppercase flex items-center">
-            <Search className="w-3 h-3 text-purple-600 mr-1" /> Cari NIK / Nama Karyawan
+            <Clock className="w-3 h-3 text-rose-600 mr-1" /> Sisa Kontrak
+          </label>
+          <select
+            value={selectedSisaKontrak}
+            onChange={(e) => setSelectedSisaKontrak(e.target.value)}
+            className={`w-full border rounded-xl px-3 py-2 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-purple-500 cursor-pointer ${
+              selectedSisaKontrak !== 'all'
+                ? 'bg-rose-50 border-rose-300 text-rose-900 font-bold'
+                : 'bg-slate-50 border-slate-200 text-slate-800'
+            }`}
+          >
+            <option value="all">Semua Status</option>
+            <option value="under3months">🔥 Sisa Kontrak &lt; 3 Bulan ({under3MonthsCount})</option>
+            <option value="expired">⚠️ Habis Masa Kontrak</option>
+          </select>
+        </div>
+
+        <div className="space-y-1 sm:col-span-2">
+          <label className="block text-[11px] font-bold text-slate-500 uppercase flex items-center">
+            <Search className="w-3 h-3 text-purple-600 mr-1" /> Cari NIK / Nama / Jabatan
           </label>
           <div className="relative">
             <input
               type="text"
-              placeholder="Cari berdasarkan NIK, Nama, atau Jabatan..."
+              placeholder="Cari NIK, Nama, atau Jabatan..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-9 pr-3 py-2 text-xs font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-purple-500"
@@ -271,40 +546,60 @@ export const EmployeesView: React.FC<EmployeesViewProps> = ({ currentUser, selec
               Daftar Karyawan Terdaftar ({filteredEmployees.length} Orang)
             </h2>
           </div>
+          <div className="flex items-center space-x-2">
+            {selectedSisaKontrak === 'under3months' && (
+              <span className="bg-rose-100 text-rose-800 px-3 py-1 rounded-full text-xs font-bold flex items-center space-x-1">
+                <AlertTriangle className="w-3.5 h-3.5" />
+                <span>Memunculkan Karyawan Kontrak &lt; 3 Bulan</span>
+              </span>
+            )}
+            <button
+              onClick={handleExportXls}
+              className="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded-xl font-bold text-xs flex items-center space-x-1.5 shadow-sm transition cursor-pointer"
+            >
+              <FileSpreadsheet className="w-3.5 h-3.5" />
+              <span>Download XLS</span>
+            </button>
+          </div>
         </div>
 
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse">
             <thead>
               <tr className="bg-slate-100 text-slate-700 text-[11px] font-bold uppercase tracking-wider">
-                <th className="border border-slate-300 px-3 py-2.5 text-center">Foto Karyawan</th>
+                <th className="border border-slate-300 px-3 py-2.5 text-center">Foto</th>
                 <th className="border border-slate-300 px-3 py-2.5">NIK</th>
                 <th className="border border-slate-300 px-3 py-2.5">Nama Karyawan</th>
                 <th className="border border-slate-300 px-3 py-2.5">Jabatan</th>
                 <th className="border border-slate-300 px-3 py-2.5">Divisi</th>
                 <th className="border border-slate-300 px-3 py-2.5">Outlet</th>
                 <th className="border border-slate-300 px-3 py-2.5 text-center">Gender</th>
+                <th className="border border-slate-300 px-3 py-2.5 text-center">Tanggal Lahir</th>
                 <th className="border border-slate-300 px-3 py-2.5 text-center">Status Kerja</th>
-                <th className="border border-slate-300 px-3 py-2.5">Tanggal Kontrak</th>
+                <th className="border border-slate-300 px-3 py-2.5">Tanggal Mulai</th>
                 <th className="border border-slate-300 px-3 py-2.5">Habis Kontrak</th>
                 <th className="border border-slate-300 px-3 py-2.5">Sisa Kontrak</th>
                 <th className="border border-slate-300 px-3 py-2.5">No. Telp</th>
-                <th className="border border-slate-300 px-3 py-2.5 text-center">Tindakan Workflow</th>
+                <th className="border border-slate-300 px-3 py-2.5 text-center min-w-[140px]">Tindakan Workflow</th>
               </tr>
             </thead>
             <tbody className="text-xs font-medium text-slate-800">
               {filteredEmployees.length === 0 ? (
                 <tr>
-                  <td colSpan={13} className="text-center py-8 text-slate-400 font-semibold">
+                  <td colSpan={14} className="text-center py-8 text-slate-400 font-semibold">
                     Tidak ada data karyawan yang ditemukan dengan filter tersebut.
                   </td>
                 </tr>
               ) : (
-                filteredEmployees.map((emp) => {
+                filteredEmployees.map((emp, idx) => {
                   const outletObj = outlets.find((o) => o.id === emp.outletId);
-                  const sisa = calculateSisaKontrak(emp.habisKontrak);
+                  const isPermanent = emp.statusKerja === 'Tetap';
+                  const isTerminated = emp.statusKerja === 'Terminate' || emp.statusKerja === 'Resign';
+                  const sisa = calculateSisaKontrak(emp);
+                  const displayHabisKontrak = isPermanent ? '-' : emp.habisKontrak || '-';
+
                   return (
-                    <tr key={emp.id} className="hover:bg-slate-50 transition">
+                    <tr key={`${emp.id}_${idx}`} className="hover:bg-slate-50 transition">
                       <td className="border border-slate-300 px-3 py-2.5 text-center">
                         <div className="w-9 h-9 rounded-full bg-purple-100 text-purple-700 font-bold flex items-center justify-center mx-auto overflow-hidden border border-purple-200">
                           {emp.photoUrl ? (
@@ -316,7 +611,7 @@ export const EmployeesView: React.FC<EmployeesViewProps> = ({ currentUser, selec
                       </td>
                       <td className="border border-slate-300 px-3 py-2.5 font-bold text-slate-900">{emp.nik}</td>
                       <td className="border border-slate-300 px-3 py-2.5 font-bold text-purple-900">{emp.name}</td>
-                      <td className="border border-slate-300 px-3 py-2.5">{emp.jabatan}</td>
+                      <td className="border border-slate-300 px-3 py-2.5 font-medium">{emp.jabatan}</td>
                       <td className="border border-slate-300 px-3 py-2.5">
                         <span className="bg-purple-50 text-purple-700 px-2 py-0.5 rounded-md font-semibold text-[10px]">
                           {emp.divisi}
@@ -328,11 +623,16 @@ export const EmployeesView: React.FC<EmployeesViewProps> = ({ currentUser, selec
                       <td className="border border-slate-300 px-3 py-2.5 text-center font-bold">
                         {emp.gender}
                       </td>
+                      <td className="border border-slate-300 px-3 py-2.5 text-center font-medium text-slate-700 whitespace-nowrap">
+                        {emp.tanggalLahir && emp.tanggalLahir !== '-' ? emp.tanggalLahir : '-'}
+                      </td>
                       <td className="border border-slate-300 px-3 py-2.5 text-center">
                         <span
                           className={`px-2 py-0.5 rounded-md font-bold text-[10px] ${
-                            emp.statusKerja === 'Tetap'
+                            isPermanent
                               ? 'bg-emerald-100 text-emerald-800'
+                              : isTerminated
+                              ? 'bg-rose-100 text-rose-800'
                               : emp.statusKerja === 'Kontrak'
                               ? 'bg-blue-100 text-blue-800'
                               : 'bg-amber-100 text-amber-800'
@@ -342,7 +642,9 @@ export const EmployeesView: React.FC<EmployeesViewProps> = ({ currentUser, selec
                         </span>
                       </td>
                       <td className="border border-slate-300 px-3 py-2.5">{emp.tanggalKontrak}</td>
-                      <td className="border border-slate-300 px-3 py-2.5">{emp.habisKontrak}</td>
+                      <td className="border border-slate-300 px-3 py-2.5 font-medium text-slate-700">
+                        {displayHabisKontrak}
+                      </td>
                       <td className="border border-slate-300 px-3 py-2.5 font-bold">
                         <span
                           className={`flex items-center space-x-1 ${
@@ -358,18 +660,41 @@ export const EmployeesView: React.FC<EmployeesViewProps> = ({ currentUser, selec
                         <span>{emp.phone}</span>
                       </td>
                       <td className="border border-slate-300 px-3 py-2.5 text-center">
-                        <div className="flex items-center justify-center space-x-2">
+                        <div className="flex items-center justify-center space-x-1.5">
+                          {/* Edit Button */}
                           <button
                             onClick={() => handleOpenEdit(emp)}
-                            title="Edit Karyawan"
-                            className="p-1 rounded-lg bg-blue-50 text-blue-600 hover:bg-blue-100 transition cursor-pointer"
+                            title="Edit Data Karyawan"
+                            className="p-1.5 rounded-lg bg-blue-50 text-blue-600 hover:bg-blue-100 transition cursor-pointer"
                           >
                             <Edit2 className="w-3.5 h-3.5" />
                           </button>
+
+                          {/* Mutasi Button */}
                           <button
-                            onClick={() => handleDelete(emp.id, emp.name)}
+                            onClick={() => handleOpenMutasi(emp)}
+                            title="Mutasi Karyawan ke Outlet/Area Lain"
+                            className="p-1.5 rounded-lg bg-purple-50 text-purple-700 hover:bg-purple-100 transition cursor-pointer flex items-center space-x-1"
+                          >
+                            <ArrowRightLeft className="w-3.5 h-3.5" />
+                          </button>
+
+                          {/* Terminate Button */}
+                          {!isTerminated && (
+                            <button
+                              onClick={() => handleOpenTerminate(emp)}
+                              title="Terminate / Non-Aktifkan Karyawan"
+                              className="p-1.5 rounded-lg bg-rose-50 text-rose-600 hover:bg-rose-100 transition cursor-pointer flex items-center space-x-1"
+                            >
+                              <UserX className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+
+                          {/* Delete Button */}
+                          <button
+                            onClick={() => setDeletingEmployee(emp)}
                             title="Hapus Karyawan"
-                            className="p-1 rounded-lg bg-rose-50 text-rose-600 hover:bg-rose-100 transition cursor-pointer"
+                            className="p-1.5 rounded-lg bg-rose-50 text-rose-600 hover:bg-rose-100 transition cursor-pointer"
                           >
                             <Trash2 className="w-3.5 h-3.5" />
                           </button>
@@ -383,6 +708,45 @@ export const EmployeesView: React.FC<EmployeesViewProps> = ({ currentUser, selec
           </table>
         </div>
       </div>
+
+      {/* Modal Confirmation Hapus Karyawan */}
+      {deletingEmployee && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl p-6 max-w-md w-full shadow-2xl border border-slate-100 animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-center space-x-3 text-rose-600 mb-4">
+              <div className="w-10 h-10 rounded-xl bg-rose-100 flex items-center justify-center shrink-0">
+                <Trash2 className="w-5 h-5 text-rose-600" />
+              </div>
+              <div>
+                <h3 className="text-base font-black text-slate-900">Konfirmasi Hapus Data</h3>
+                <p className="text-xs text-slate-500 font-medium">Penghapusan karyawan dari database</p>
+              </div>
+            </div>
+
+            <p className="text-xs text-slate-700 leading-relaxed mb-6 bg-slate-50 p-3 rounded-xl border border-slate-200">
+              Apakah Anda yakin ingin menghapus karyawan <strong className="text-slate-900 font-bold">{deletingEmployee.name}</strong> (NIK: <span className="font-mono text-purple-700">{deletingEmployee.nik}</span>)? Data yang dihapus tidak dapat dikembalikan.
+            </p>
+
+            <div className="flex items-center justify-end space-x-3">
+              <button
+                type="button"
+                onClick={() => setDeletingEmployee(null)}
+                className="px-4 py-2.5 rounded-xl text-xs font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 transition cursor-pointer"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmDelete}
+                className="px-4 py-2.5 rounded-xl text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 shadow-md hover:shadow-lg transition cursor-pointer flex items-center space-x-1.5"
+              >
+                <Trash2 className="w-4 h-4" />
+                <span>Ya, Hapus Karyawan</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Modal Add / Edit Karyawan */}
       {isModalOpen && (
@@ -426,16 +790,25 @@ export const EmployeesView: React.FC<EmployeesViewProps> = ({ currentUser, selec
                   />
                 </div>
 
+                {/* Dropdown Jabatan */}
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1">Jabatan</label>
-                  <input
-                    type="text"
+                  <select
                     required
-                    placeholder="Contoh: Staff Ticketing / F&B Crew"
-                    value={formData.jabatan || ''}
+                    value={formData.jabatan || JABATAN_OPTIONS[0]}
                     onChange={(e) => setFormData({ ...formData, jabatan: e.target.value })}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-purple-500"
-                  />
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-purple-500 cursor-pointer"
+                  >
+                    {/* Preserve existing custom value if not in standard options */}
+                    {formData.jabatan && !JABATAN_OPTIONS.includes(formData.jabatan) && (
+                      <option value={formData.jabatan}>{formData.jabatan}</option>
+                    )}
+                    {JABATAN_OPTIONS.map((jab) => (
+                      <option key={jab} value={jab}>
+                        {jab}
+                      </option>
+                    ))}
+                  </select>
                 </div>
 
                 <div>
@@ -483,14 +856,32 @@ export const EmployeesView: React.FC<EmployeesViewProps> = ({ currentUser, selec
                 </div>
 
                 <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">Tanggal Lahir</label>
+                  <input
+                    type="date"
+                    value={formData.tanggalLahir && formData.tanggalLahir !== '-' ? formData.tanggalLahir : ''}
+                    onChange={(e) => setFormData({ ...formData, tanggalLahir: e.target.value })}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-purple-500"
+                  />
+                </div>
+
+                <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1">Status Kerja</label>
                   <select
                     value={formData.statusKerja || 'Kontrak'}
-                    onChange={(e) => setFormData({ ...formData, statusKerja: e.target.value as any })}
+                    onChange={(e) => {
+                      const newStatus = e.target.value as any;
+                      setFormData({
+                        ...formData,
+                        statusKerja: newStatus,
+                        habisKontrak: newStatus === 'Tetap' ? '-' : formData.habisKontrak === '-' ? '2026-12-31' : formData.habisKontrak,
+                      });
+                    }}
                     className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-purple-500 cursor-pointer"
                   >
                     <option value="Tetap">Tetap</option>
                     <option value="Kontrak">Kontrak</option>
+                    <option value="Magang">Magang</option>
                     <option value="Freelance">Freelance</option>
                     <option value="Probation">Probation</option>
                   </select>
@@ -520,13 +911,22 @@ export const EmployeesView: React.FC<EmployeesViewProps> = ({ currentUser, selec
 
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1">Tanggal Habis Kontrak</label>
-                  <input
-                    type="date"
-                    required
-                    value={formData.habisKontrak || ''}
-                    onChange={(e) => setFormData({ ...formData, habisKontrak: e.target.value })}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-purple-500"
-                  />
+                  {formData.statusKerja === 'Tetap' ? (
+                    <input
+                      type="text"
+                      disabled
+                      value="-"
+                      className="w-full bg-slate-100 border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-500 cursor-not-allowed"
+                    />
+                  ) : (
+                    <input
+                      type="date"
+                      required
+                      value={formData.habisKontrak && formData.habisKontrak !== '-' ? formData.habisKontrak : ''}
+                      onChange={(e) => setFormData({ ...formData, habisKontrak: e.target.value })}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-purple-500"
+                    />
+                  )}
                 </div>
               </div>
 
@@ -544,6 +944,187 @@ export const EmployeesView: React.FC<EmployeesViewProps> = ({ currentUser, selec
                 >
                   <Save className="w-4 h-4" />
                   <span>Simpan Karyawan</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Mutasi Karyawan */}
+      {isMutasiModalOpen && mutasiEmployee && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl shadow-2xl border border-slate-200 w-full max-w-lg overflow-hidden animate-in fade-in zoom-in duration-200">
+            <div className="bg-purple-900 px-6 py-4 flex items-center justify-between text-white">
+              <div className="flex items-center space-x-2 font-bold text-base">
+                <ArrowRightLeft className="w-5 h-5 text-yellow-400" />
+                <span>Mutasi Penempatan Outlet</span>
+              </div>
+              <button
+                onClick={() => setIsMutasiModalOpen(false)}
+                className="p-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white transition cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleProcessMutasi} className="p-6 space-y-4">
+              <div className="bg-purple-50 p-4 rounded-2xl border border-purple-100 space-y-1">
+                <div className="text-xs font-bold text-purple-900">{mutasiEmployee.name}</div>
+                <div className="text-[11px] text-purple-700 font-medium">
+                  NIK: <span className="font-bold">{mutasiEmployee.nik}</span> &bull; Jabatan: <span className="font-bold">{mutasiEmployee.jabatan}</span>
+                </div>
+                <div className="text-[11px] text-slate-600">
+                  Outlet Saat Ini:{' '}
+                  <span className="font-bold text-slate-900">
+                    {outlets.find((o) => o.id === mutasiEmployee.outletId)?.name || mutasiEmployee.outletId}
+                  </span>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">Outlet Tujuan (Penugasan Baru)</label>
+                <select
+                  required
+                  value={mutasiTargetOutletId}
+                  onChange={(e) => setMutasiTargetOutletId(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-purple-500 cursor-pointer"
+                >
+                  {outlets.map((o) => (
+                    <option key={o.id} value={o.id}>
+                      {o.name} ({INITIAL_AREAS.find((a) => a.id === o.areaId)?.name || o.areaId})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">Tanggal Efektif Mutasi</label>
+                <input
+                  type="date"
+                  required
+                  value={mutasiDate}
+                  onChange={(e) => setMutasiDate(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-purple-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">Alasan / Catatan Mutasi</label>
+                <textarea
+                  rows={3}
+                  placeholder="Instruksi pimpinan, kebutuhan operasional, promosi, dsb."
+                  value={mutasiNotes}
+                  onChange={(e) => setMutasiNotes(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-purple-500"
+                ></textarea>
+              </div>
+
+              <div className="pt-4 border-t border-slate-200 flex items-center justify-end space-x-3">
+                <button
+                  type="button"
+                  onClick={() => setIsMutasiModalOpen(false)}
+                  className="px-4 py-2 rounded-xl text-xs font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 transition cursor-pointer"
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 rounded-xl text-xs font-bold text-white bg-purple-700 hover:bg-purple-800 transition shadow-sm cursor-pointer flex items-center space-x-1.5"
+                >
+                  <ArrowRightLeft className="w-4 h-4" />
+                  <span>Proses Mutasi Outlet</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Terminate Karyawan */}
+      {isTerminateModalOpen && terminateEmployee && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl shadow-2xl border border-slate-200 w-full max-w-lg overflow-hidden animate-in fade-in zoom-in duration-200">
+            <div className="bg-rose-900 px-6 py-4 flex items-center justify-between text-white">
+              <div className="flex items-center space-x-2 font-bold text-base">
+                <UserX className="w-5 h-5 text-yellow-400" />
+                <span>Workflow Termination Karyawan</span>
+              </div>
+              <button
+                onClick={() => setIsTerminateModalOpen(false)}
+                className="p-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white transition cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleProcessTerminate} className="p-6 space-y-4">
+              <div className="bg-rose-50 p-4 rounded-2xl border border-rose-100 space-y-1">
+                <div className="text-xs font-bold text-rose-900">{terminateEmployee.name}</div>
+                <div className="text-[11px] text-rose-700 font-medium">
+                  NIK: <span className="font-bold">{terminateEmployee.nik}</span> &bull; Status saat ini:{' '}
+                  <span className="font-bold">{terminateEmployee.statusKerja}</span>
+                </div>
+                <div className="text-[11px] text-slate-600">
+                  Outlet:{' '}
+                  <span className="font-bold text-slate-900">
+                    {outlets.find((o) => o.id === terminateEmployee.outletId)?.name || terminateEmployee.outletId}
+                  </span>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">Kategori Termination</label>
+                <select
+                  required
+                  value={terminateCategory}
+                  onChange={(e) => setTerminateCategory(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-rose-500 cursor-pointer"
+                >
+                  <option value="Resign (Mengundurkan Diri)">Resign (Mengundurkan Diri)</option>
+                  <option value="Habis Masa Kontrak">Habis Masa Kontrak</option>
+                  <option value="PHK (Pemutusan Hubungan Kerja)">PHK (Pemutusan Hubungan Kerja)</option>
+                  <option value="Lainnya">Lainnya</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">Tanggal Efektif Terminate</label>
+                <input
+                  type="date"
+                  required
+                  value={terminateDate}
+                  onChange={(e) => setTerminateDate(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-rose-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">Alasan / Catatan Termination</label>
+                <textarea
+                  rows={3}
+                  required
+                  placeholder="Tuliskan alasan resign, pemutusan kontrak, atau catatan HR..."
+                  value={terminateNotes}
+                  onChange={(e) => setTerminateNotes(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-rose-500"
+                ></textarea>
+              </div>
+
+              <div className="pt-4 border-t border-slate-200 flex items-center justify-end space-x-3">
+                <button
+                  type="button"
+                  onClick={() => setIsTerminateModalOpen(false)}
+                  className="px-4 py-2 rounded-xl text-xs font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 transition cursor-pointer"
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 rounded-xl text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 transition shadow-sm cursor-pointer flex items-center space-x-1.5"
+                >
+                  <UserX className="w-4 h-4" />
+                  <span>Konfirmasi Terminate</span>
                 </button>
               </div>
             </form>

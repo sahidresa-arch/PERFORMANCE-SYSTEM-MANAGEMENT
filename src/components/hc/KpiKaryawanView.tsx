@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
+import * as XLSX from 'xlsx';
 import { User, Outlet, Employee, EmployeeKpiRecord } from '../../types';
 import { StorageService } from '../../lib/storage';
+import { exportToPrettyExcel } from '../../lib/excelExport';
 import { INITIAL_AREAS, INITIAL_OUTLETS } from '../../lib/constants';
 import {
   Award,
@@ -84,6 +86,51 @@ export const KpiKaryawanView: React.FC<KpiKaryawanViewProps> = ({ currentUser, s
     setKpiRecords(updatedList);
     StorageService.saveEmployeeKpis(updatedList);
     showToast(`Nilai KPI berhasil diperbarui!`);
+  };
+
+  const handleExportXls = () => {
+    const dataToExport = filteredEmployees.map((emp, index) => {
+      const outletObj = outlets.find((o) => o.id === emp.outletId);
+      const score = getScoreForEmployee(emp.id);
+      const grade = getGrade(score);
+
+      return {
+        'No': index + 1,
+        'NIK': emp.nik,
+        'Nama Karyawan': emp.name,
+        'Jabatan': emp.jabatan,
+        'Divisi': emp.divisi,
+        'Outlet': outletObj?.name || emp.outletId,
+        'Nilai KPI (0-100)': score,
+        'Predikat Grade': grade.grade,
+        'Periode Penilaian': selectedMonth,
+      };
+    });
+
+    const areaName = selectedAreaId === 'all' ? 'Semua Wilayah' : (areas.find((a) => a.id === selectedAreaId)?.name || 'Area');
+    const outletName = selectedOutletId === 'all' ? 'Semua Outlet' : (outlets.find((o) => o.id === selectedOutletId)?.name || 'Outlet');
+
+    exportToPrettyExcel({
+      title: 'CINEMA XXI - LEMBAR EVALUASI KPI KARYAWAN',
+      subtitle: `Periode Evaluasi: ${selectedMonth} | Wilayah: ${areaName} | Outlet: ${outletName}`,
+      metaInfo: `Total Karyawan Dievaluasi: ${dataToExport.length} Orang`,
+      sheetName: 'Nilai KPI Karyawan',
+      filename: `Nilai_KPI_Karyawan_${selectedMonth}.xlsx`,
+      data: dataToExport,
+      columnWidths: {
+        'No': 6,
+        'NIK': 18,
+        'Nama Karyawan': 30,
+        'Jabatan': 26,
+        'Divisi': 15,
+        'Outlet': 28,
+        'Nilai KPI (0-100)': 18,
+        'Predikat Grade': 20,
+        'Periode Penilaian': 18,
+      },
+    });
+
+    showToast(`Berhasil mengunduh Excel Nilai KPI (${dataToExport.length} karyawan)`);
   };
 
   const getScoreForEmployee = (employeeId: string) => {
@@ -227,6 +274,13 @@ export const KpiKaryawanView: React.FC<KpiKaryawanViewProps> = ({ currentUser, s
               Lembar Penilaian KPI &bull; Periode {selectedMonth}
             </h2>
           </div>
+          <button
+            onClick={handleExportXls}
+            className="bg-emerald-600 hover:bg-emerald-700 text-white px-3.5 py-1.5 rounded-xl font-bold text-xs flex items-center space-x-1.5 shadow-sm transition cursor-pointer shrink-0"
+          >
+            <FileSpreadsheet className="w-4 h-4" />
+            <span>Download XLS Nilai KPI</span>
+          </button>
         </div>
 
         <div className="overflow-x-auto">

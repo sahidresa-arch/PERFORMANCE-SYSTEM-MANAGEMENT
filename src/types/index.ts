@@ -179,7 +179,8 @@ export interface Employee {
   divisi: 'Cinema' | 'F&B' | 'Kasir' | 'Teknisi' | 'Cleaning' | 'Admin' | 'Manager';
   outletId: string;
   gender: 'L' | 'P';
-  statusKerja: 'Tetap' | 'Kontrak' | 'Freelance' | 'Probation' | 'Magang';
+  tanggalLahir?: string; // YYYY-MM-DD
+  statusKerja: 'Tetap' | 'Kontrak' | 'Freelance' | 'Probation' | 'Magang' | 'Resign' | 'Terminate';
   tanggalKontrak: string; // YYYY-MM-DD
   habisKontrak: string; // YYYY-MM-DD
   phone: string;

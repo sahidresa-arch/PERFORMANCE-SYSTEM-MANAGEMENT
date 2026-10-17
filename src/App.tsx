@@ -1,9 +1,11 @@
 import React, { useState, useEffect } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
 import { User } from './types';
 import { StorageService } from './lib/storage';
 import { Header } from './components/layout/Header';
 import { Sidebar } from './components/layout/Sidebar';
 import { LoginView } from './components/auth/LoginView';
+import { SplashScreen } from './components/auth/SplashScreen';
 import { ExecutiveDashboard } from './components/dashboard/ExecutiveDashboard';
 import { InputDataSales } from './components/sales/InputDataSales';
 import { TabelRekapDaily } from './components/sales/TabelRekapDaily';
@@ -35,6 +37,7 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(() => {
     return StorageService.getCurrentUser();
   });
+  const [showSplash, setShowSplash] = useState(false);
   const [selectedDate, setSelectedDate] = useState(() => getTodayDateString());
   const [activeMenu, setActiveMenu] = useState('dashboard');
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -109,12 +112,14 @@ export default function App() {
 
   const handleLogout = () => {
     StorageService.resetSession();
+    setShowSplash(false);
     setCurrentUser(null);
   };
 
   const handleMenuChange = (newMenu: string) => {
     setActiveMenu(newMenu);
     setSelectedDate(getTodayDateString());
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   // If not logged in, show Cinema XXI VIP Login Screen
@@ -125,6 +130,7 @@ export default function App() {
           setCurrentUser(user);
           setSelectedDate(getTodayDateString());
           setActiveMenu('dashboard');
+          setShowSplash(true);
         }}
       />
     );
@@ -138,6 +144,14 @@ export default function App() {
 
   return (
     <div className="min-h-screen w-full flex flex-col font-sans bg-[#F8F9FC] text-[#374151] antialiased">
+      {/* Cinema XXI VIP Premiere Splash Screen after Login */}
+      {showSplash && (
+        <SplashScreen
+          user={currentUser}
+          onComplete={() => setShowSplash(false)}
+        />
+      )}
+
       {/* Top Header */}
       <Header
         currentUser={currentUser}
@@ -163,149 +177,170 @@ export default function App() {
 
         {/* Content Area */}
         <main
-          className={`flex-1 w-full max-w-full min-w-0 overflow-y-auto p-3 sm:p-4 lg:p-4 bg-[#F8F9FC] transition-[margin] duration-300 ease-in-out ${
+          className={`relative flex-1 w-full max-w-full min-w-0 overflow-y-auto overflow-x-hidden p-3 sm:p-4 lg:p-4 bg-[#F8F9FC] transition-[margin] duration-400 ease-[cubic-bezier(0.16,1,0.3,1)] ${
             collapsed ? 'ml-[72px]' : 'ml-[260px]'
           }`}
         >
-          <div className="w-full max-w-full">
-            {/* Dashboard */}
-            {activeMenu === 'dashboard' && (
-              <ExecutiveDashboard
-                currentUser={currentUser}
-                selectedDate={selectedDate}
-                onNavigate={handleMenuChange}
-                onDateChange={setSelectedDate}
-              />
-            )}
+          {/* Dramatic Cinema XXI Golden Spotlight Sweep Bar on Menu Switch */}
+          <motion.div
+            key={`sweep-${activeMenu}`}
+            initial={{ scaleX: 0, opacity: 1 }}
+            animate={{ scaleX: 1, opacity: 0 }}
+            transition={{ duration: 0.65, ease: [0.16, 1, 0.3, 1] }}
+            className="pointer-events-none fixed top-[56px] left-0 right-0 h-[3px] origin-left z-50 bg-gradient-to-r from-[#581c87] via-[#FACC15] to-[#f59e0b] shadow-[0_0_12px_rgba(250,204,21,0.8)]"
+          />
 
-            {/* Sales System Submenus */}
-            {activeMenu === 'sales_input' && (
-              <InputDataSales
-                currentUser={currentUser}
-                selectedDate={selectedDate}
-                onDateChange={setSelectedDate}
-              />
-            )}
+          <AnimatePresence mode="wait">
+            <motion.div
+              key={activeMenu}
+              initial={{ opacity: 0, y: 28, scale: 0.965, filter: 'blur(8px)' }}
+              animate={{ opacity: 1, y: 0, scale: 1, filter: 'none' }}
+              exit={{ opacity: 0, y: -18, scale: 0.975, filter: 'blur(6px)' }}
+              transition={{
+                duration: 0.38,
+                ease: [0.16, 1, 0.3, 1],
+              }}
+              className="w-full max-w-full origin-top"
+            >
+              {/* Dashboard */}
+              {activeMenu === 'dashboard' && (
+                <ExecutiveDashboard
+                  currentUser={currentUser}
+                  selectedDate={selectedDate}
+                  onNavigate={handleMenuChange}
+                  onDateChange={setSelectedDate}
+                />
+              )}
 
-            {activeMenu === 'sales_rekap_daily' && (
-              <TabelRekapDaily
-                currentUser={currentUser}
-                selectedDate={selectedDate}
-                onDateChange={setSelectedDate}
-              />
-            )}
+              {/* Sales System Submenus */}
+              {activeMenu === 'sales_input' && (
+                <InputDataSales
+                  currentUser={currentUser}
+                  selectedDate={selectedDate}
+                  onDateChange={setSelectedDate}
+                />
+              )}
 
-            {activeMenu === 'sales_performance' && (
-              <PerformanceDashboard
-                currentUser={currentUser}
-                selectedDate={selectedDate}
-                onDateChange={setSelectedDate}
-              />
-            )}
+              {activeMenu === 'sales_rekap_daily' && (
+                <TabelRekapDaily
+                  currentUser={currentUser}
+                  selectedDate={selectedDate}
+                  onDateChange={setSelectedDate}
+                />
+              )}
 
-            {activeMenu === 'sales_baking' && (
-              <PenjualanBaking
-                currentUser={currentUser}
-                selectedDate={selectedDate}
-              />
-            )}
+              {activeMenu === 'sales_performance' && (
+                <PerformanceDashboard
+                  currentUser={currentUser}
+                  selectedDate={selectedDate}
+                  onDateChange={setSelectedDate}
+                />
+              )}
 
-            {activeMenu === 'sales_kpi_summary' && (
-              <KPISummary
-                currentUser={currentUser}
-                selectedDate={selectedDate}
-                onDateChange={setSelectedDate}
-              />
-            )}
+              {activeMenu === 'sales_baking' && (
+                <PenjualanBaking
+                  currentUser={currentUser}
+                  selectedDate={selectedDate}
+                />
+              )}
 
-            {activeMenu === 'sales_google_slide' && (
-              <GoogleSlideKPI
-                selectedDate={selectedDate}
-                onDateChange={setSelectedDate}
-              />
-            )}
+              {activeMenu === 'sales_kpi_summary' && (
+                <KPISummary
+                  currentUser={currentUser}
+                  selectedDate={selectedDate}
+                  onDateChange={setSelectedDate}
+                />
+              )}
 
-            {/* Okupansi Rate Submenus */}
-            {activeMenu === 'occupancy_rekap' && (
-              <RekapOkupansi
-                currentUser={currentUser}
-                selectedDate={selectedDate}
-                onDateChange={setSelectedDate}
-              />
-            )}
+              {activeMenu === 'sales_google_slide' && (
+                <GoogleSlideKPI
+                  selectedDate={selectedDate}
+                  onDateChange={setSelectedDate}
+                />
+              )}
 
-            {activeMenu === 'occupancy_market_intel' && (
-              <MarketIntelligence currentUser={currentUser} />
-            )}
+              {/* Okupansi Rate Submenus */}
+              {activeMenu === 'occupancy_rekap' && (
+                <RekapOkupansi
+                  currentUser={currentUser}
+                  selectedDate={selectedDate}
+                  onDateChange={setSelectedDate}
+                />
+              )}
 
-            {activeMenu === 'occupancy_movie_history' && (
-              <HistoryRekapFilm currentUser={currentUser} />
-            )}
+              {activeMenu === 'occupancy_market_intel' && (
+                <MarketIntelligence currentUser={currentUser} />
+              )}
 
-            {/* Card Inspection Submenus */}
-            {activeMenu === 'inspection_dashboard' && (
-              <ToiletInspection
-                currentUser={currentUser}
-                selectedDate={selectedDate}
-                onDateChange={setSelectedDate}
-                initialMode="dashboard"
-              />
-            )}
+              {activeMenu === 'occupancy_movie_history' && (
+                <HistoryRekapFilm currentUser={currentUser} />
+              )}
 
-            {activeMenu === 'inspection_form' && (
-              <ToiletInspection
-                currentUser={currentUser}
-                selectedDate={selectedDate}
-                onDateChange={setSelectedDate}
-                initialMode="form"
-              />
-            )}
+              {/* Card Inspection Submenus */}
+              {activeMenu === 'inspection_dashboard' && (
+                <ToiletInspection
+                  currentUser={currentUser}
+                  selectedDate={selectedDate}
+                  onDateChange={setSelectedDate}
+                  initialMode="dashboard"
+                />
+              )}
 
-            {/* Accounting Submenus */}
-            {activeMenu === 'accounting_bopo' && (
-              <BopoView
-                currentUser={currentUser}
-                selectedDate={selectedDate}
-              />
-            )}
+              {activeMenu === 'inspection_form' && (
+                <ToiletInspection
+                  currentUser={currentUser}
+                  selectedDate={selectedDate}
+                  onDateChange={setSelectedDate}
+                  initialMode="form"
+                />
+              )}
 
-            {activeMenu === 'accounting_inventory' && (
-              <WarehouseStockView
-                currentUser={currentUser}
-                selectedDate={selectedDate}
-              />
-            )}
+              {/* Accounting Submenus */}
+              {activeMenu === 'accounting_bopo' && (
+                <BopoView
+                  currentUser={currentUser}
+                  selectedDate={selectedDate}
+                />
+              )}
 
-            {/* HC Area Submenus */}
-            {activeMenu === 'hc_employees' && (
-              <EmployeesView
-                currentUser={currentUser}
-                selectedDate={selectedDate}
-              />
-            )}
+              {activeMenu === 'accounting_inventory' && (
+                <WarehouseStockView
+                  currentUser={currentUser}
+                  selectedDate={selectedDate}
+                />
+              )}
 
-            {activeMenu === 'hc_kpi' && (
-              <KpiKaryawanView
-                currentUser={currentUser}
-                selectedDate={selectedDate}
-              />
-            )}
+              {/* HC Area Submenus */}
+              {activeMenu === 'hc_employees' && (
+                <EmployeesView
+                  currentUser={currentUser}
+                  selectedDate={selectedDate}
+                />
+              )}
 
-            {activeMenu === 'lost_and_found' && (
-              <LostAndFoundView
-                currentUser={currentUser}
-                selectedDate={selectedDate}
-              />
-            )}
+              {activeMenu === 'hc_kpi' && (
+                <KpiKaryawanView
+                  currentUser={currentUser}
+                  selectedDate={selectedDate}
+                />
+              )}
 
-            {/* Admin Management */}
-            {activeMenu === 'admin_users_outlets' && (
-              <UserOutletManagement
-                currentUser={currentUser}
-                onSessionReset={handleLogout}
-              />
-            )}
-          </div>
+              {activeMenu === 'lost_and_found' && (
+                <LostAndFoundView
+                  currentUser={currentUser}
+                  selectedDate={selectedDate}
+                />
+              )}
+
+              {/* Admin Management */}
+              {activeMenu === 'admin_users_outlets' && (
+                <UserOutletManagement
+                  currentUser={currentUser}
+                  onSessionReset={handleLogout}
+                />
+              )}
+            </motion.div>
+          </AnimatePresence>
         </main>
       </div>
 

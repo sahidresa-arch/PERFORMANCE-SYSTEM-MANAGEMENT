@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
+import * as XLSX from 'xlsx';
 import { User } from '../../types';
 import { StorageService } from '../../lib/storage';
+import { exportToPrettyExcel } from '../../lib/excelExport';
 import {
   Calendar,
   AlertTriangle,
@@ -11,6 +13,7 @@ import {
   CreditCard,
   Target,
   Sparkles,
+  FileSpreadsheet,
 } from 'lucide-react';
 
 interface KPISummaryProps {
@@ -401,6 +404,75 @@ export const KPISummary: React.FC<KPISummaryProps> = ({
 
   const hasAnyData = totalPeriodPenonton > 0 || totalPeriodFnB > 0 || totalPeriodCinema > 0;
 
+  const handleExportXLS = () => {
+    const dataToExport = breakdownRows.map((row) => {
+      const rowMet = StorageService.calculateMetrics(
+        row.omsetCinema,
+        row.omsetFnB,
+        row.bill,
+        row.penonton,
+        targetHead
+      );
+      const isCapai = rowMet.head >= targetHead;
+      return {
+        'Periode / Show / Tanggal': row.label + (row.subLabel ? ` (${row.subLabel})` : ''),
+        'Omset Cinema (Rp)': row.omsetCinema > 0 ? `Rp ${row.omsetCinema.toLocaleString('id-ID')}` : 'Rp 0',
+        'Omset F&B (Rp)': row.omsetFnB > 0 ? `Rp ${row.omsetFnB.toLocaleString('id-ID')}` : 'Rp 0',
+        'Struk (Bill)': row.bill > 0 ? row.bill.toLocaleString('id-ID') : '0',
+        'Penonton (Orang)': row.penonton > 0 ? row.penonton.toLocaleString('id-ID') : '0',
+        'Daya Serap (%)': row.penonton > 0 ? `${rowMet.dayaSerap}%` : '0%',
+        'Target SPH (Rp)': `Rp ${targetHead.toLocaleString('id-ID')}`,
+        'Real SPH (Rp)': row.penonton > 0 ? `Rp ${rowMet.head.toLocaleString('id-ID')}` : 'Rp 0',
+        'Achievement (%)': row.penonton > 0 ? `${rowMet.achievement}%` : '0%',
+        'Avg Transaction / AT (Rp)': row.bill > 0 ? `Rp ${rowMet.at.toLocaleString('id-ID')}` : 'Rp 0',
+        'Selisih SPH (Rp)': row.penonton > 0 ? `${rowMet.selisih >= 0 ? '+' : ''}Rp ${rowMet.selisih.toLocaleString('id-ID')}` : 'Rp 0',
+        'Status': row.penonton > 0 ? (isCapai ? 'CAPAI' : 'TIDAK CAPAI') : '-',
+      };
+    });
+
+    // Add Summary Total Row
+    dataToExport.push({
+      'Periode / Show / Tanggal': `TOTAL ${period.toUpperCase()}`,
+      'Omset Cinema (Rp)': `Rp ${totalPeriodCinema.toLocaleString('id-ID')}`,
+      'Omset F&B (Rp)': `Rp ${totalPeriodFnB.toLocaleString('id-ID')}`,
+      'Struk (Bill)': totalPeriodBill.toLocaleString('id-ID'),
+      'Penonton (Orang)': totalPeriodPenonton.toLocaleString('id-ID'),
+      'Daya Serap (%)': `${periodMetrics.dayaSerap}%`,
+      'Target SPH (Rp)': `Rp ${targetHead.toLocaleString('id-ID')}`,
+      'Real SPH (Rp)': `Rp ${periodMetrics.head.toLocaleString('id-ID')}`,
+      'Achievement (%)': `${periodMetrics.achievement}%`,
+      'Avg Transaction / AT (Rp)': `Rp ${periodMetrics.at.toLocaleString('id-ID')}`,
+      'Selisih SPH (Rp)': `${periodMetrics.selisih >= 0 ? '+' : ''}Rp ${periodMetrics.selisih.toLocaleString('id-ID')}`,
+      'Status': periodMetrics.head >= targetHead ? 'CAPAI' : 'TIDAK CAPAI',
+    });
+
+    const cleanOutletName = selectedOutlet.name.replace(/[^a-zA-Z0-9]/g, '_');
+    const areaName = areas.find((a) => a.id === selectedOutlet.areaId)?.name || 'Wilayah';
+
+    exportToPrettyExcel({
+      title: `CINEMA XXI - LAPORAN REKAP KPI SUMMARY OUTLET`,
+      subtitle: `Outlet: ${selectedOutlet.name} | Wilayah: ${areaName} | Mode Periode: ${periodSubtitle}`,
+      metaInfo: `Target SPH Outlet: Rp ${targetHead.toLocaleString('id-ID')} | Tanggal Acuan: ${selectedDate}`,
+      sheetName: 'KPI Summary',
+      filename: `KPI_Summary_${cleanOutletName}_${period}_${selectedDate}.xlsx`,
+      data: dataToExport,
+      columnWidths: {
+        'Periode / Show / Tanggal': 32,
+        'Omset Cinema (Rp)': 22,
+        'Omset F&B (Rp)': 22,
+        'Struk (Bill)': 16,
+        'Penonton (Orang)': 18,
+        'Daya Serap (%)': 16,
+        'Target SPH (Rp)': 20,
+        'Real SPH (Rp)': 20,
+        'Achievement (%)': 18,
+        'Avg Transaction / AT (Rp)': 24,
+        'Selisih SPH (Rp)': 22,
+        'Status': 16,
+      },
+    });
+  };
+
   return (
     <div className="space-y-4">
       {/* 1. Top Header Banner - Cinema XXI Visual Identity */}
@@ -747,9 +819,18 @@ export const KPISummary: React.FC<KPISummaryProps> = ({
             </div>
           </div>
 
-          <span className="text-[10px] px-2.5 py-0.5 rounded-full bg-[#F3E8FF] text-[#7C3AED] font-semibold border border-[#E9D5FF]">
-            {breakdownRows.length} Baris Data
-          </span>
+          <div className="flex items-center space-x-2">
+            <span className="text-[10px] px-2.5 py-0.5 rounded-full bg-[#F3E8FF] text-[#7C3AED] font-semibold border border-[#E9D5FF]">
+              {breakdownRows.length} Baris Data
+            </span>
+            <button
+              onClick={handleExportXLS}
+              className="px-3 py-1.5 rounded-[8px] bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[11px] flex items-center space-x-1.5 shadow-2xs transition cursor-pointer shrink-0"
+            >
+              <FileSpreadsheet className="w-3.5 h-3.5" />
+              <span>Download XLS</span>
+            </button>
+          </div>
         </div>
 
         <div className="overflow-x-auto">
