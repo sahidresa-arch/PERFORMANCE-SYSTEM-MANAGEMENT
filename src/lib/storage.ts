@@ -22,6 +22,7 @@ import {
   CashierShowSaleInput,
   CashierProductItem,
   CashierMonthlyProductRecord,
+  DailySectionSalesRecord,
 } from '../types';
 import {
   INITIAL_AREAS,
@@ -55,6 +56,7 @@ const KEYS = {
   STOCK_OPNAME_HISTORY: 'cinema_xxi_stock_opname_history',
   CASHIER_PERFORMANCE_DAILY: 'cinema_xxi_cashier_performance_daily',
   CASHIER_MONTHLY_PRODUCTS: 'cinema_xxi_cashier_monthly_products',
+  DAILY_SECTION_SALES: 'cinema_xxi_daily_section_sales',
 };
 
 // Helper perbandingan teks & regex yang aman
@@ -3227,15 +3229,31 @@ export const StorageService = {
         const autoPenonton = outletShow?.penonton || 0;
         const autoCinema = outletShow?.omsetCinema || 0;
 
+        const omsetOffline =
+          cur?.omsetOffline !== undefined ? cur.omsetOffline : cur?.omsetFnB || 0;
+        const omsetMolling = cur?.omsetMolling || 0;
+        const totalFnB =
+          omsetOffline + omsetMolling > 0
+            ? omsetOffline + omsetMolling
+            : cur?.omsetFnB || 0;
+
         return {
           showNumber: showNum,
           omsetCinema: cur?.omsetCinema || autoCinema,
-          omsetFnB: cur?.omsetFnB || 0,
+          omsetFnB: totalFnB,
+          omsetOffline,
+          omsetMolling,
           bill: cur?.bill || 0,
           // Selalu sinkronkan penonton dari Input Data Sales Outlet jika outlet sudah mengisi penonton (> 0)
           penonton: autoPenonton > 0 ? autoPenonton : cur?.penonton || 0,
           updatedAt: cur?.updatedAt,
-          isFilled: Boolean(cur?.isFilled || (cur?.omsetFnB || 0) > 0 || (cur?.bill || 0) > 0),
+          isFilled: Boolean(
+            cur?.isFilled ||
+              totalFnB > 0 ||
+              omsetOffline > 0 ||
+              omsetMolling > 0 ||
+              (cur?.bill || 0) > 0
+          ),
           isLocked: Boolean(cur?.isLocked),
         };
       });
@@ -3406,6 +3424,130 @@ export const StorageService = {
       .catch(() => {});
 
     return all;
+  },
+
+  // =========================================================
+  // TABEL SECTION HARIAN (8 KATEGORI OMSET OUTLET)
+  // =========================================================
+  getDailySectionSalesAll(): DailySectionSalesRecord[] {
+    const raw = localStorage.getItem(KEYS.DAILY_SECTION_SALES);
+    if (!raw) return [];
+    try {
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  },
+
+  getDailySectionSalesByOutletAndDate(
+    outletId: string,
+    date: string
+  ): DailySectionSalesRecord {
+    const all = this.getDailySectionSalesAll();
+    const recordId = `${outletId}_${date}`;
+    const existing = all.find(
+      (r) => r.id === recordId || (r.outletId === outletId && r.date === date)
+    );
+    if (existing) return existing;
+
+    return {
+      id: recordId,
+      outletId,
+      date,
+      omsetCafeBox: 0,
+      cafeBoxCashierId: '',
+      cafeBoxCashierName: '',
+      omsetGerobak: 0,
+      omsetDelivery: 0,
+      omsetGofood: 0,
+      omsetGrabfood: 0,
+      omsetShopeefood: 0,
+    };
+  },
+
+  saveDailySectionSales(record: DailySectionSalesRecord): DailySectionSalesRecord[] {
+    const all = this.getDailySectionSalesAll();
+    const recordId = record.id || `${record.outletId}_${record.date}`;
+    const updated: DailySectionSalesRecord = {
+      ...record,
+      id: recordId,
+      updatedAt: new Date().toISOString(),
+    };
+
+    const idx = all.findIndex(
+      (r) =>
+        r.id === recordId ||
+        (r.outletId === record.outletId && r.date === record.date)
+    );
+    if (idx >= 0) {
+      all[idx] = updated;
+    } else {
+      all.unshift(updated);
+    }
+
+    localStorage.setItem(KEYS.DAILY_SECTION_SALES, JSON.stringify(all));
+    this.broadcastChange('sdm-section');
+    return all;
+  },
+
+  /**
+   * Menghitung otomatis Omset Offline & Omset Molling dari Input Sales Per-Kasir (Show 1-5)
+   * pada outlet & tanggal tertentu, lengkap dengan rincian per kasir.
+   */
+  getAutoOfflineAndMollingByOutletAndDate(outletId: string, date: string) {
+    const allEmployees = this.getEmployees();
+    const records = this.getCashierDailyPerformanceAll().filter(
+      (r) => r.outletId === outletId && r.date === date
+    );
+
+    let totalOffline = 0;
+    let totalMolling = 0;
+    const cashierBreakdowns: Array<{
+      cashierId: string;
+      cashierName: string;
+      offline: number;
+      molling: number;
+      total: number;
+      showsFilled: number[];
+    }> = [];
+
+    records.forEach((rec) => {
+      let cOffline = 0;
+      let cMolling = 0;
+      const showsFilled: number[] = [];
+
+      (rec.shows || []).forEach((s) => {
+        const sOff =
+          s.omsetOffline !== undefined ? s.omsetOffline : s.omsetFnB || 0;
+        const sMol = s.omsetMolling || 0;
+        if (s.isFilled || sOff > 0 || sMol > 0 || (s.bill || 0) > 0) {
+          cOffline += sOff;
+          cMolling += sMol;
+          showsFilled.push(s.showNumber);
+        }
+      });
+
+      if (cOffline > 0 || cMolling > 0 || showsFilled.length > 0) {
+        totalOffline += cOffline;
+        totalMolling += cMolling;
+        const matchedEmp = allEmployees.find((e) => e.id === rec.cashierId);
+        cashierBreakdowns.push({
+          cashierId: rec.cashierId,
+          cashierName: matchedEmp?.name || rec.cashierName || 'Kasir',
+          offline: cOffline,
+          molling: cMolling,
+          total: cOffline + cMolling,
+          showsFilled: showsFilled.sort((a, b) => a - b),
+        });
+      }
+    });
+
+    return {
+      totalOffline,
+      totalMolling,
+      cashierBreakdowns: cashierBreakdowns.sort((a, b) => b.total - a.total),
+    };
   },
 };
 

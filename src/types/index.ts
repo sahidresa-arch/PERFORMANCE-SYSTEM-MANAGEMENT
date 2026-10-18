@@ -262,7 +262,9 @@ export interface StockOpnameHistory {
 export interface CashierShowSaleInput {
   showNumber: number; // 1 to 5
   omsetCinema: number;
-  omsetFnB: number;
+  omsetFnB: number; // Total F&B (omsetOffline + omsetMolling)
+  omsetOffline?: number;
+  omsetMolling?: number;
   bill: number;
   penonton: number; // Auto-synced from Outlet DailySalesRecord
   updatedAt?: string;
@@ -300,5 +302,22 @@ export interface CashierMonthlyProductRecord {
   dailySales: { [day: number]: { [itemId: string]: number } };
   updatedAt?: string;
 }
+
+export interface DailySectionSalesRecord {
+  id: string; // `${outletId}_${date}`
+  outletId: string;
+  date: string; // YYYY-MM-DD
+  omsetCafeBox: number;
+  cafeBoxCashierId?: string;
+  cafeBoxCashierName?: string;
+  omsetGerobak: number;
+  omsetDelivery: number;
+  omsetGofood: number;
+  omsetGrabfood: number;
+  omsetShopeefood: number;
+  notes?: string;
+  updatedAt?: string;
+}
+
 
 

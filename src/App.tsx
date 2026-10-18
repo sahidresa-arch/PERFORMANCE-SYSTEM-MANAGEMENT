@@ -25,6 +25,7 @@ import { KpiKaryawanView } from './components/hc/KpiKaryawanView';
 import { LostAndFoundView } from './components/lost_found/LostAndFoundView';
 import { CashierPerformanceInput } from './components/sdm/CashierPerformanceInput';
 import { CashierLeaderboard } from './components/sdm/CashierLeaderboard';
+import { CashierSectionTable } from './components/sdm/CashierSectionTable';
 import { SettingsModal } from './components/settings/SettingsModal';
 
 function getTodayDateString(): string {
@@ -273,6 +274,15 @@ export default function App() {
 
               {activeMenu === 'sdm_leaderboard' && (
                 <CashierLeaderboard
+                  currentUser={currentUser}
+                  selectedDate={selectedDate}
+                  onDateChange={setSelectedDate}
+                  onNavigateToInput={() => handleMenuChange('sdm_input')}
+                />
+              )}
+
+              {activeMenu === 'sdm_section' && (
+                <CashierSectionTable
                   currentUser={currentUser}
                   selectedDate={selectedDate}
                   onDateChange={setSelectedDate}

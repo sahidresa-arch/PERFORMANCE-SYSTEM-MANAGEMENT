@@ -124,9 +124,13 @@ export const CashierPerformanceInput: React.FC<CashierPerformanceInputProps> = (
 
   // Input fields for active show
   const [omsetCinema, setOmsetCinema] = useState<number>(0);
+  const [omsetOffline, setOmsetOffline] = useState<number>(0);
+  const [omsetMolling, setOmsetMolling] = useState<number>(0);
   const [omsetFnB, setOmsetFnB] = useState<number>(0);
+  const [selectedFnBCategory, setSelectedFnBCategory] = useState<'offline' | 'molling'>('offline');
   const [omsetCinemaStr, setOmsetCinemaStr] = useState<string>('0');
-  const [omsetFnBStr, setOmsetFnBStr] = useState<string>('0');
+  const [omsetOfflineStr, setOmsetOfflineStr] = useState<string>('0');
+  const [omsetMollingStr, setOmsetMollingStr] = useState<string>('0');
   const [bill, setBill] = useState<number>(0);
   const [penonton, setPenonton] = useState<number>(0);
   const [isScanBillModalOpen, setIsScanBillModalOpen] = useState<boolean>(false);
@@ -314,20 +318,35 @@ export const CashierPerformanceInput: React.FC<CashierPerformanceInputProps> = (
 
     if (show) {
       const cin = show.omsetCinema || autoCinema || 0;
-      const fnb = show.omsetFnB || 0;
+      const off =
+        show.omsetOffline !== undefined ? show.omsetOffline : show.omsetFnB || 0;
+      const mol = show.omsetMolling || 0;
+      const fnb = off + mol > 0 ? off + mol : show.omsetFnB || 0;
       const pen = autoPenonton > 0 ? autoPenonton : show.penonton || 0;
       setOmsetCinema(cin);
+      setOmsetOffline(off);
+      setOmsetMolling(mol);
       setOmsetFnB(fnb);
       setOmsetCinemaStr(cin ? formatNumberWithDots(cin) : '0');
-      setOmsetFnBStr(fnb ? formatNumberWithDots(fnb) : '0');
+      setOmsetOfflineStr(off ? formatNumberWithDots(off) : '0');
+      setOmsetMollingStr(mol ? formatNumberWithDots(mol) : '0');
+      if (mol > 0 && off === 0) {
+        setSelectedFnBCategory('molling');
+      } else {
+        setSelectedFnBCategory('offline');
+      }
       setBill(show.bill || 0);
       setPenonton(pen);
       setIsLocked(Boolean(show.isLocked));
     } else {
       setOmsetCinema(autoCinema);
+      setOmsetOffline(0);
+      setOmsetMolling(0);
       setOmsetFnB(0);
       setOmsetCinemaStr(autoCinema ? formatNumberWithDots(autoCinema) : '0');
-      setOmsetFnBStr('0');
+      setOmsetOfflineStr('0');
+      setOmsetMollingStr('0');
+      setSelectedFnBCategory('offline');
       setBill(0);
       setPenonton(autoPenonton);
       setIsLocked(false);
@@ -337,8 +356,15 @@ export const CashierPerformanceInput: React.FC<CashierPerformanceInputProps> = (
   const handleFnBChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const rawDigits = e.target.value.replace(/\D/g, '');
     const num = rawDigits ? Number(rawDigits) : 0;
-    setOmsetFnB(num);
-    setOmsetFnBStr(num ? num.toLocaleString('id-ID') : '');
+    if (selectedFnBCategory === 'offline') {
+      setOmsetOffline(num);
+      setOmsetOfflineStr(num ? num.toLocaleString('id-ID') : '');
+      setOmsetFnB(num + omsetMolling);
+    } else {
+      setOmsetMolling(num);
+      setOmsetMollingStr(num ? num.toLocaleString('id-ID') : '');
+      setOmsetFnB(omsetOffline + num);
+    }
   };
 
   const handleCinemaChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -351,20 +377,24 @@ export const CashierPerformanceInput: React.FC<CashierPerformanceInputProps> = (
   const updateMemoryShow = (
     showNum: number,
     cin: number,
-    fnb: number,
+    off: number,
+    mol: number,
     b: number,
     p: number,
     lockedStatus: boolean
   ) => {
+    const fnb = off + mol;
     const updatedShows = dailyRecord.shows.map((s) => {
       if (s.showNumber === showNum) {
         return {
           ...s,
           omsetCinema: cin,
           omsetFnB: fnb,
+          omsetOffline: off,
+          omsetMolling: mol,
           bill: b,
           penonton: p,
-          isFilled: fnb > 0 || b > 0,
+          isFilled: fnb > 0 || off > 0 || mol > 0 || b > 0,
           isLocked: lockedStatus,
         };
       }
@@ -375,7 +405,15 @@ export const CashierPerformanceInput: React.FC<CashierPerformanceInputProps> = (
 
   const handleTabChange = (showNum: number) => {
     if (!isLocked) {
-      updateMemoryShow(activeShow, omsetCinema, omsetFnB, bill, penonton, isLocked);
+      updateMemoryShow(
+        activeShow,
+        omsetCinema,
+        omsetOffline,
+        omsetMolling,
+        bill,
+        penonton,
+        isLocked
+      );
     }
     setActiveShow(showNum);
     loadShowData(dailyRecord, showNum);
@@ -399,8 +437,15 @@ export const CashierPerformanceInput: React.FC<CashierPerformanceInputProps> = (
   const handleApplyBillOcrData = (data: ExtractedSalesData) => {
     if (isLocked) return;
     if (data.omsetFnB !== undefined) {
-      setOmsetFnB(data.omsetFnB);
-      setOmsetFnBStr(data.omsetFnB ? data.omsetFnB.toLocaleString('id-ID') : '0');
+      if (selectedFnBCategory === 'offline') {
+        setOmsetOffline(data.omsetFnB);
+        setOmsetOfflineStr(data.omsetFnB ? data.omsetFnB.toLocaleString('id-ID') : '0');
+        setOmsetFnB(data.omsetFnB + omsetMolling);
+      } else {
+        setOmsetMolling(data.omsetFnB);
+        setOmsetMollingStr(data.omsetFnB ? data.omsetFnB.toLocaleString('id-ID') : '0');
+        setOmsetFnB(omsetOffline + data.omsetFnB);
+      }
     }
     if (data.omsetCinema !== undefined && data.omsetCinema > 0) {
       setOmsetCinema(data.omsetCinema);
@@ -452,13 +497,16 @@ export const CashierPerformanceInput: React.FC<CashierPerformanceInputProps> = (
 
     const autoOutletPen = getOutletPenontonForShow(activeShow);
     const effectivePenonton = autoOutletPen > 0 ? autoOutletPen : penonton;
+    const totalShowFnB = omsetOffline + omsetMolling;
 
     const updatedShows = dailyRecord.shows.map((s) => {
       if (s.showNumber === activeShow) {
         return {
           ...s,
           omsetCinema,
-          omsetFnB,
+          omsetFnB: totalShowFnB,
+          omsetOffline,
+          omsetMolling,
           bill,
           penonton: effectivePenonton,
           updatedAt: nowTime,
@@ -481,6 +529,7 @@ export const CashierPerformanceInput: React.FC<CashierPerformanceInputProps> = (
 
     StorageService.saveCashierDailyPerformance(newRecord);
     setDailyRecord(newRecord);
+    setOmsetFnB(totalShowFnB);
     setPenonton(effectivePenonton);
     setIsLocked(true);
     triggerToast(
@@ -511,6 +560,8 @@ export const CashierPerformanceInput: React.FC<CashierPerformanceInputProps> = (
       cashierId: string;
       cashierName: string;
       cashierNik: string;
+      netOffline: number;
+      netMolling: number;
       netFnb: number;
       netBill: number;
       netPenonton: number;
@@ -526,9 +577,23 @@ export const CashierPerformanceInput: React.FC<CashierPerformanceInputProps> = (
     outletDailyCashierRecords.forEach((rec) => {
       const current = rec.shows?.find((x) => x.showNumber === showNum);
 
-      const showFnb = current?.omsetFnB || 0;
+      const showOffline =
+        current?.omsetOffline !== undefined
+          ? current.omsetOffline
+          : current?.omsetFnB || 0;
+      const showMolling = current?.omsetMolling || 0;
+      const showFnb =
+        showOffline + showMolling > 0
+          ? showOffline + showMolling
+          : current?.omsetFnB || 0;
       const showBill = current?.bill || 0;
-      const isFilled = Boolean(current?.isFilled || showFnb > 0 || showBill > 0);
+      const isFilled = Boolean(
+        current?.isFilled ||
+          showFnb > 0 ||
+          showOffline > 0 ||
+          showMolling > 0 ||
+          showBill > 0
+      );
       if (!isFilled) return;
 
       const showPenonton =
@@ -548,6 +613,8 @@ export const CashierPerformanceInput: React.FC<CashierPerformanceInputProps> = (
         cashierId: rec.cashierId,
         cashierName: matchedEmp?.name || rec.cashierName || 'Kasir',
         cashierNik: matchedEmp?.nik || rec.cashierNik || '-',
+        netOffline: showOffline,
+        netMolling: showMolling,
         netFnb: showFnb,
         netBill: showBill,
         netPenonton: showPenonton,
@@ -572,7 +639,9 @@ export const CashierPerformanceInput: React.FC<CashierPerformanceInputProps> = (
       (x) => x.showNumber === showNum
     );
 
-    // Jumlahkan Omset F&B dan Bill dari seluruh kasir yang input di show ini
+    // Jumlahkan Omset Offline, Omset Molling, Total F&B dan Bill dari seluruh kasir yang input di show ini
+    const sumOffline = cashiersInShow.reduce((acc, item) => acc + item.netOffline, 0);
+    const sumMolling = cashiersInShow.reduce((acc, item) => acc + item.netMolling, 0);
     const sumFnb = cashiersInShow.reduce((acc, item) => acc + item.netFnb, 0);
     const sumBill = cashiersInShow.reduce((acc, item) => acc + item.netBill, 0);
 
@@ -584,7 +653,12 @@ export const CashierPerformanceInput: React.FC<CashierPerformanceInputProps> = (
     const showPenonton =
       (outletShowCur?.penonton || 0) > 0 ? outletShowCur!.penonton : fallbackPenonton;
 
-    const isFilled = cashiersInShow.length > 0 || sumFnb > 0 || sumBill > 0;
+    const isFilled =
+      cashiersInShow.length > 0 ||
+      sumFnb > 0 ||
+      sumOffline > 0 ||
+      sumMolling > 0 ||
+      sumBill > 0;
     const isLocked = Boolean(currentSelectedCashierShow?.isLocked);
 
     const netSph = showPenonton > 0 ? sumFnb / showPenonton : 0;
@@ -602,6 +676,8 @@ export const CashierPerformanceInput: React.FC<CashierPerformanceInputProps> = (
       isFilled,
       isLocked,
       cashiersInShow,
+      netOffline: sumOffline,
+      netMolling: sumMolling,
       netFnb: sumFnb,
       netBill: sumBill,
       netPenonton: showPenonton,
@@ -616,12 +692,18 @@ export const CashierPerformanceInput: React.FC<CashierPerformanceInputProps> = (
 
   // Total Akumulasi Harian Kasir yang Sedang Dipilih (untuk kartu ringkasan kasir di atas)
   const selectedCashierFilledShows = dailyRecord.shows.filter(
-    (s) => s.isFilled || s.omsetFnB > 0 || s.bill > 0
+    (s) =>
+      s.isFilled ||
+      s.omsetFnB > 0 ||
+      (s.omsetOffline || 0) > 0 ||
+      (s.omsetMolling || 0) > 0 ||
+      s.bill > 0
   );
-  const selectedCashierTotalFnB = selectedCashierFilledShows.reduce(
-    (acc, s) => acc + (s.omsetFnB || 0),
-    0
-  );
+  const selectedCashierTotalFnB = selectedCashierFilledShows.reduce((acc, s) => {
+    const off = s.omsetOffline !== undefined ? s.omsetOffline : s.omsetFnB || 0;
+    const mol = s.omsetMolling || 0;
+    return acc + (off + mol > 0 ? off + mol : s.omsetFnB || 0);
+  }, 0);
   const selectedCashierTotalBill = selectedCashierFilledShows.reduce(
     (acc, s) => acc + (s.bill || 0),
     0
@@ -640,6 +722,8 @@ export const CashierPerformanceInput: React.FC<CashierPerformanceInputProps> = (
   );
 
   // Total Akhir Gabungan Seluruh Show (Show 1 s/d Show 5) dari Seluruh Kasir di Tabel Rekap
+  const totalOffline = netShowsList.reduce((acc, r) => acc + r.netOffline, 0);
+  const totalMolling = netShowsList.reduce((acc, r) => acc + r.netMolling, 0);
   const totalFnB = netShowsList.reduce((acc, r) => acc + r.netFnb, 0);
   const totalBill = netShowsList.reduce((acc, r) => acc + r.netBill, 0);
   const filledShowRows = netShowsList.filter((r) => r.isFilled);
@@ -654,7 +738,7 @@ export const CashierPerformanceInput: React.FC<CashierPerformanceInputProps> = (
       : penonton;
   const activeShowMetrics = StorageService.calculateMetrics(
     omsetCinema,
-    omsetFnB,
+    omsetOffline + omsetMolling,
     bill,
     currentPreviewPenonton,
     targetHead
@@ -672,12 +756,26 @@ export const CashierPerformanceInput: React.FC<CashierPerformanceInputProps> = (
   const cashiersWithDailyInput = outletDailyCashierRecords
     .map((rec) => {
       const filled = (rec.shows || []).filter(
-        (s) => s.isFilled || (s.omsetFnB || 0) > 0 || (s.bill || 0) > 0
+        (s) =>
+          s.isFilled ||
+          (s.omsetFnB || 0) > 0 ||
+          (s.omsetOffline || 0) > 0 ||
+          (s.omsetMolling || 0) > 0 ||
+          (s.bill || 0) > 0
       );
       if (filled.length === 0) return null;
 
       const sortedFilled = [...filled].sort((a, b) => a.showNumber - b.showNumber);
-      const cFnB = sortedFilled.reduce((acc, s) => acc + (s.omsetFnB || 0), 0);
+      const cOffline = sortedFilled.reduce(
+        (acc, s) =>
+          acc + (s.omsetOffline !== undefined ? s.omsetOffline : s.omsetFnB || 0),
+        0
+      );
+      const cMolling = sortedFilled.reduce(
+        (acc, s) => acc + (s.omsetMolling || 0),
+        0
+      );
+      const cFnB = cOffline + cMolling;
       const cBill = sortedFilled.reduce((acc, s) => acc + (s.bill || 0), 0);
       const cPen = sortedFilled.reduce((acc, s) => {
         const outPen = getOutletPenontonForShow(s.showNumber);
@@ -701,6 +799,8 @@ export const CashierPerformanceInput: React.FC<CashierPerformanceInputProps> = (
         cashierNik: matchedEmp?.nik || rec.cashierNik || '-',
         filledShowsCount: sortedFilled.length,
         filledShowNumbers: sortedFilled.map((s) => s.showNumber),
+        totalOffline: cOffline,
+        totalMolling: cMolling,
         totalFnB: cFnB,
         totalBill: cBill,
         totalPenonton: cPen,
@@ -1297,21 +1397,54 @@ export const CashierPerformanceInput: React.FC<CashierPerformanceInputProps> = (
 
               {/* 4 Main Input Fields */}
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mt-5">
-                {/* 1. Omset F&B Kasir */}
+                {/* 1. Omset F&B Kasir (Dropdown: Omset Offline & Omset Molling) */}
                 <div>
-                  <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-600 mb-1.5">
-                    OMSET F&amp;B KASIR (RP) - SHOW {activeShow}
-                  </label>
+                  <div className="flex items-center justify-between gap-1.5 mb-1.5">
+                    <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-600 truncate">
+                      OMSET F&amp;B KASIR (RP) - SHOW {activeShow}
+                    </label>
+                    <select
+                      value={selectedFnBCategory}
+                      disabled={isLocked}
+                      onChange={(e) =>
+                        setSelectedFnBCategory(
+                          e.target.value as 'offline' | 'molling'
+                        )
+                      }
+                      className="px-2 py-0.5 rounded-lg border border-purple-300 bg-purple-50 text-purple-900 font-black text-[10px] uppercase cursor-pointer focus:outline-hidden focus:ring-1 focus:ring-purple-500"
+                    >
+                      <option value="offline">Omset Offline</option>
+                      <option value="molling">Omset Molling</option>
+                    </select>
+                  </div>
                   <input
                     type="text"
                     inputMode="numeric"
                     disabled={isLocked}
-                    value={omsetFnBStr}
+                    value={
+                      selectedFnBCategory === 'offline'
+                        ? omsetOfflineStr
+                        : omsetMollingStr
+                    }
                     onFocus={() => {
-                      if (omsetFnBStr === '0') setOmsetFnBStr('');
+                      if (selectedFnBCategory === 'offline' && omsetOfflineStr === '0') {
+                        setOmsetOfflineStr('');
+                      } else if (
+                        selectedFnBCategory === 'molling' &&
+                        omsetMollingStr === '0'
+                      ) {
+                        setOmsetMollingStr('');
+                      }
                     }}
                     onBlur={() => {
-                      if (!omsetFnBStr) setOmsetFnBStr('0');
+                      if (selectedFnBCategory === 'offline' && !omsetOfflineStr) {
+                        setOmsetOfflineStr('0');
+                      } else if (
+                        selectedFnBCategory === 'molling' &&
+                        !omsetMollingStr
+                      ) {
+                        setOmsetMollingStr('0');
+                      }
                     }}
                     onChange={handleFnBChange}
                     className={`w-full px-4 py-2.5 rounded-xl border border-amber-300 bg-white text-slate-900 font-extrabold text-sm focus:outline-hidden focus:ring-2 focus:ring-amber-400 transition ${
@@ -1319,6 +1452,30 @@ export const CashierPerformanceInput: React.FC<CashierPerformanceInputProps> = (
                     }`}
                     placeholder="0"
                   />
+                  <div className="flex flex-wrap items-center gap-1.5 mt-1.5 text-[10px]">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedFnBCategory('offline')}
+                      className={`px-2 py-0.5 rounded font-bold cursor-pointer transition ${
+                        selectedFnBCategory === 'offline'
+                          ? 'bg-emerald-600 text-white'
+                          : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      Offline: Rp {omsetOffline.toLocaleString('id-ID')}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedFnBCategory('molling')}
+                      className={`px-2 py-0.5 rounded font-bold cursor-pointer transition ${
+                        selectedFnBCategory === 'molling'
+                          ? 'bg-purple-700 text-amber-300'
+                          : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      Molling: Rp {omsetMolling.toLocaleString('id-ID')}
+                    </button>
+                  </div>
                 </div>
 
                 {/* 2. Jumlah Bill / Transaksi Kasir */}
@@ -1640,7 +1797,8 @@ export const CashierPerformanceInput: React.FC<CashierPerformanceInputProps> = (
                 <thead>
                   <tr className="bg-slate-100 text-slate-700 font-black uppercase text-[11px] border-b border-slate-200">
                     <th className="py-3 px-3 min-w-[185px]">Show</th>
-                    <th className="py-3 px-3 text-right">Omset F&amp;B Kasir</th>
+                    <th className="py-3 px-3 text-right">Omset Offline</th>
+                    <th className="py-3 px-3 text-right">Omset Molling</th>
                     <th className="py-3 px-3 text-right">Bill Kasir</th>
                     <th className="py-3 px-3 text-right">Penonton (Outlet)</th>
                     <th className="py-3 px-3 text-right">Daya Serap (%)</th>
@@ -1694,7 +1852,10 @@ export const CashierPerformanceInput: React.FC<CashierPerformanceInputProps> = (
                             </div>
                           </td>
                           <td className="py-2.5 px-3 text-right font-bold text-slate-900">
-                            Rp {row.netFnb.toLocaleString('id-ID')}
+                            Rp {row.netOffline.toLocaleString('id-ID')}
+                          </td>
+                          <td className="py-2.5 px-3 text-right font-bold text-purple-800">
+                            Rp {row.netMolling.toLocaleString('id-ID')}
                           </td>
                           <td className="py-2.5 px-3 text-right">
                             {row.netBill.toLocaleString('id-ID')}
@@ -1748,7 +1909,7 @@ export const CashierPerformanceInput: React.FC<CashierPerformanceInputProps> = (
                             {cashiersInShow.length === 0 ? (
                               <tr className="bg-[#FAF5FF]/50 border-b border-[#F3F4F6]">
                                 <td
-                                  colSpan={10}
+                                  colSpan={11}
                                   className="py-2.5 px-3 pl-9 text-[11px] text-slate-400 italic"
                                 >
                                   <span className="text-[#A78BFA] font-mono text-xs mr-2 select-none">
@@ -1794,37 +1955,42 @@ export const CashierPerformanceInput: React.FC<CashierPerformanceInputProps> = (
                                       </div>
                                     </td>
 
-                                    {/* Column 2: Omset F&B Kasir */}
+                                    {/* Column 2: Omset Offline Kasir */}
                                     <td className="py-2 px-3 text-right text-[11px] font-bold text-[#059669]">
-                                      Rp {cItem.netFnb.toLocaleString('id-ID')}
+                                      Rp {cItem.netOffline.toLocaleString('id-ID')}
                                     </td>
 
-                                    {/* Column 3: Bill Kasir */}
+                                    {/* Column 3: Omset Molling Kasir */}
+                                    <td className="py-2 px-3 text-right text-[11px] font-bold text-[#7C3AED]">
+                                      Rp {cItem.netMolling.toLocaleString('id-ID')}
+                                    </td>
+
+                                    {/* Column 4: Bill Kasir */}
                                     <td className="py-2 px-3 text-right text-[11px] text-[#4B5563]">
                                       {cItem.netBill.toLocaleString('id-ID')}
                                     </td>
 
-                                    {/* Column 4: Penonton */}
+                                    {/* Column 5: Penonton */}
                                     <td className="py-2 px-3 text-right text-[11px] text-[#4B5563]">
                                       {cItem.netPenonton.toLocaleString('id-ID')}
                                     </td>
 
-                                    {/* Column 5: Daya Serap */}
+                                    {/* Column 6: Daya Serap */}
                                     <td className="py-2 px-3 text-right text-[11px] text-[#4B5563]">
                                       {cItem.dayaSerapPercent.toFixed(1)}%
                                     </td>
 
-                                    {/* Column 6: Head / SPH */}
+                                    {/* Column 7: Head / SPH */}
                                     <td className="py-2 px-3 text-right text-[11px] font-bold text-[#0284C7]">
                                       Rp {Math.round(cItem.netSph).toLocaleString('id-ID')}
                                     </td>
 
-                                    {/* Column 7: Target Head */}
+                                    {/* Column 8: Target Head */}
                                     <td className="py-2 px-3 text-right text-[11px] text-[#9CA3AF]">
                                       Rp {targetHead.toLocaleString('id-ID')}
                                     </td>
 
-                                    {/* Column 8: Achievement % */}
+                                    {/* Column 9: Achievement % */}
                                     <td className="py-2 px-3 text-right">
                                       <span
                                         className={`inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold ${
@@ -1837,12 +2003,12 @@ export const CashierPerformanceInput: React.FC<CashierPerformanceInputProps> = (
                                       </span>
                                     </td>
 
-                                    {/* Column 9: AT */}
+                                    {/* Column 10: AT */}
                                     <td className="py-2 px-3 text-right text-[11px] text-[#4B5563]">
                                       Rp {Math.round(cItem.netAt).toLocaleString('id-ID')}
                                     </td>
 
-                                    {/* Column 10: Status */}
+                                    {/* Column 11: Status */}
                                     <td className="py-2 px-3 text-center">
                                       <span
                                         className={`inline-flex items-center px-2 py-0.5 rounded-full text-[9px] font-bold ${
@@ -1891,7 +2057,10 @@ export const CashierPerformanceInput: React.FC<CashierPerformanceInputProps> = (
                       </div>
                     </td>
                     <td className="py-3 px-3 text-right text-amber-300">
-                      Rp {totalFnB.toLocaleString('id-ID')}
+                      Rp {totalOffline.toLocaleString('id-ID')}
+                    </td>
+                    <td className="py-3 px-3 text-right text-purple-200">
+                      Rp {totalMolling.toLocaleString('id-ID')}
                     </td>
                     <td className="py-3 px-3 text-right">
                       {totalBill.toLocaleString('id-ID')}
@@ -1946,7 +2115,10 @@ export const CashierPerformanceInput: React.FC<CashierPerformanceInputProps> = (
                           </div>
                         </td>
                         <td className="py-2.5 px-3 text-right font-extrabold text-[#059669]">
-                          Rp {cTotal.totalFnB.toLocaleString('id-ID')}
+                          Rp {cTotal.totalOffline.toLocaleString('id-ID')}
+                        </td>
+                        <td className="py-2.5 px-3 text-right font-extrabold text-[#7C3AED]">
+                          Rp {cTotal.totalMolling.toLocaleString('id-ID')}
                         </td>
                         <td className="py-2.5 px-3 text-right">
                           {cTotal.totalBill.toLocaleString('id-ID')}
@@ -2327,9 +2499,21 @@ export const CashierPerformanceInput: React.FC<CashierPerformanceInputProps> = (
 
             <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-2 text-xs">
               <div className="flex justify-between">
-                <span className="text-slate-500">Omset F&amp;B Kasir:</span>
+                <span className="text-slate-500">Omset Offline Kasir:</span>
+                <span className="font-black text-emerald-700">
+                  Rp {omsetOffline.toLocaleString('id-ID')}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">Omset Molling Kasir:</span>
+                <span className="font-black text-purple-800">
+                  Rp {omsetMolling.toLocaleString('id-ID')}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">Total Omset F&amp;B Show {activeShow}:</span>
                 <span className="font-black text-slate-900">
-                  Rp {omsetFnB.toLocaleString('id-ID')}
+                  Rp {(omsetOffline + omsetMolling).toLocaleString('id-ID')}
                 </span>
               </div>
               <div className="flex justify-between">
