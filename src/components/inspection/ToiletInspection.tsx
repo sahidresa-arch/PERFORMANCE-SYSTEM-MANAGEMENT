@@ -271,23 +271,32 @@ export const ToiletInspection: React.FC<ToiletInspectionProps> = ({
     ((outlets.length - unreportedList.length) / (outlets.length || 1)) * 100
   );
 
+  // Filter laporan sesuai hak akses outlet (khusus Manager/Cleaner hanya menampilkan outlet masing-masing)
+  const allowedOutletIds = new Set(filteredOutlets.map((o) => o.id));
+  const scopedInspections = inspections.filter((ins) => {
+    if (isManagerOrCleaner && currentUser?.outletId) {
+      return ins.outletId === currentUser.outletId;
+    }
+    return allowedOutletIds.has(ins.outletId);
+  });
+
   // Reports with 'R' (Rusak / Temuan)
-  const reportsWithR = inspections.filter((ins) => {
+  const reportsWithR = scopedInspections.filter((ins) => {
     const values = Object.values(ins.checklist || {});
     return values.includes('R');
   });
 
   // Calculate summary metrics for dashboard
-  const totalLaporan = inspections.length;
-  const countBersih = inspections.reduce((acc, ins) => {
+  const totalLaporan = scopedInspections.length;
+  const countBersih = scopedInspections.reduce((acc, ins) => {
     const values = Object.values(ins.checklist || {});
     return acc + (values.every((v) => v === 'B') ? 1 : 0);
   }, 0);
-  const countKurang = inspections.reduce((acc, ins) => {
+  const countKurang = scopedInspections.reduce((acc, ins) => {
     const values = Object.values(ins.checklist || {});
     return acc + (values.some((v) => v === 'K') && !values.some((v) => v === 'R') ? 1 : 0);
   }, 0);
-  const countRusak = inspections.reduce((acc, ins) => {
+  const countRusak = scopedInspections.reduce((acc, ins) => {
     const values = Object.values(ins.checklist || {});
     return acc + (values.some((v) => v === 'R') ? 1 : 0);
   }, 0);
@@ -1028,7 +1037,8 @@ export const ToiletInspection: React.FC<ToiletInspectionProps> = ({
                 <select
                   value={selectedAreaId}
                   onChange={(e) => setSelectedAreaId(e.target.value)}
-                  className="w-full text-xs font-bold px-3 py-2 rounded-xl border border-slate-300 bg-white text-slate-800 focus:border-amber-400"
+                  disabled={Boolean(isManagerOrCleaner)}
+                  className="w-full text-xs font-bold px-3 py-2 rounded-xl border border-slate-300 bg-white text-slate-800 focus:border-amber-400 disabled:bg-slate-100 disabled:text-slate-500"
                 >
                   <option value="">Semua Area</option>
                   {areas.map((a) => (
@@ -1046,9 +1056,10 @@ export const ToiletInspection: React.FC<ToiletInspectionProps> = ({
                 <select
                   value={selectedOutletFilter}
                   onChange={(e) => setSelectedOutletFilter(e.target.value)}
-                  className="w-full text-xs font-bold px-3 py-2 rounded-xl border border-slate-300 bg-white text-slate-800 focus:border-amber-400"
+                  disabled={Boolean(isManagerOrCleaner)}
+                  className="w-full text-xs font-bold px-3 py-2 rounded-xl border border-slate-300 bg-white text-slate-800 focus:border-amber-400 disabled:bg-slate-100 disabled:text-slate-500"
                 >
-                  <option value="">Semua Outlet</option>
+                  {!isManagerOrCleaner && <option value="">Semua Outlet</option>}
                   {outlets.map((o) => (
                     <option key={o.id} value={o.id}>
                       {o.name}
@@ -1074,7 +1085,7 @@ export const ToiletInspection: React.FC<ToiletInspectionProps> = ({
                   type="button"
                   onClick={() => {
                     setSelectedAreaId('');
-                    setSelectedOutletFilter('');
+                    setSelectedOutletFilter(isManagerOrCleaner ? currentUser.outletId! : '');
                   }}
                   className="w-full py-2 px-3 rounded-xl border border-slate-300 text-xs font-bold text-slate-600 hover:text-slate-900 hover:bg-slate-50 transition cursor-pointer"
                 >

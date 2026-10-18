@@ -60,16 +60,53 @@ CREATE TABLE IF NOT EXISTS public.cinema_inspections (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
--- 5. Indeks performa pencarian query
+-- 5. Tabel HC Area - Data Karyawan (cinema_employees)
+CREATE TABLE IF NOT EXISTS public.cinema_employees (
+    id TEXT PRIMARY KEY,
+    nik TEXT NOT NULL,
+    name TEXT NOT NULL,
+    jabatan TEXT NOT NULL,
+    divisi TEXT NOT NULL,
+    outlet_id TEXT NOT NULL,
+    gender TEXT DEFAULT 'L',
+    tanggal_lahir TEXT DEFAULT '-',
+    status_kerja TEXT DEFAULT 'Kontrak',
+    tanggal_kontrak TEXT DEFAULT '2026-01-01',
+    habis_kontrak TEXT DEFAULT '-',
+    phone TEXT DEFAULT '-',
+    photo_url TEXT DEFAULT '',
+    is_deleted BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- 6. Tabel HC Area - Penilaian KPI Karyawan (cinema_employee_kpis)
+CREATE TABLE IF NOT EXISTS public.cinema_employee_kpis (
+    id TEXT PRIMARY KEY,
+    employee_id TEXT NOT NULL,
+    month TEXT NOT NULL,
+    score NUMERIC DEFAULT 0,
+    notes TEXT DEFAULT '',
+    graded_by TEXT DEFAULT '',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- 7. Indeks performa pencarian query
 CREATE INDEX IF NOT EXISTS idx_cinema_sales_outlet_date ON public.cinema_sales(outlet_id, date);
 CREATE INDEX IF NOT EXISTS idx_cinema_occupancy_outlet_date ON public.cinema_occupancy(outlet_id, date);
 CREATE INDEX IF NOT EXISTS idx_cinema_inspections_outlet_date ON public.cinema_inspections(outlet_id, date);
+CREATE INDEX IF NOT EXISTS idx_cinema_employees_outlet ON public.cinema_employees(outlet_id);
+CREATE INDEX IF NOT EXISTS idx_cinema_employees_nik ON public.cinema_employees(nik);
+CREATE INDEX IF NOT EXISTS idx_cinema_employee_kpis_emp_month ON public.cinema_employee_kpis(employee_id, month);
 
--- 6. Aktifkan Row Level Security (RLS) dengan Policy Akses Anon
+-- 8. Aktifkan Row Level Security (RLS) dengan Policy Akses Anon
 ALTER TABLE public.cinema_sales ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.cinema_occupancy ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.cinema_baking ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.cinema_inspections ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.cinema_employees ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.cinema_employee_kpis ENABLE ROW LEVEL SECURITY;
 
 -- Policy untuk public / anon user
 DROP POLICY IF EXISTS "Allow anon all on cinema_sales" ON public.cinema_sales;
@@ -83,6 +120,29 @@ CREATE POLICY "Allow anon all on cinema_baking" ON public.cinema_baking FOR ALL 
 
 DROP POLICY IF EXISTS "Allow anon all on cinema_inspections" ON public.cinema_inspections;
 CREATE POLICY "Allow anon all on cinema_inspections" ON public.cinema_inspections FOR ALL USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Allow anon all on cinema_employees" ON public.cinema_employees;
+CREATE POLICY "Allow anon all on cinema_employees" ON public.cinema_employees FOR ALL USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Allow anon all on cinema_employee_kpis" ON public.cinema_employee_kpis;
+CREATE POLICY "Allow anon all on cinema_employee_kpis" ON public.cinema_employee_kpis FOR ALL USING (true) WITH CHECK (true);
+
+-- 9. Aktifkan Supabase Realtime untuk Tabel HC Area
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_publication_tables
+    WHERE pubname = 'supabase_realtime' AND tablename = 'cinema_employees'
+  ) THEN
+    ALTER PUBLICATION supabase_realtime ADD TABLE public.cinema_employees;
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_publication_tables
+    WHERE pubname = 'supabase_realtime' AND tablename = 'cinema_employee_kpis'
+  ) THEN
+    ALTER PUBLICATION supabase_realtime ADD TABLE public.cinema_employee_kpis;
+  END IF;
+END $$;
 `;
 
 export function getSupabase(): SupabaseClient | null {
@@ -488,7 +548,7 @@ export async function mergeRemoteInspectionsToLocal(): Promise<boolean> {
 
 /**
  * Sinkronisasi Data Karyawan & Daftar Karyawan Dihapus ke Supabase
- * Menggunakan reserved row pada tabel cinema_sales agar langsung aktif tanpa perlu buat tabel baru
+ * Mendukung tabel khusus public.cinema_employees sekaligus fallback ke cinema_sales
  */
 export async function syncEmployeesToSupabase(
   employees?: Employee[],
@@ -501,26 +561,66 @@ export async function syncEmployeesToSupabase(
     const empList = employees || StorageService.getEmployees();
     const delRaw = localStorage.getItem('cinema_xxi_deleted_employee_ids');
     const delList: string[] = deletedIds || (delRaw ? JSON.parse(delRaw) : []);
+    const nowIso = new Date().toISOString();
 
+    let tableSuccess = false;
+
+    // 1. Coba sinkronisasi ke tabel khusus public.cinema_employees (jika sudah di-run di Supabase)
+    if (empList.length > 0) {
+      const rows = empList.map((e: any) => ({
+        id: e.id,
+        nik: e.nik || '-',
+        name: e.name || '',
+        jabatan: e.jabatan || 'Cinema Manager',
+        divisi: e.divisi || 'Cinema',
+        outlet_id: e.outletId || 'the-park-sawangan-xxi',
+        gender: e.gender || 'L',
+        tanggal_lahir: e.tanggalLahir || '-',
+        status_kerja: e.statusKerja || 'Kontrak',
+        tanggal_kontrak: e.tanggalKontrak || '2026-01-01',
+        habis_kontrak: e.habisKontrak || '-',
+        phone: e.phone || '-',
+        photo_url: e.photoUrl || '',
+        is_deleted: false,
+        updated_at: e.updatedAt || nowIso,
+      }));
+
+      const { error: empTableErr } = await client
+        .from('cinema_employees')
+        .upsert(rows, { onConflict: 'id' });
+
+      if (!empTableErr) {
+        tableSuccess = true;
+        // Tandai juga baris yang dihapus di tabel cinema_employees
+        if (delList.length > 0) {
+          await client
+            .from('cinema_employees')
+            .update({ is_deleted: true, updated_at: nowIso })
+            .in('id', delList);
+        }
+      }
+    }
+
+    // 2. Simpan juga ke reserved row pada cinema_sales sebagai backup / kompatibilitas penuh
     const payload = [
       {
         id: '__SYSTEM_SYNC_EMPLOYEES__',
         outlet_id: '__SYSTEM_SYNC_EMPLOYEES__',
         date: '2000-01-01',
         shows: empList as any,
-        updated_at: new Date().toISOString(),
+        updated_at: nowIso,
       },
       {
         id: '__SYSTEM_SYNC_DELETED_EMPLOYEES__',
         outlet_id: '__SYSTEM_SYNC_DELETED_EMPLOYEES__',
         date: '2000-01-01',
         shows: delList as any,
-        updated_at: new Date().toISOString(),
+        updated_at: nowIso,
       },
     ];
 
     const { error } = await client.from('cinema_sales').upsert(payload, { onConflict: 'id' });
-    if (error) {
+    if (error && !tableSuccess) {
       console.warn('Sync employees to Supabase warning:', error);
       return false;
     }
@@ -539,24 +639,78 @@ export async function mergeRemoteEmployeesToLocal(): Promise<boolean> {
   if (!client) return false;
 
   try {
+    const localEmployees = StorageService.getEmployees();
+    const localDelRaw = localStorage.getItem('cinema_xxi_deleted_employee_ids');
+    const localDeletedIds: string[] = localDelRaw ? JSON.parse(localDelRaw) : [];
+
+    let remoteEmployees: Employee[] = [];
+    let remoteDeletedIds: string[] = [];
+    let hasDedicatedTable = false;
+
+    // 1. Cek tabel khusus public.cinema_employees terlebih dahulu
+    const { data: tableRows, error: tableErr } = await client
+      .from('cinema_employees')
+      .select('*');
+
+    if (!tableErr && Array.isArray(tableRows)) {
+      hasDedicatedTable = true;
+      if (tableRows.length === 0 && localEmployees.length > 0) {
+        // Tabel cinema_employees baru saja dibuat di Supabase dan masih kosong -> langsung isi otomatis!
+        await syncEmployeesToSupabase(localEmployees, localDeletedIds);
+      } else {
+        for (const r of tableRows) {
+          if (r.is_deleted) {
+            if (r.id) remoteDeletedIds.push(String(r.id));
+            if (r.nik && r.nik !== '-') remoteDeletedIds.push(String(r.nik).trim());
+          } else if (r.id) {
+            remoteEmployees.push({
+              id: String(r.id),
+              nik: String(r.nik || '-'),
+              name: String(r.name || ''),
+              jabatan: String(r.jabatan || 'Cinema Manager'),
+              divisi: (r.divisi || 'Cinema') as any,
+              outletId: String(r.outlet_id || 'the-park-sawangan-xxi'),
+              gender: (r.gender === 'P' ? 'P' : 'L') as 'L' | 'P',
+              tanggalLahir: r.tanggal_lahir || '-',
+              statusKerja: (r.status_kerja || 'Kontrak') as any,
+              tanggalKontrak: r.tanggal_kontrak || '2026-01-01',
+              habisKontrak: r.habis_kontrak || '-',
+              phone: r.phone || '-',
+              photoUrl: r.photo_url || undefined,
+              ...({ updatedAt: r.updated_at } as any),
+            });
+          }
+        }
+      }
+    }
+
+    // 2. Cek juga backup row di cinema_sales (jika cinema_employees belum ada atau kosong)
     const { data, error } = await client
       .from('cinema_sales')
       .select('id, shows, updated_at')
       .in('id', ['__SYSTEM_SYNC_EMPLOYEES__', '__SYSTEM_SYNC_DELETED_EMPLOYEES__']);
 
-    if (error || !data) return false;
+    if (!error && data) {
+      const empRow = data.find((r: any) => r.id === '__SYSTEM_SYNC_EMPLOYEES__');
+      const delRow = data.find((r: any) => r.id === '__SYSTEM_SYNC_DELETED_EMPLOYEES__');
 
-    const empRow = data.find((r: any) => r.id === '__SYSTEM_SYNC_EMPLOYEES__');
-    const delRow = data.find((r: any) => r.id === '__SYSTEM_SYNC_DELETED_EMPLOYEES__');
+      if (delRow && Array.isArray(delRow.shows)) {
+        remoteDeletedIds.push(...delRow.shows);
+      }
 
-    const localEmployees = StorageService.getEmployees();
-    const localDelRaw = localStorage.getItem('cinema_xxi_deleted_employee_ids');
-    const localDeletedIds: string[] = localDelRaw ? JSON.parse(localDelRaw) : [];
+      if (remoteEmployees.length === 0 && empRow && Array.isArray(empRow.shows) && empRow.shows.length > 0) {
+        remoteEmployees = empRow.shows;
+        // Jika tabel khusus cinema_employees sudah dibuat tapi tadinya kosong, sinkronkan ke tabel khusus
+        if (hasDedicatedTable) {
+          await syncEmployeesToSupabase(remoteEmployees, remoteDeletedIds);
+        }
+      }
+    }
 
     // Jika di Supabase belum pernah ada data karyawan sama sekali:
-    // Hanya push otomatis jika instance lokal ini memiliki modifikasi (misal dari AI Studio)
-    if (!empRow || !Array.isArray(empRow.shows) || empRow.shows.length === 0) {
+    if (remoteEmployees.length === 0) {
       const hasLocalEdits =
+        hasDedicatedTable ||
         localStorage.getItem('cinema_xxi_employees_modified') === 'true' ||
         localDeletedIds.length > 0 ||
         localEmployees.some(
@@ -566,15 +720,11 @@ export async function mergeRemoteEmployeesToLocal(): Promise<boolean> {
             String(e.id || '').startsWith('emp_')
         );
 
-      if (hasLocalEdits) {
+      if (hasLocalEdits && localEmployees.length > 0) {
         await syncEmployeesToSupabase(localEmployees, localDeletedIds);
       }
       return false;
     }
-
-    const remoteEmployees: Employee[] = empRow.shows;
-    const remoteDeletedIds: string[] =
-      delRow && Array.isArray(delRow.shows) ? delRow.shows : [];
 
     // Gabungkan daftar ID/NIK yang dihapus
     const mergedDeletedSet = new Set<string>([...localDeletedIds, ...remoteDeletedIds]);
@@ -685,6 +835,7 @@ export async function mergeRemoteEmployeesToLocal(): Promise<boolean> {
 
 /**
  * Sinkronisasi Data KPI Karyawan ke Supabase
+ * Mendukung tabel khusus public.cinema_employee_kpis sekaligus fallback ke cinema_sales
  */
 export async function syncEmployeeKpisToSupabase(records?: EmployeeKpiRecord[]): Promise<boolean> {
   const client = getSupabase();
@@ -692,17 +843,38 @@ export async function syncEmployeeKpisToSupabase(records?: EmployeeKpiRecord[]):
 
   try {
     const list = records || StorageService.getEmployeeKpis();
+    const nowIso = new Date().toISOString();
+    let tableSuccess = false;
+
+    if (list.length > 0) {
+      const kpiRows = list.map((k) => ({
+        id: k.id,
+        employee_id: k.employeeId,
+        month: k.month,
+        score: k.score,
+        notes: k.notes || '',
+        graded_by: k.gradedBy || '',
+        updated_at: nowIso,
+      }));
+      const { error: kpiTableErr } = await client
+        .from('cinema_employee_kpis')
+        .upsert(kpiRows, { onConflict: 'id' });
+      if (!kpiTableErr) {
+        tableSuccess = true;
+      }
+    }
+
     const { error } = await client.from('cinema_sales').upsert(
       {
         id: '__SYSTEM_SYNC_EMPLOYEE_KPIS__',
         outlet_id: '__SYSTEM_SYNC_EMPLOYEE_KPIS__',
         date: '2000-01-01',
         shows: list as any,
-        updated_at: new Date().toISOString(),
+        updated_at: nowIso,
       },
       { onConflict: 'id' }
     );
-    if (error) {
+    if (error && !tableSuccess) {
       console.warn('Sync employee KPIs to Supabase warning:', error);
       return false;
     }
@@ -721,18 +893,44 @@ export async function mergeRemoteEmployeeKpisToLocal(): Promise<boolean> {
   if (!client) return false;
 
   try {
-    const { data, error } = await client
-      .from('cinema_sales')
-      .select('id, shows')
-      .eq('id', '__SYSTEM_SYNC_EMPLOYEE_KPIS__')
-      .maybeSingle();
+    const localKpis = StorageService.getEmployeeKpis();
+    let remoteKpis: EmployeeKpiRecord[] = [];
 
-    if (error || !data || !Array.isArray(data.shows)) return false;
+    // 1. Cek tabel khusus public.cinema_employee_kpis terlebih dahulu
+    const { data: tableKpis, error: tableErr } = await client
+      .from('cinema_employee_kpis')
+      .select('*');
 
-    const remoteKpis: EmployeeKpiRecord[] = data.shows;
+    if (!tableErr && Array.isArray(tableKpis)) {
+      if (tableKpis.length === 0 && localKpis.length > 0) {
+        await syncEmployeeKpisToSupabase(localKpis);
+      } else {
+        remoteKpis = tableKpis.map((r: any) => ({
+          id: String(r.id),
+          employeeId: String(r.employee_id),
+          month: String(r.month),
+          score: Number(r.score || 0),
+          notes: String(r.notes || ''),
+          gradedBy: String(r.graded_by || ''),
+        }));
+      }
+    }
+
+    // 2. Fallback ke backup row di cinema_sales jika tabel khusus belum berisi data
+    if (remoteKpis.length === 0) {
+      const { data, error } = await client
+        .from('cinema_sales')
+        .select('id, shows')
+        .eq('id', '__SYSTEM_SYNC_EMPLOYEE_KPIS__')
+        .maybeSingle();
+
+      if (!error && data && Array.isArray(data.shows)) {
+        remoteKpis = data.shows;
+      }
+    }
+
     if (remoteKpis.length === 0) return false;
 
-    const localKpis = StorageService.getEmployeeKpis();
     const kpiMap = new Map<string, EmployeeKpiRecord>();
     localKpis.forEach((k) => {
       if (k && k.id) kpiMap.set(k.id, k);
@@ -880,6 +1078,20 @@ export function setupSupabaseRealtimeSync(): () => void {
             localStorage.setItem('cinema_xxi_toilet_inspections', JSON.stringify(currentLocal));
             StorageService.broadcastChange('inspection');
           }
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'cinema_employees' },
+        () => {
+          mergeRemoteEmployeesToLocal();
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'cinema_employee_kpis' },
+        () => {
+          mergeRemoteEmployeeKpisToLocal();
         }
       )
       .subscribe();
