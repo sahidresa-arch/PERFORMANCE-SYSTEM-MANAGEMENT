@@ -3166,7 +3166,7 @@ export const StorageService = {
         ? allEmployees.filter((e) => e.outletId === outletId)
         : allEmployees;
 
-    // Prioritaskan karyawan dengan divisi Kasir / F&B atau jabatan mengandung Cashier / Kasir / Cafe / Mixologist / Barista
+    // Prioritaskan karyawan dengan divisi Kasir / F&B atau jabatan mengandung Cashier / Kasir / Cafe / Mixologist / Barista / Supervisor / Guide
     const cashierStaff = outletFiltered.filter((e) => {
       const jab = (e.jabatan || '').toLowerCase();
       const div = (e.divisi || '').toLowerCase();
@@ -3178,7 +3178,10 @@ export const StorageService = {
         jab.includes('cafe') ||
         jab.includes('f&b') ||
         jab.includes('mixologist') ||
-        jab.includes('barista')
+        jab.includes('barista') ||
+        jab.includes('supervisor') ||
+        jab.includes('spv') ||
+        jab.includes('guide')
       );
     });
 
