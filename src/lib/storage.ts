@@ -18,6 +18,10 @@ import {
   WarehouseItem,
   StockTransaction,
   StockOpnameHistory,
+  CashierDailyPerformanceRecord,
+  CashierShowSaleInput,
+  CashierProductItem,
+  CashierMonthlyProductRecord,
 } from '../types';
 import {
   INITIAL_AREAS,
@@ -49,6 +53,8 @@ const KEYS = {
   WAREHOUSE_ITEMS: 'cinema_xxi_warehouse_items',
   STOCK_TRANSACTIONS: 'cinema_xxi_stock_transactions',
   STOCK_OPNAME_HISTORY: 'cinema_xxi_stock_opname_history',
+  CASHIER_PERFORMANCE_DAILY: 'cinema_xxi_cashier_performance_daily',
+  CASHIER_MONTHLY_PRODUCTS: 'cinema_xxi_cashier_monthly_products',
 };
 
 // Helper perbandingan teks & regex yang aman
@@ -3145,6 +3151,258 @@ export const StorageService = {
     localStorage.setItem(KEYS.STOCK_OPNAME_HISTORY, JSON.stringify(list));
     this.broadcastChange('stock-opname');
     return list;
+  },
+
+  // =========================================================
+  // PERFORMANCE SDM (KASIR 5 SHOW & TABEL EXCEL ITEM HARIAN)
+  // =========================================================
+
+  getOutletCashiers(outletId?: string): Employee[] {
+    const allEmployees = this.getEmployees().filter(
+      (e) => e.statusKerja !== 'Resign' && e.statusKerja !== 'Terminate'
+    );
+    const outletFiltered =
+      outletId && outletId !== 'ALL'
+        ? allEmployees.filter((e) => e.outletId === outletId)
+        : allEmployees;
+
+    // Prioritaskan karyawan dengan divisi Kasir / F&B atau jabatan mengandung Cashier / Kasir / Cafe / Mixologist / Barista
+    const cashierStaff = outletFiltered.filter((e) => {
+      const jab = (e.jabatan || '').toLowerCase();
+      const div = (e.divisi || '').toLowerCase();
+      return (
+        div === 'kasir' ||
+        div === 'f&b' ||
+        jab.includes('cashier') ||
+        jab.includes('kasir') ||
+        jab.includes('cafe') ||
+        jab.includes('f&b') ||
+        jab.includes('mixologist') ||
+        jab.includes('barista')
+      );
+    });
+
+    return cashierStaff.length > 0 ? cashierStaff : outletFiltered;
+  },
+
+  getCashierDailyPerformanceAll(): CashierDailyPerformanceRecord[] {
+    const raw = localStorage.getItem(KEYS.CASHIER_PERFORMANCE_DAILY);
+    if (!raw) return [];
+    try {
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  },
+
+  /**
+   * Mengambil record penjualan 5 show per kasir pada tanggal & outlet tertentu.
+   * Otomatis menarik angka Penonton (dan Omset Cinema referensi) dari Input Data Sales Outlet!
+   */
+  getCashierDailyPerformance(
+    outletId: string,
+    cashierId: string,
+    date: string,
+    cashierName = ''
+  ): CashierDailyPerformanceRecord {
+    const all = this.getCashierDailyPerformanceAll();
+    const recordId = `${outletId}_${cashierId}_${date}`;
+    const existing = all.find(
+      (r) =>
+        r.id === recordId ||
+        (r.outletId === outletId && r.cashierId === cashierId && r.date === date)
+    );
+
+    // Ambil data penjualan outlet pada tanggal yang sama untuk menarik angka Penonton otomatis per show
+    const outletSales = this.getDailySaleByOutletAndDate(outletId, date);
+
+    const buildSyncedShows = (currentShows?: CashierShowSaleInput[]): CashierShowSaleInput[] => {
+      return [1, 2, 3, 4, 5].map((showNum) => {
+        const cur = currentShows?.find((s) => s.showNumber === showNum);
+        const outletShow = outletSales?.shows?.find((s) => s.showNumber === showNum);
+        const autoPenonton = outletShow?.penonton || 0;
+        const autoCinema = outletShow?.omsetCinema || 0;
+
+        return {
+          showNumber: showNum,
+          omsetCinema: cur?.omsetCinema || autoCinema,
+          omsetFnB: cur?.omsetFnB || 0,
+          bill: cur?.bill || 0,
+          // Selalu sinkronkan penonton dari Input Data Sales Outlet jika outlet sudah mengisi penonton (> 0)
+          penonton: autoPenonton > 0 ? autoPenonton : cur?.penonton || 0,
+          updatedAt: cur?.updatedAt,
+          isFilled: Boolean(cur?.isFilled || (cur?.omsetFnB || 0) > 0 || (cur?.bill || 0) > 0),
+          isLocked: Boolean(cur?.isLocked),
+        };
+      });
+    };
+
+    if (existing) {
+      return {
+        ...existing,
+        cashierName: existing.cashierName || cashierName,
+        shows: buildSyncedShows(existing.shows),
+      };
+    }
+
+    const emp = this.getEmployees().find((e) => e.id === cashierId);
+    return {
+      id: recordId,
+      outletId,
+      cashierId,
+      cashierName: cashierName || emp?.name || 'Kasir XXI',
+      cashierNik: emp?.nik || '',
+      date,
+      shows: buildSyncedShows(),
+    };
+  },
+
+  saveCashierDailyPerformance(
+    record: CashierDailyPerformanceRecord
+  ): CashierDailyPerformanceRecord[] {
+    const all = this.getCashierDailyPerformanceAll();
+    const recordId = record.id || `${record.outletId}_${record.cashierId}_${record.date}`;
+    const updatedRecord: CashierDailyPerformanceRecord = {
+      ...record,
+      id: recordId,
+      updatedAt: new Date().toISOString(),
+    };
+
+    const idx = all.findIndex(
+      (r) =>
+        r.id === recordId ||
+        (r.outletId === record.outletId &&
+          r.cashierId === record.cashierId &&
+          r.date === record.date)
+    );
+    if (idx >= 0) {
+      all[idx] = updatedRecord;
+    } else {
+      all.unshift(updatedRecord);
+    }
+
+    localStorage.setItem(KEYS.CASHIER_PERFORMANCE_DAILY, JSON.stringify(all));
+    this.broadcastChange('sdm-performance');
+
+    import('./supabase')
+      .then((m) => {
+        if (typeof (m as any).syncCashierPerformanceToSupabase === 'function') {
+          (m as any).syncCashierPerformanceToSupabase([updatedRecord]);
+        }
+      })
+      .catch(() => {});
+
+    return all;
+  },
+
+  getDefaultCashierProductItems(): CashierProductItem[] {
+    return [];
+  },
+
+  getCashierMonthlyProductsAll(): CashierMonthlyProductRecord[] {
+    const raw = localStorage.getItem(KEYS.CASHIER_MONTHLY_PRODUCTS);
+    if (!raw) return [];
+    try {
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  },
+
+  getCashierMonthlyProducts(
+    outletId: string,
+    cashierId: string,
+    year: number,
+    month: number,
+    cashierName = ''
+  ): CashierMonthlyProductRecord {
+    const LEGACY_SAMPLE_IDS = new Set([
+      'item_popcorn_salt_m',
+      'item_popcorn_caramel_m',
+      'item_xxi_java_tea_l',
+      'item_combo_1',
+      'item_sistagor',
+    ]);
+
+    const all = this.getCashierMonthlyProductsAll();
+    const recordId = `${outletId}_${cashierId}_${year}_${month}`;
+    const existing = all.find(
+      (r) =>
+        r.id === recordId ||
+        (r.outletId === outletId &&
+          r.cashierId === cashierId &&
+          r.year === year &&
+          r.month === month)
+    );
+
+    if (existing) {
+      const cleanedItems = (existing.items || []).filter((it) => {
+        if (!LEGACY_SAMPLE_IDS.has(it.id)) return true;
+        // Keep only if user actually entered sales > 0 on any day
+        const hasSales = Object.values(existing.dailySales || {}).some(
+          (dayMap) => (dayMap?.[it.id] || 0) > 0
+        );
+        return hasSales;
+      });
+      return {
+        ...existing,
+        items: cleanedItems,
+      };
+    }
+
+    const emp = this.getEmployees().find((e) => e.id === cashierId);
+    return {
+      id: recordId,
+      outletId,
+      cashierId,
+      cashierName: cashierName || emp?.name || 'Kasir XXI',
+      year,
+      month,
+      items: [],
+      dailySales: {},
+    };
+  },
+
+  saveCashierMonthlyProducts(
+    record: CashierMonthlyProductRecord
+  ): CashierMonthlyProductRecord[] {
+    const all = this.getCashierMonthlyProductsAll();
+    const recordId =
+      record.id || `${record.outletId}_${record.cashierId}_${record.year}_${record.month}`;
+    const updatedRecord: CashierMonthlyProductRecord = {
+      ...record,
+      id: recordId,
+      updatedAt: new Date().toISOString(),
+    };
+
+    const idx = all.findIndex(
+      (r) =>
+        r.id === recordId ||
+        (r.outletId === record.outletId &&
+          r.cashierId === record.cashierId &&
+          r.year === record.year &&
+          r.month === record.month)
+    );
+    if (idx >= 0) {
+      all[idx] = updatedRecord;
+    } else {
+      all.unshift(updatedRecord);
+    }
+
+    localStorage.setItem(KEYS.CASHIER_MONTHLY_PRODUCTS, JSON.stringify(all));
+    this.broadcastChange('sdm-products');
+
+    import('./supabase')
+      .then((m) => {
+        if (typeof (m as any).syncCashierProductsToSupabase === 'function') {
+          (m as any).syncCashierProductsToSupabase([updatedRecord]);
+        }
+      })
+      .catch(() => {});
+
+    return all;
   },
 };
 

@@ -23,6 +23,8 @@ import { UserOutletManagement } from './components/admin/UserOutletManagement';
 import { EmployeesView } from './components/hc/EmployeesView';
 import { KpiKaryawanView } from './components/hc/KpiKaryawanView';
 import { LostAndFoundView } from './components/lost_found/LostAndFoundView';
+import { CashierPerformanceInput } from './components/sdm/CashierPerformanceInput';
+import { CashierLeaderboard } from './components/sdm/CashierLeaderboard';
 import { SettingsModal } from './components/settings/SettingsModal';
 
 function getTodayDateString(): string {
@@ -256,6 +258,25 @@ export default function App() {
                 <GoogleSlideKPI
                   selectedDate={selectedDate}
                   onDateChange={setSelectedDate}
+                />
+              )}
+
+              {/* Performance SDM Submenus */}
+              {activeMenu === 'sdm_input' && (
+                <CashierPerformanceInput
+                  currentUser={currentUser}
+                  selectedDate={selectedDate}
+                  onDateChange={setSelectedDate}
+                  onNavigateToLeaderboard={() => handleMenuChange('sdm_leaderboard')}
+                />
+              )}
+
+              {activeMenu === 'sdm_leaderboard' && (
+                <CashierLeaderboard
+                  currentUser={currentUser}
+                  selectedDate={selectedDate}
+                  onDateChange={setSelectedDate}
+                  onNavigateToInput={() => handleMenuChange('sdm_input')}
                 />
               )}
 

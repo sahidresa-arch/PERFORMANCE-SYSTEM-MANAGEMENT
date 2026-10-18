@@ -88,6 +88,69 @@ export const TabelRekapDaily: React.FC<TabelRekapDailyProps> = ({
   const [refYear, refMonth] = selectedDate.split('-');
   const monthPrefix = `${refYear}-${refMonth}`;
 
+  // Helper to compute Murni (Nett) per show from cumulative POS inputs (matching InputDataSales)
+  const computeNetShows = (shows: typeof dailySales[0]['shows'] = [], targetHead: number) => {
+    return [1, 2, 3, 4, 5].map((sNum) => {
+      const current = shows.find((item) => item.showNumber === sNum);
+      const prevFilled =
+        sNum > 1
+          ? [...shows]
+              .filter(
+                (item) =>
+                  item.showNumber < sNum &&
+                  (item.isFilled ||
+                    (item.omsetCinema || 0) > 0 ||
+                    (item.omsetFnB || 0) > 0 ||
+                    (item.penonton || 0) > 0 ||
+                    (item.bill || 0) > 0)
+              )
+              .sort((a, b) => b.showNumber - a.showNumber)[0]
+          : null;
+
+      const cumCin = current?.omsetCinema || 0;
+      const cumFnb = current?.omsetFnB || 0;
+      const cumBill = current?.bill || 0;
+      const cumPenonton = current?.penonton || 0;
+
+      const prevCin = prevFilled?.omsetCinema || 0;
+      const prevFnb = prevFilled?.omsetFnB || 0;
+      const prevBill = prevFilled?.bill || 0;
+      const prevPenonton = prevFilled?.penonton || 0;
+
+      const isFilled = Boolean(
+        current?.isFilled || cumCin > 0 || cumFnb > 0 || cumPenonton > 0 || cumBill > 0
+      );
+
+      // Penjualan Murni (Nett) Show N = Akumulasi Show N - Akumulasi Show Sebelumnya
+      const netCin = isFilled ? Math.max(0, cumCin - prevCin) : 0;
+      const netFnb = isFilled ? Math.max(0, cumFnb - prevFnb) : 0;
+      const netBill = isFilled ? Math.max(0, cumBill - prevBill) : 0;
+      const netPenonton = isFilled ? Math.max(0, cumPenonton - prevPenonton) : 0;
+
+      const sMet = StorageService.calculateMetrics(
+        netCin,
+        netFnb,
+        netBill,
+        netPenonton,
+        targetHead
+      );
+
+      return {
+        showNumber: sNum,
+        isFilled,
+        isLocked: Boolean(current?.isLocked),
+        updatedAt: current?.updatedAt || '-',
+        netCin,
+        netFnb,
+        netBill,
+        netPenonton,
+        metrics: sMet,
+        hasData: isFilled && (netPenonton > 0 || netFnb > 0 || netCin > 0 || netBill > 0),
+        isCapai: targetHead > 0 && netPenonton > 0 && sMet.head >= targetHead,
+      };
+    });
+  };
+
   // Compute daily totals and real MTD for each outlet in selected area
   const outletRows = areaOutlets.map((outlet) => {
     const saleRecord = dailySales.find(
@@ -95,13 +158,14 @@ export const TabelRekapDaily: React.FC<TabelRekapDailyProps> = ({
     );
 
     const shows = saleRecord?.shows || [];
-    const filledShows = shows.filter((s) => s.isFilled || (s.omsetCinema || 0) > 0 || (s.omsetFnB || 0) > 0 || (s.penonton || 0) > 0 || (s.bill || 0) > 0);
+    const netShows = computeNetShows(shows, outlet.targetHead);
+    const filledShows = netShows.filter((s) => s.isFilled);
 
-    const dayTotals = StorageService.getLatestShowTotals(shows);
-    const sumCinema = dayTotals.omsetCinema;
-    const sumFnB = dayTotals.omsetFnB;
-    const sumBill = dayTotals.bill;
-    const sumPenonton = dayTotals.penonton;
+    // Total Harian Outlet = Penjumlahan dari kelima Show Murni (Show 1 s/d Show 5)
+    const sumCinema = netShows.reduce((acc, s) => acc + s.netCin, 0);
+    const sumFnB = netShows.reduce((acc, s) => acc + s.netFnb, 0);
+    const sumBill = netShows.reduce((acc, s) => acc + s.netBill, 0);
+    const sumPenonton = netShows.reduce((acc, s) => acc + s.netPenonton, 0);
 
     const metrics = StorageService.calculateMetrics(
       sumCinema,
@@ -124,11 +188,11 @@ export const TabelRekapDaily: React.FC<TabelRekapDailyProps> = ({
     let mtdPenonton = 0;
 
     outletMtdSales.forEach((rec) => {
-      const recTotals = StorageService.getLatestShowTotals(rec.shows);
-      mtdCinema += recTotals.omsetCinema;
-      mtdFnB += recTotals.omsetFnB;
-      mtdBill += recTotals.bill;
-      mtdPenonton += recTotals.penonton;
+      const recNetShows = computeNetShows(rec.shows || [], outlet.targetHead);
+      mtdCinema += recNetShows.reduce((acc, s) => acc + s.netCin, 0);
+      mtdFnB += recNetShows.reduce((acc, s) => acc + s.netFnb, 0);
+      mtdBill += recNetShows.reduce((acc, s) => acc + s.netBill, 0);
+      mtdPenonton += recNetShows.reduce((acc, s) => acc + s.netPenonton, 0);
     });
 
     const mtdMetrics = StorageService.calculateMetrics(
@@ -144,6 +208,7 @@ export const TabelRekapDaily: React.FC<TabelRekapDailyProps> = ({
     return {
       outlet,
       shows,
+      netShows,
       filledCount: filledShows.length,
       sumCinema,
       sumFnB,
@@ -187,25 +252,10 @@ export const TabelRekapDaily: React.FC<TabelRekapDailyProps> = ({
   );
 
   // Calculate Area Real MTD Totals (Tanggal 1 s.d. selectedDate bulan ini)
-  const areaMtdSales = dailySales.filter(
-    (s) =>
-      areaOutlets.some((o) => o.id === s.outletId) &&
-      s.date.startsWith(monthPrefix) &&
-      s.date <= selectedDate
-  );
-
-  let areaMtdCinema = 0;
-  let areaMtdFnB = 0;
-  let areaMtdBill = 0;
-  let areaMtdPenonton = 0;
-
-  areaMtdSales.forEach((rec) => {
-    const recTotals = StorageService.getLatestShowTotals(rec.shows);
-    areaMtdCinema += recTotals.omsetCinema;
-    areaMtdFnB += recTotals.omsetFnB;
-    areaMtdBill += recTotals.bill;
-    areaMtdPenonton += recTotals.penonton;
-  });
+  const areaMtdCinema = outletRows.reduce((acc, r) => acc + r.mtdCinema, 0);
+  const areaMtdFnB = outletRows.reduce((acc, r) => acc + r.mtdFnB, 0);
+  const areaMtdBill = outletRows.reduce((acc, r) => acc + r.mtdBill, 0);
+  const areaMtdPenonton = outletRows.reduce((acc, r) => acc + r.mtdPenonton, 0);
 
   const areaMtdMetrics = StorageService.calculateMetrics(
     areaMtdCinema,
@@ -663,20 +713,14 @@ export const TabelRekapDaily: React.FC<TabelRekapDailyProps> = ({
                       </td>
                     </tr>
 
-                    {/* EXPANDABLE INLINE SHOW ROWS (SHOW 1 S/D SHOW 5) + MTD SUMMARY */}
+                    {/* EXPANDABLE INLINE SHOW ROWS (SHOW 1 S/D SHOW 5 MURNI / NETT) + MTD SUMMARY */}
                     {isExpanded && (
                       <>
-                        {[1, 2, 3, 4, 5].map((sNum) => {
-                          const s = row.shows.find((item) => item.showNumber === sNum);
-                          const sMet = StorageService.calculateMetrics(
-                            s?.omsetCinema || 0,
-                            s?.omsetFnB || 0,
-                            s?.bill || 0,
-                            s?.penonton || 0,
-                            row.outlet.targetHead
-                          );
-                          const hasData = (s?.penonton || 0) > 0 || (s?.omsetFnB || 0) > 0 || (s?.bill || 0) > 0;
-                          const isCapai = row.outlet.targetHead > 0 && sMet.head >= row.outlet.targetHead;
+                        {row.netShows.map((ns) => {
+                          const sNum = ns.showNumber;
+                          const sMet = ns.metrics;
+                          const hasData = ns.hasData;
+                          const isCapai = ns.isCapai;
 
                           return (
                             <tr
@@ -693,28 +737,28 @@ export const TabelRekapDaily: React.FC<TabelRekapDailyProps> = ({
                                 </div>
                               </td>
 
-                              {/* Column 2: Omset Cinema */}
+                              {/* Column 2: Omset Cinema Murni */}
                               <td className="py-2 px-3 text-right text-[11px] text-[#4B5563]">
-                                {(s?.omsetCinema || 0) > 0
-                                  ? (s?.omsetCinema || 0).toLocaleString('id-ID')
+                                {ns.netCin > 0
+                                  ? ns.netCin.toLocaleString('id-ID')
                                   : '-'}
                               </td>
 
-                              {/* Column 3: Omset FnB */}
+                              {/* Column 3: Omset FnB Murni */}
                               <td className="py-2 px-3 text-right text-[11px] font-bold text-[#059669]">
-                                {(s?.omsetFnB || 0) > 0
-                                  ? (s?.omsetFnB || 0).toLocaleString('id-ID')
+                                {ns.netFnb > 0
+                                  ? ns.netFnb.toLocaleString('id-ID')
                                   : '-'}
                               </td>
 
-                              {/* Column 4: Total Bill */}
+                              {/* Column 4: Total Bill Murni */}
                               <td className="py-2 px-3 text-center text-[11px] text-[#4B5563]">
-                                {s?.bill || '-'}
+                                {ns.netBill > 0 ? ns.netBill.toLocaleString('id-ID') : '-'}
                               </td>
 
-                              {/* Column 5: Penonton */}
+                              {/* Column 5: Penonton Murni */}
                               <td className="py-2 px-3 text-center text-[11px] text-[#4B5563]">
-                                {s?.penonton || '-'}
+                                {ns.netPenonton > 0 ? ns.netPenonton.toLocaleString('id-ID') : '-'}
                               </td>
 
                               {/* Column 6: Daya Serap */}
@@ -753,7 +797,7 @@ export const TabelRekapDaily: React.FC<TabelRekapDailyProps> = ({
 
                               {/* Column 10: AT */}
                               <td className="py-2 px-3 text-right text-[11px] text-[#4B5563]">
-                                {(s?.bill || 0) > 0 ? sMet.at.toLocaleString('id-ID') : '-'}
+                                {ns.netBill > 0 ? sMet.at.toLocaleString('id-ID') : '-'}
                               </td>
 
                               {/* Column 11: Selisih */}
@@ -791,7 +835,7 @@ export const TabelRekapDaily: React.FC<TabelRekapDailyProps> = ({
 
                               {/* Column 13: Jam Input */}
                               <td className="py-2 px-3 text-center text-[10px] text-[#9CA3AF]">
-                                {s?.updatedAt || '-'}
+                                {ns.updatedAt}
                               </td>
                             </tr>
                           );

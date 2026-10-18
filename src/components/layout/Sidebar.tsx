@@ -24,6 +24,8 @@ import {
   Users,
   PackageSearch,
   Boxes,
+  Trophy,
+  UserCheck,
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -49,6 +51,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const getGroupForMenu = (menu: string): string | null => {
     if (isCleaner) return 'inspection';
     if (menu.startsWith('sales_')) return 'sales';
+    if (menu.startsWith('sdm_')) return 'sdm';
     if (menu.startsWith('occupancy_')) return 'occupancy';
     if (menu.startsWith('inspection_')) return 'inspection';
     if (menu.startsWith('accounting_')) return 'accounting';
@@ -73,6 +76,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   };
 
   const isSalesActive = activeMenu.startsWith('sales_');
+  const isSdmActive = activeMenu.startsWith('sdm_');
   const isOccupancyActive = activeMenu.startsWith('occupancy_');
   const isInspectionActive = activeMenu.startsWith('inspection_');
   const isAccountingActive = activeMenu.startsWith('accounting_');
@@ -389,7 +393,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
               </>
             ))}
 
-            {/* 2. OKUPANSI RATE ACCORDION */}
+            {/* 2. PERFORMANCE SDM ACCORDION */}
+            {renderAccordionSection('sdm', 'Performance SDM', Trophy, isSdmActive, (
+              <>
+                {renderSubMenuItem('sdm_input', 'Input Sales & Item Kasir', UserCheck, 0)}
+                {renderSubMenuItem('sdm_leaderboard', 'Ranking & Leaderboard Kasir', Trophy, 1)}
+              </>
+            ))}
+
+            {/* 3. OKUPANSI RATE ACCORDION */}
             {renderAccordionSection('occupancy', 'Okupansi Rate', Film, isOccupancyActive, (
               <>
                 {renderSubMenuItem('occupancy_rekap', 'Rekap Okupansi Outlet', FileSpreadsheet, 0)}

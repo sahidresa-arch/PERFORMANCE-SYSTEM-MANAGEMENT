@@ -1,6 +1,13 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { StorageService } from './storage';
-import { DailySalesRecord, ToiletInspectionRecord, Employee, EmployeeKpiRecord } from '../types';
+import {
+  DailySalesRecord,
+  ToiletInspectionRecord,
+  Employee,
+  EmployeeKpiRecord,
+  CashierDailyPerformanceRecord,
+  CashierMonthlyProductRecord,
+} from '../types';
 
 let supabaseInstance: SupabaseClient | null = null;
 let currentClientKey = '';
@@ -956,6 +963,151 @@ export async function mergeRemoteEmployeeKpisToLocal(): Promise<boolean> {
 }
 
 /**
+ * Sinkronisasi Performance SDM (5 Show Kasir & Tabel Item Produk) ke Supabase Realtime
+ */
+export async function syncCashierPerformanceToSupabase(
+  records?: CashierDailyPerformanceRecord[]
+): Promise<boolean> {
+  const client = getSupabase();
+  if (!client) return false;
+  try {
+    const allLocal = StorageService.getCashierDailyPerformanceAll();
+    await client.from('cinema_sales').upsert(
+      {
+        id: '__SYSTEM_SYNC_SDM_PERFORMANCE__',
+        outlet_id: '__SYSTEM_SYNC__',
+        date: '2026-01-01',
+        shows: allLocal,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: 'id' }
+    );
+    return true;
+  } catch (e) {
+    console.warn('Sync SDM performance error:', e);
+    return false;
+  }
+}
+
+export async function mergeRemoteCashierPerformanceToLocal(): Promise<boolean> {
+  const client = getSupabase();
+  if (!client) return false;
+  try {
+    const { data, error } = await client
+      .from('cinema_sales')
+      .select('id, shows')
+      .eq('id', '__SYSTEM_SYNC_SDM_PERFORMANCE__')
+      .maybeSingle();
+
+    if (error || !data || !Array.isArray(data.shows)) return false;
+
+    const remoteList: CashierDailyPerformanceRecord[] = data.shows;
+    const localList = StorageService.getCashierDailyPerformanceAll();
+
+    if (remoteList.length === 0 && localList.length > 0) {
+      await syncCashierPerformanceToSupabase(localList);
+      return false;
+    }
+
+    const map = new Map<string, CashierDailyPerformanceRecord>();
+    localList.forEach((r) => {
+      if (r && r.id) map.set(r.id, r);
+    });
+    remoteList.forEach((rr) => {
+      if (rr && rr.id) {
+        const existing = map.get(rr.id);
+        if (!existing || (rr.updatedAt || '') >= (existing.updatedAt || '')) {
+          map.set(rr.id, rr);
+        }
+      }
+    });
+
+    const merged = Array.from(map.values());
+    const currentRaw = localStorage.getItem('cinema_xxi_cashier_performance_daily') || '[]';
+    const mergedRaw = JSON.stringify(merged);
+    if (currentRaw !== mergedRaw) {
+      localStorage.setItem('cinema_xxi_cashier_performance_daily', mergedRaw);
+      StorageService.broadcastChange('sdm-performance');
+      return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+export async function syncCashierProductsToSupabase(
+  records?: CashierMonthlyProductRecord[]
+): Promise<boolean> {
+  const client = getSupabase();
+  if (!client) return false;
+  try {
+    const allLocal = StorageService.getCashierMonthlyProductsAll();
+    await client.from('cinema_sales').upsert(
+      {
+        id: '__SYSTEM_SYNC_SDM_PRODUCTS__',
+        outlet_id: '__SYSTEM_SYNC__',
+        date: '2026-01-01',
+        shows: allLocal,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: 'id' }
+    );
+    return true;
+  } catch (e) {
+    console.warn('Sync SDM products error:', e);
+    return false;
+  }
+}
+
+export async function mergeRemoteCashierProductsToLocal(): Promise<boolean> {
+  const client = getSupabase();
+  if (!client) return false;
+  try {
+    const { data, error } = await client
+      .from('cinema_sales')
+      .select('id, shows')
+      .eq('id', '__SYSTEM_SYNC_SDM_PRODUCTS__')
+      .maybeSingle();
+
+    if (error || !data || !Array.isArray(data.shows)) return false;
+
+    const remoteList: CashierMonthlyProductRecord[] = data.shows;
+    const localList = StorageService.getCashierMonthlyProductsAll();
+
+    if (remoteList.length === 0 && localList.length > 0) {
+      await syncCashierProductsToSupabase(localList);
+      return false;
+    }
+
+    const map = new Map<string, CashierMonthlyProductRecord>();
+    localList.forEach((r) => {
+      if (r && r.id) map.set(r.id, r);
+    });
+    remoteList.forEach((rr) => {
+      if (rr && rr.id) {
+        const existing = map.get(rr.id);
+        if (!existing || (rr.updatedAt || '') >= (existing.updatedAt || '')) {
+          map.set(rr.id, rr);
+        }
+      }
+    });
+
+    const merged = Array.from(map.values());
+    const currentRaw = localStorage.getItem('cinema_xxi_cashier_monthly_products') || '[]';
+    const mergedRaw = JSON.stringify(merged);
+    if (currentRaw !== mergedRaw) {
+      localStorage.setItem('cinema_xxi_cashier_monthly_products', mergedRaw);
+      StorageService.broadcastChange('sdm-products');
+      return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Setup Realtime channel listener and periodic sync for Supabase database changes
  */
 export function setupSupabaseRealtimeSync(): () => void {
@@ -970,6 +1122,8 @@ export function setupSupabaseRealtimeSync(): () => void {
   mergeRemoteInspectionsToLocal();
   mergeRemoteEmployeesToLocal();
   mergeRemoteEmployeeKpisToLocal();
+  mergeRemoteCashierPerformanceToLocal();
+  mergeRemoteCashierProductsToLocal();
   mergeRemoteConfigToLocal();
 
   // Setup Supabase Realtime channel subscription
@@ -984,7 +1138,7 @@ export function setupSupabaseRealtimeSync(): () => void {
             const rowId = String(payload.new.id);
             const rowOutlet = String(payload.new.outlet_id || '');
 
-            // Tangani sinkronisasi real-time untuk Data Karyawan & KPI Karyawan
+            // Tangani sinkronisasi real-time untuk Data Karyawan & KPI Karyawan & Performance SDM
             if (
               rowId === '__SYSTEM_SYNC_EMPLOYEES__' ||
               rowId === '__SYSTEM_SYNC_DELETED_EMPLOYEES__'
@@ -994,6 +1148,14 @@ export function setupSupabaseRealtimeSync(): () => void {
             }
             if (rowId === '__SYSTEM_SYNC_EMPLOYEE_KPIS__') {
               mergeRemoteEmployeeKpisToLocal();
+              return;
+            }
+            if (rowId === '__SYSTEM_SYNC_SDM_PERFORMANCE__') {
+              mergeRemoteCashierPerformanceToLocal();
+              return;
+            }
+            if (rowId === '__SYSTEM_SYNC_SDM_PRODUCTS__') {
+              mergeRemoteCashierProductsToLocal();
               return;
             }
             if (rowId.startsWith('__SYSTEM_SYNC_') || rowOutlet.startsWith('__SYSTEM_SYNC_')) {

@@ -257,7 +257,20 @@ export const InputDataSales: React.FC<InputDataSalesProps> = ({
   // Calculate Net/Inkremental Per Show for Table
   const netShowsList = [1, 2, 3, 4, 5].map((showNum) => {
     const current = dailyRecord.shows.find((x) => x.showNumber === showNum);
-    const prev = showNum > 1 ? dailyRecord.shows.find((x) => x.showNumber === showNum - 1) : null;
+    const prev =
+      showNum > 1
+        ? [...dailyRecord.shows]
+            .filter(
+              (x) =>
+                x.showNumber < showNum &&
+                (x.isFilled ||
+                  (x.omsetCinema || 0) > 0 ||
+                  (x.omsetFnB || 0) > 0 ||
+                  (x.penonton || 0) > 0 ||
+                  (x.bill || 0) > 0)
+            )
+            .sort((a, b) => b.showNumber - a.showNumber)[0]
+        : null;
 
     const cumCin = current?.omsetCinema || 0;
     const cumFnb = current?.omsetFnB || 0;
@@ -269,9 +282,11 @@ export const InputDataSales: React.FC<InputDataSalesProps> = ({
     const prevBill = prev?.bill || 0;
     const prevPenonton = prev?.penonton || 0;
 
-    const isFilled = Boolean(current?.isFilled || cumCin > 0 || cumFnb > 0);
+    const isFilled = Boolean(
+      current?.isFilled || cumCin > 0 || cumFnb > 0 || cumPenonton > 0 || cumBill > 0
+    );
 
-    // Net Murni Show N = Cumulative Show N - Cumulative Show (N-1)
+    // Net Murni Show N = Cumulative Show N - Cumulative Show Sebelumnya
     const netCin = isFilled ? Math.max(0, cumCin - prevCin) : 0;
     const netFnb = isFilled ? Math.max(0, cumFnb - prevFnb) : 0;
     const netBill = isFilled ? Math.max(0, cumBill - prevBill) : 0;
@@ -302,16 +317,11 @@ export const InputDataSales: React.FC<InputDataSalesProps> = ({
     };
   });
 
-  // Compute Maximum Cumulative POS reported across shows
-  const filledShows = dailyRecord.shows.filter((s) => s.isFilled || s.omsetCinema > 0 || s.omsetFnB > 0);
-  const latestFilledShow = filledShows.length > 0 
-    ? [...filledShows].sort((a, b) => b.showNumber - a.showNumber)[0]
-    : null;
-
-  const totalCinema = latestFilledShow ? latestFilledShow.omsetCinema : 0;
-  const totalFnB = latestFilledShow ? latestFilledShow.omsetFnB : 0;
-  const totalBill = latestFilledShow ? latestFilledShow.bill : 0;
-  const totalPenonton = latestFilledShow ? latestFilledShow.penonton : 0;
+  // Total Harian = Total dari kelima Show Murni (Show 1 s/d Show 5)
+  const totalCinema = netShowsList.reduce((acc, s) => acc + s.netCin, 0);
+  const totalFnB = netShowsList.reduce((acc, s) => acc + s.netFnb, 0);
+  const totalBill = netShowsList.reduce((acc, s) => acc + s.netBill, 0);
+  const totalPenonton = netShowsList.reduce((acc, s) => acc + s.netPenonton, 0);
 
   const totalDailyMetrics = StorageService.calculateMetrics(
     totalCinema,

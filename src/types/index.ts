@@ -259,3 +259,46 @@ export interface StockOpnameHistory {
   autoAdjusted?: boolean;
 }
 
+export interface CashierShowSaleInput {
+  showNumber: number; // 1 to 5
+  omsetCinema: number;
+  omsetFnB: number;
+  bill: number;
+  penonton: number; // Auto-synced from Outlet DailySalesRecord
+  updatedAt?: string;
+  isFilled: boolean;
+  isLocked?: boolean;
+}
+
+export interface CashierDailyPerformanceRecord {
+  id: string; // `${outletId}_${cashierId}_${date}`
+  outletId: string;
+  cashierId: string;
+  cashierName: string;
+  cashierNik?: string;
+  date: string; // YYYY-MM-DD
+  shows: CashierShowSaleInput[];
+  notes?: string;
+  updatedAt?: string;
+}
+
+export interface CashierProductItem {
+  id: string;
+  name: string;
+  unit: string; // PCS, CUP, BOX, COMBO, dll
+  category?: string;
+}
+
+export interface CashierMonthlyProductRecord {
+  id: string; // `${outletId}_${cashierId}_${year}_${month}`
+  outletId: string;
+  cashierId: string;
+  cashierName: string;
+  year: number;
+  month: number; // 1 to 12
+  items: CashierProductItem[];
+  dailySales: { [day: number]: { [itemId: string]: number } };
+  updatedAt?: string;
+}
+
+

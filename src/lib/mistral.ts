@@ -780,4 +780,146 @@ Ekstrak data dari struk POS atau laporan kasir berikut ke format JSON murni:
 
     return null;
   },
+
+  /**
+   * Ekstraksi Daftar Penjualan Item Produk Kasir (Popcorn, Minuman, Combo, Snack, Bakery, dll.)
+   * Menggunakan Mistral OCR (`mistral-ocr-latest` untuk PDF & `pixtral` untuk Gambar/Struk POS)
+   */
+  async processCashierItems(
+    base64Image: string,
+    apiKey: string,
+    isPdf = false
+  ): Promise<{
+    items: Array<{ name: string; qty: number; unit: string; category: string }>;
+    detectedDate?: string;
+    cashierName?: string;
+    confidence?: string;
+    detectedSummary?: string;
+  } | null> {
+    const cleanApiKey = apiKey.trim();
+    if (!cleanApiKey) return null;
+
+    const cleanBase64 = base64Image.includes(',') ? base64Image.split(',')[1] : base64Image;
+    const formattedDataUrl = base64Image.startsWith('data:')
+      ? base64Image
+      : isPdf
+      ? `data:application/pdf;base64,${cleanBase64}`
+      : `data:image/jpeg;base64,${cleanBase64}`;
+
+    // 1. Jika PDF, gunakan Mistral Document OCR API (mistral-ocr-latest) terlebih dahulu
+    let extractedMarkdown = '';
+    if (isPdf) {
+      try {
+        const ocrRes = await fetch('https://api.mistral.ai/v1/ocr', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${cleanApiKey}`,
+          },
+          body: JSON.stringify({
+            model: 'mistral-ocr-latest',
+            document: {
+              type: 'document_url',
+              document_url: formattedDataUrl,
+            },
+          }),
+        });
+        if (ocrRes.ok) {
+          const ocrData = await ocrRes.json();
+          const pages = ocrData.pages || [];
+          extractedMarkdown = pages.map((p: any) => p.markdown || '').join('\n\n');
+        }
+      } catch (err) {
+        console.warn('Mistral Document OCR for cashier items warning:', err);
+      }
+    }
+
+    // 2. Ekstraksi terstruktur menggunakan Mistral Pixtral / Mistral Large
+    const models = isPdf && extractedMarkdown
+      ? ['mistral-large-latest', 'pixtral-large-latest', 'pixtral-12b-2409']
+      : ['pixtral-12b-2409', 'pixtral-large-latest', 'mistral-large-latest'];
+
+    const promptText = `Anda adalah sistem Mistral OCR khusus pembacaan Laporan Penjualan Item Produk Kasir F&B / Cafe Cinema XXI.
+Tugas Anda: Baca seluruh item produk makanan/minuman/combo/bakery yang terjual beserta jumlah kuantitas (Qty) penjualannya dari dokumen/struk ini.
+Kembalikan HANYA objek JSON murni dengan struktur berikut:
+{
+  "items": [
+    {
+      "name": "<Nama Item Produk yang bersih dan jelas, misal: Popcorn Salt Small, Popcorn Caramel Medium, XXI Java Tea, Combo 1, Sistagor, Croissant Choco, dll.>",
+      "qty": <number jumlah item terjual, wajib angka positif>,
+      "unit": "<Satuan: PCS / CUP / BOX / COMBO / BTL>",
+      "category": "<Kategori: Popcorn / Minuman / Combo / Gorengan & Snack / Bakery / Lainnya>"
+    }
+  ],
+  "detectedDate": "<YYYY-MM-DD jika tertera di struk>",
+  "cashierName": "<Nama kasir jika tertera di struk>",
+  "detectedSummary": "<Ringkasan singkat hasil scan item produk>"
+}`;
+
+    for (const model of models) {
+      try {
+        const contentPayload: any[] = [{ type: 'text', text: promptText }];
+        if (extractedMarkdown) {
+          contentPayload.push({
+            type: 'text',
+            text: `TEKS DOKUMEN HASIL MISTRAL OCR:\n${extractedMarkdown.slice(0, 15000)}`,
+          });
+        } else if (!isPdf) {
+          contentPayload.push({
+            type: 'image_url',
+            image_url: { url: formattedDataUrl },
+          });
+        }
+
+        const res = await fetch('https://api.mistral.ai/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${cleanApiKey}`,
+          },
+          body: JSON.stringify({
+            model,
+            messages: [{ role: 'user', content: contentPayload }],
+            response_format: { type: 'json_object' },
+            temperature: 0.1,
+          }),
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          const content = data.choices?.[0]?.message?.content;
+          if (content) {
+            const parsed = JSON.parse(content);
+            if (Array.isArray(parsed.items) && parsed.items.length > 0) {
+              const validItems = parsed.items
+                .filter((it: any) => it && it.name && Number(it.qty) > 0)
+                .map((it: any) => ({
+                  name: String(it.name).trim(),
+                  qty: Math.round(Number(it.qty) || 0),
+                  unit: String(it.unit || 'PCS').toUpperCase().trim(),
+                  category: String(it.category || 'F&B Cafe').trim(),
+                }));
+
+              if (validItems.length > 0) {
+                return {
+                  items: validItems,
+                  detectedDate: parsed.detectedDate,
+                  cashierName: parsed.cashierName,
+                  confidence: `Mistral OCR Terverifikasi (${model})`,
+                  detectedSummary:
+                    parsed.detectedSummary ||
+                    `Berhasil mengekstrak ${validItems.length} jenis item produk via Mistral OCR.`,
+                };
+              }
+            }
+          }
+        }
+      } catch (err) {
+        console.warn(`Mistral Cashier Items OCR failed with model ${model}:`, err);
+      }
+    }
+
+    return null;
+  },
 };
+
