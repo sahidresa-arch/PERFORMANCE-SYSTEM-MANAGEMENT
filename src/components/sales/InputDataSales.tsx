@@ -105,8 +105,8 @@ export const InputDataSales: React.FC<InputDataSalesProps> = ({
   // Real-time sync listener when data arrives from Supabase / Web Live / AI Studio
   useEffect(() => {
     const handleStorageUpdate = (e: any) => {
-      const key = e?.detail?.key;
-      if (key && key !== 'sales' && key !== 'outlets' && key !== 'all') return;
+      const evtType = e?.detail?.type || e?.detail?.key;
+      if (evtType && evtType !== 'sales' && evtType !== 'outlets' && evtType !== 'all' && evtType !== 'all-reset') return;
       const latestRec = StorageService.getDailySaleByOutletAndDate(selectedOutletId, selectedDate);
       if (!isDirtyRef.current) {
         setDailyRecord(latestRec);
@@ -177,12 +177,39 @@ export const InputDataSales: React.FC<InputDataSalesProps> = ({
   };
 
   const handleTabChange = (showNum: number) => {
+    let nextRec = dailyRecord;
     if (!isLocked && isDirtyRef.current) {
-      updateMemoryShow(activeShow, omsetCinema, omsetFnB, bill, penonton, isLocked);
+      const nowTime = new Date().toLocaleTimeString('id-ID', {
+        hour: '2-digit',
+        minute: '2-digit',
+      });
+      const updatedShows = dailyRecord.shows.map((s) => {
+        if (s.showNumber === activeShow) {
+          return {
+            ...s,
+            omsetCinema,
+            omsetFnB,
+            bill,
+            penonton,
+            updatedAt: nowTime,
+            isFilled: omsetCinema > 0 || omsetFnB > 0 || bill > 0 || penonton > 0,
+            isLocked: isLocked,
+          };
+        }
+        return s;
+      });
+      nextRec = StorageService.saveDailySale({
+        ...dailyRecord,
+        outletId: selectedOutletId,
+        date: selectedDate,
+        isMigrated: false,
+        shows: updatedShows,
+      });
+      setDailyRecord(nextRec);
     }
     isDirtyRef.current = false;
     setActiveShow(showNum);
-    loadShowData(dailyRecord, showNum);
+    loadShowData(nextRec, showNum);
   };
 
   const updateMemoryShow = (
@@ -672,7 +699,39 @@ export const InputDataSales: React.FC<InputDataSalesProps> = ({
             <button
               type="button"
               disabled={isLocked}
-              onClick={() => !isLocked && setIsConfirmModalOpen(true)}
+              onClick={() => {
+                if (isLocked) return;
+                // Simpan langsung saat tombol SIMPAN DATA diklik agar langsung tersinkron ke Cloud/Device lain
+                const nowTime = new Date().toLocaleTimeString('id-ID', {
+                  hour: '2-digit',
+                  minute: '2-digit',
+                });
+                const updatedShows = dailyRecord.shows.map((s) => {
+                  if (s.showNumber === activeShow) {
+                    return {
+                      ...s,
+                      omsetCinema,
+                      omsetFnB,
+                      bill,
+                      penonton,
+                      updatedAt: nowTime,
+                      isFilled: true,
+                      isLocked: s.isLocked || false,
+                    };
+                  }
+                  return s;
+                });
+                const saved = StorageService.saveDailySale({
+                  ...dailyRecord,
+                  outletId: selectedOutletId,
+                  date: selectedDate,
+                  isMigrated: false,
+                  shows: updatedShows,
+                });
+                setDailyRecord(saved);
+                isDirtyRef.current = false;
+                setIsConfirmModalOpen(true);
+              }}
               className={`px-5 py-2.5 rounded-xl font-black text-xs transition flex items-center space-x-2 shadow-md ${
                 isLocked
                   ? 'bg-slate-200 text-slate-400 cursor-not-allowed'

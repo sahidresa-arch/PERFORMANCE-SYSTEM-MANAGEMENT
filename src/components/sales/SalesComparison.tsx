@@ -9,9 +9,20 @@ interface SalesComparisonProps {
 }
 
 export const SalesComparison: React.FC<SalesComparisonProps> = ({
-  currentUser,
+  currentUser: _currentUser,
   selectedDate,
 }) => {
+  const [, setTick] = useState(0);
+  React.useEffect(() => {
+    const handleStorageUpdate = () => setTick((t) => t + 1);
+    window.addEventListener('cinema-xxi-storage-update', handleStorageUpdate);
+    window.addEventListener('storage', handleStorageUpdate);
+    return () => {
+      window.removeEventListener('cinema-xxi-storage-update', handleStorageUpdate);
+      window.removeEventListener('storage', handleStorageUpdate);
+    };
+  }, []);
+
   const areas = StorageService.getAreas();
   const outlets = StorageService.getOutlets();
   const dailySales = StorageService.getDailySales();
@@ -26,10 +37,11 @@ export const SalesComparison: React.FC<SalesComparisonProps> = ({
       (s) => s.outletId === outlet.id && s.date === selectedDate
     );
     const shows = saleRecord?.shows || [];
-    const sumCinema = shows.reduce((acc, s) => acc + (s.omsetCinema || 0), 0);
-    const sumFnB = shows.reduce((acc, s) => acc + (s.omsetFnB || 0), 0);
-    const sumBill = shows.reduce((acc, s) => acc + (s.bill || 0), 0);
-    const sumPenonton = shows.reduce((acc, s) => acc + (s.penonton || 0), 0);
+    const latestTotals = StorageService.getLatestShowTotals(shows);
+    const sumCinema = latestTotals.omsetCinema;
+    const sumFnB = latestTotals.omsetFnB;
+    const sumBill = latestTotals.bill;
+    const sumPenonton = latestTotals.penonton;
 
     const metrics = StorageService.calculateMetrics(
       sumCinema,

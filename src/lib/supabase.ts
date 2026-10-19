@@ -247,6 +247,9 @@ export async function testSupabaseConnection(
 
 /**
  * Sinkronisasi Data Sales Harian ke Supabase
+ * Menggunakan Dual-Channel:
+ * 1. Master Sync Row (__SYSTEM_SYNC_DAILY_SALES__) via Primary Key lookup (100% bebas limit 1000 baris & identik dengan Target Head / Baking)
+ * 2. Individual Row (sales-{outletId}-{date}) untuk kompatibilitas tabel cinema_sales
  */
 export async function syncSalesToSupabase(sales: DailySalesRecord[]): Promise<boolean> {
   const client = getSupabase();
@@ -254,6 +257,86 @@ export async function syncSalesToSupabase(sales: DailySalesRecord[]): Promise<bo
 
   try {
     const nowIso = new Date().toISOString();
+
+    // 1. Sinkronkan ke Master Sync Row (__SYSTEM_SYNC_DAILY_SALES__) seperti Baking & Target Head
+    const normalSales = sales.filter(
+      (s) => s && s.outletId && s.date && !String(s.id || '').startsWith('__SYSTEM_SYNC_')
+    );
+
+    if (normalSales.length > 0) {
+      const { data: syncRow } = await client
+        .from('cinema_sales')
+        .select('id, shows')
+        .eq('id', '__SYSTEM_SYNC_DAILY_SALES__')
+        .maybeSingle();
+
+      const remoteOverrides: DailySalesRecord[] =
+        syncRow && Array.isArray(syncRow.shows) ? syncRow.shows : [];
+      const localOverrides = StorageService.getUserSalesOverrides();
+
+      const overrideMap = new Map<string, DailySalesRecord>();
+
+      // Masukkan data remote terlebih dahulu
+      remoteOverrides.forEach((r) => {
+        if (r && r.outletId && r.date) {
+          overrideMap.set(`${r.outletId}_${r.date}`, {
+            ...r,
+            id: `sales-${r.outletId}-${r.date}`,
+            isMigrated: false,
+          });
+        }
+      });
+
+      // Gabungkan dengan local overrides jika local punya updatedAt lebih baru
+      localOverrides.forEach((loc) => {
+        if (!loc || !loc.outletId || !loc.date) return;
+        const key = `${loc.outletId}_${loc.date}`;
+        const existing = overrideMap.get(key);
+        if (!existing) {
+          overrideMap.set(key, {
+            ...loc,
+            id: `sales-${loc.outletId}-${loc.date}`,
+            isMigrated: false,
+          });
+        } else {
+          const remTime = existing.updatedAt ? new Date(existing.updatedAt).getTime() : 0;
+          const locTime = loc.updatedAt ? new Date(loc.updatedAt).getTime() : 0;
+          if (locTime >= remTime) {
+            overrideMap.set(key, {
+              ...loc,
+              id: `sales-${loc.outletId}-${loc.date}`,
+              isMigrated: false,
+            });
+          }
+        }
+      });
+
+      // Terapkan data sales yang baru saja disimpan sebagai prioritas tertinggi
+      normalSales.forEach((s) => {
+        const key = `${s.outletId}_${s.date}`;
+        overrideMap.set(key, {
+          ...s,
+          id: `sales-${s.outletId}-${s.date}`,
+          isMigrated: false,
+          updatedAt: s.updatedAt || nowIso,
+        });
+      });
+
+      const finalOverrides = Array.from(overrideMap.values());
+
+      await client.from('cinema_sales').upsert(
+        {
+          id: '__SYSTEM_SYNC_DAILY_SALES__',
+          outlet_id: '__SYSTEM_SYNC__',
+          date: '2026-01-01',
+          shows: finalOverrides as any,
+          updated_at: nowIso,
+        },
+        { onConflict: 'id' }
+      );
+    }
+
+    // 2. Simpan juga sebagai baris individual di cinema_sales
     const payload = sales.map((s) => {
       const isSystem = String(s.id || '').startsWith('__SYSTEM_SYNC_');
       return {
@@ -264,22 +347,6 @@ export async function syncSalesToSupabase(sales: DailySalesRecord[]): Promise<bo
         updated_at: s.updatedAt || nowIso,
       };
     });
-
-    // Jika ini adalah penyimpanan input user (bukan bulk upload), bersihkan ID duplikat lama untuk outlet & tanggal yang sama
-    if (sales.length <= 10) {
-      for (const s of sales) {
-        if (!String(s.id || '').startsWith('__SYSTEM_SYNC_')) {
-          const legacyIds = [
-            `${s.outletId}_${s.date}`,
-            `${s.outletId}-${s.date}`,
-            `mig_${s.outletId}_${s.date}`,
-            `mig_2025_${s.outletId}_${s.date}`,
-            `mig_2026_${s.outletId}_${s.date}`,
-          ];
-          await client.from('cinema_sales').delete().in('id', legacyIds);
-        }
-      }
-    }
 
     const { error } = await client.from('cinema_sales').upsert(payload, { onConflict: 'id' });
     if (error) {
@@ -294,60 +361,90 @@ export async function syncSalesToSupabase(sales: DailySalesRecord[]): Promise<bo
 }
 
 /**
- * Ambil Data Sales Harian dari Supabase (Prioritaskan data input user & updated_at terbaru)
+ * Ambil Data Sales Harian dari Supabase (Dual-Channel: __SYSTEM_SYNC_DAILY_SALES__ + baris individual terbaru)
  */
 export async function fetchSalesFromSupabase(): Promise<DailySalesRecord[] | null> {
   const client = getSupabase();
   if (!client) return null;
 
   try {
-    const { data: userRows, error: userErr } = await client
-      .from('cinema_sales')
-      .select('*')
-      .not('id', 'like', 'mig_%')
-      .not('id', 'like', '__SYSTEM_SYNC_%')
-      .order('updated_at', { ascending: false })
-      .limit(1000);
+    const dedupedMap = new Map<string, DailySalesRecord>();
 
-    if (userErr && !userRows) {
-      console.warn('Fetch sales from Supabase warning:', userErr);
-      return null;
+    // 1. Channel Utama: Ambil dari __SYSTEM_SYNC_DAILY_SALES__ (Primary Key lookup cepat & akurat)
+    const { data: syncRow } = await client
+      .from('cinema_sales')
+      .select('id, shows, updated_at')
+      .eq('id', '__SYSTEM_SYNC_DAILY_SALES__')
+      .maybeSingle();
+
+    if (syncRow && Array.isArray(syncRow.shows)) {
+      for (const item of syncRow.shows) {
+        if (item && item.outletId && item.date) {
+          const key = `${item.outletId}_${item.date}`;
+          dedupedMap.set(key, {
+            id: `sales-${item.outletId}-${item.date}`,
+            outletId: item.outletId,
+            date: item.date,
+            shows: Array.isArray(item.shows) ? item.shows : [],
+            isMigrated: false,
+            updatedAt: item.updatedAt || syncRow.updated_at || undefined,
+          });
+        }
+      }
     }
 
-    const rows = Array.isArray(userRows) ? userRows : [];
+    // 2. Channel Pendukung: Ambil baris individual terbaru dari cinema_sales
+    const { data: indRows } = await client
+      .from('cinema_sales')
+      .select('id, outlet_id, date, shows, updated_at')
+      .order('date', { ascending: false })
+      .limit(200);
 
-    // Deduplikasi berdasarkan outlet_id + date (ambil yang updated_at paling baru)
-    const dedupedMap = new Map<string, DailySalesRecord>();
-    for (const row of rows) {
-      const rowId = String(row.id || '');
-      const rowOutlet = String(row.outlet_id || '');
-      if (
-        !rowOutlet ||
-        !row.date ||
-        rowId.startsWith('__SYSTEM_SYNC_') ||
-        rowOutlet.startsWith('__SYSTEM_SYNC_')
-      ) {
-        continue;
-      }
+    if (Array.isArray(indRows)) {
+      for (const row of indRows) {
+        const rowId = String(row.id || '');
+        const rowOutlet = String(row.outlet_id || '');
+        if (
+          !rowOutlet ||
+          !row.date ||
+          rowId.startsWith('__SYSTEM_SYNC_') ||
+          rowOutlet.startsWith('__SYSTEM_SYNC_') ||
+          rowId.startsWith('mig_')
+        ) {
+          continue;
+        }
 
-      const key = `${rowOutlet}_${row.date}`;
-      const record: DailySalesRecord = {
-        id: `sales-${rowOutlet}-${row.date}`,
-        outletId: rowOutlet,
-        date: row.date,
-        shows: Array.isArray(row.shows) ? row.shows : [],
-        isMigrated: false,
-        updatedAt: row.updated_at || undefined,
-      };
+        const shows: any[] = Array.isArray(row.shows) ? row.shows : [];
+        const hasFilledShow = shows.some(
+          (s) =>
+            s &&
+            (s.isFilled ||
+              (s.omsetCinema || 0) > 0 ||
+              (s.omsetFnB || 0) > 0 ||
+              (s.bill || 0) > 0 ||
+              (s.penonton || 0) > 0)
+        );
+        if (!hasFilledShow) continue;
 
-      const existing = dedupedMap.get(key);
-      if (!existing) {
-        dedupedMap.set(key, record);
-      } else {
-        const prevTime = existing.updatedAt ? new Date(existing.updatedAt).getTime() : 0;
-        const currTime = record.updatedAt ? new Date(record.updatedAt).getTime() : 0;
-        if (currTime > prevTime) {
+        const key = `${rowOutlet}_${row.date}`;
+        const record: DailySalesRecord = {
+          id: `sales-${rowOutlet}-${row.date}`,
+          outletId: rowOutlet,
+          date: row.date,
+          shows,
+          isMigrated: false,
+          updatedAt: row.updated_at || undefined,
+        };
+
+        const existing = dedupedMap.get(key);
+        if (!existing) {
           dedupedMap.set(key, record);
+        } else {
+          const prevTime = existing.updatedAt ? new Date(existing.updatedAt).getTime() : 0;
+          const currTime = record.updatedAt ? new Date(record.updatedAt).getTime() : 0;
+          if (currTime > prevTime) {
+            dedupedMap.set(key, record);
+          }
         }
       }
     }
@@ -424,22 +521,46 @@ export async function fetchOccupancyFromSupabase(
  */
 export async function mergeRemoteSalesToLocal(): Promise<boolean> {
   const remoteSales = await fetchSalesFromSupabase();
+  const localOverrides = StorageService.getUserSalesOverrides();
+
+  // Jika di remote belum ada namun di perangkat lokal ada inputan user, dorong ke Supabase
+  if ((!remoteSales || remoteSales.length === 0) && localOverrides.length > 0) {
+    await syncSalesToSupabase(localOverrides);
+    return false;
+  }
+
   if (!remoteSales || remoteSales.length === 0) return false;
 
   const currentLocal = StorageService.getDailySales();
+  const overrideMap = new Map<string, DailySalesRecord>();
+  localOverrides.forEach((ov) => {
+    if (ov && ov.outletId && ov.date) {
+      overrideMap.set(`${ov.outletId}_${ov.date}`, ov);
+    }
+  });
+
   let updated = false;
+  let needsPushBack = false;
+
+  // Cek apakah ada override lokal yang belum ada di remote
+  const remoteKeySet = new Set(remoteSales.map((r) => `${r.outletId}_${r.date}`));
+  for (const locOv of localOverrides) {
+    if (locOv && locOv.outletId && locOv.date && !remoteKeySet.has(`${locOv.outletId}_${locOv.date}`)) {
+      needsPushBack = true;
+    }
+  }
 
   remoteSales.forEach((remote) => {
     const key = `${remote.outletId}_${remote.date}`;
 
-    // Jangan timpa data lokal jika user baru saja menyimpan di tab/perangkat ini dalam 12 detik terakhir
+    // Jangan timpa data lokal jika user baru saja menyimpan di tab/perangkat ini dalam 10 detik terakhir
     // kecuali data remote punya timestamp yang lebih baru dari waktu simpan lokal
     try {
       const localSaveTsRaw = localStorage.getItem(`cinema_xxi_sales_local_save_ts_${key}`);
       if (localSaveTsRaw) {
         const localSaveTs = Number(localSaveTsRaw);
         const remoteTs = remote.updatedAt ? new Date(remote.updatedAt).getTime() : 0;
-        if (Date.now() - localSaveTs < 12000 && remoteTs < localSaveTs) {
+        if (Date.now() - localSaveTs < 10000 && remoteTs < localSaveTs) {
           return;
         }
       }
@@ -450,30 +571,42 @@ export async function mergeRemoteSalesToLocal(): Promise<boolean> {
     const idx = currentLocal.findIndex(
       (s) => s.outletId === remote.outletId && s.date === remote.date
     );
+    const normalizedRemote: DailySalesRecord = {
+      ...remote,
+      id: `sales-${remote.outletId}-${remote.date}`,
+      isMigrated: false,
+    };
+
     if (idx >= 0) {
       const localStr = JSON.stringify(currentLocal[idx].shows || []);
       const remoteStr = JSON.stringify(remote.shows || []);
       if (localStr !== remoteStr) {
-        currentLocal[idx] = {
-          ...remote,
-          id: `sales-${remote.outletId}-${remote.date}`,
-          isMigrated: false,
-        };
+        currentLocal[idx] = normalizedRemote;
+        overrideMap.set(key, normalizedRemote);
         updated = true;
       }
     } else {
-      currentLocal.push({
-        ...remote,
-        id: `sales-${remote.outletId}-${remote.date}`,
-        isMigrated: false,
-      });
+      currentLocal.push(normalizedRemote);
+      overrideMap.set(key, normalizedRemote);
       updated = true;
     }
   });
 
   if (updated) {
-    localStorage.setItem('cinema_xxi_daily_sales', JSON.stringify(currentLocal));
+    try {
+      localStorage.setItem(
+        'cinema_xxi_user_sales_overrides',
+        JSON.stringify(Array.from(overrideMap.values()))
+      );
+      localStorage.setItem('cinema_xxi_daily_sales', JSON.stringify(currentLocal));
+    } catch {
+      // ignore
+    }
     StorageService.broadcastChange('sales');
+  }
+
+  if (needsPushBack && localOverrides.length > 0) {
+    syncSalesToSupabase(localOverrides);
   }
 
   return updated;
@@ -1881,30 +2014,16 @@ export function setupSupabaseRealtimeSync(): () => void {
               mergeRemoteDailySectionSalesToLocal();
               return;
             }
+            if (rowId === '__SYSTEM_SYNC_DAILY_SALES__') {
+              mergeRemoteSalesToLocal();
+              return;
+            }
             if (rowId.startsWith('__SYSTEM_SYNC_') || rowOutlet.startsWith('__SYSTEM_SYNC_')) {
               return;
             }
 
             if (payload.new.outlet_id && payload.new.date) {
-              const remoteRecord: DailySalesRecord = {
-                id: `sales-${payload.new.outlet_id}-${payload.new.date}`,
-                outletId: payload.new.outlet_id,
-                date: payload.new.date,
-                shows: Array.isArray(payload.new.shows) ? payload.new.shows : [],
-                isMigrated: false,
-                updatedAt: payload.new.updated_at || new Date().toISOString(),
-              };
-              const currentLocal = StorageService.getDailySales();
-              const idx = currentLocal.findIndex(
-                (s) => s.outletId === remoteRecord.outletId && s.date === remoteRecord.date
-              );
-              if (idx >= 0) {
-                currentLocal[idx] = remoteRecord;
-              } else {
-                currentLocal.push(remoteRecord);
-              }
-              localStorage.setItem('cinema_xxi_daily_sales', JSON.stringify(currentLocal));
-              StorageService.broadcastChange('sales');
+              mergeRemoteSalesToLocal();
             }
           }
         }

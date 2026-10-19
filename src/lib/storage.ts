@@ -979,7 +979,18 @@ export const StorageService = {
     return list;
   },
 
-  // Daily Sales
+  // Daily Sales - User Overrides Layer (100% immune to static migration overwrites)
+  getUserSalesOverrides(): DailySalesRecord[] {
+    try {
+      const raw = localStorage.getItem('cinema_xxi_user_sales_overrides');
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  },
+
   getDailySales(): DailySalesRecord[] {
     const raw = localStorage.getItem(KEYS.SALES);
     let list: DailySalesRecord[] = [];
@@ -991,17 +1002,23 @@ export const StorageService = {
       }
     }
 
-    // Auto-seed migrated 2025 & 2026 data WITHOUT overwriting user edits
-    let updated = false;
     const allMigrated = [...MIGRATED_SALES_2025, ...MIGRATED_SALES_2026];
-    const migratedMap = new Set(allMigrated.map((m) => `${m.outletId}_${m.date}`));
+    const migratedByKey = new Map<string, DailySalesRecord>();
+    for (const m of allMigrated) {
+      migratedByKey.set(`${m.outletId}_${m.date}`, m);
+    }
 
     const existingMap = new Map<string, DailySalesRecord>();
+
+    // 1. Seed base migrated records first
+    for (const migrated of allMigrated) {
+      existingMap.set(`${migrated.outletId}_${migrated.date}`, migrated);
+    }
+
+    // 2. Apply any non-system, user-modified records from KEYS.SALES
+    let updated = false;
     for (const item of list) {
-      if (!item || !item.outletId || !item.date) {
-        updated = true;
-        continue;
-      }
+      if (!item || !item.outletId || !item.date) continue;
       if (
         String(item.id || '').startsWith('__SYSTEM_SYNC_') ||
         String(item.outletId || '').startsWith('__SYSTEM_SYNC_')
@@ -1009,40 +1026,33 @@ export const StorageService = {
         updated = true;
         continue;
       }
-      // Only purge a record if it is explicitly marked isMigrated === true AND no longer in migratedMap
-      const isPureMigrated =
-        item.isMigrated === true && String(item.id || '').startsWith('mig_');
-      if (isPureMigrated && !migratedMap.has(`${item.outletId}_${item.date}`)) {
-        updated = true;
-        continue;
-      }
-
       const key = `${item.outletId}_${item.date}`;
-      const prev = existingMap.get(key);
-      if (!prev) {
-        existingMap.set(key, item);
+      const mig = migratedByKey.get(key);
+      if (!mig) {
+        // Record on a date not in static migrated list (e.g. user input on any daily date)
+        existingMap.set(key, { ...item, isMigrated: false });
       } else {
-        // Deduplicate: always prefer user-saved (!isMigrated) or newer updatedAt
-        updated = true;
-        const prevIsUser = prev.isMigrated === false || !String(prev.id || '').startsWith('mig_');
-        const itemIsUser = item.isMigrated === false || !String(item.id || '').startsWith('mig_');
-        if (itemIsUser && !prevIsUser) {
-          existingMap.set(key, item);
-        } else if (itemIsUser === prevIsUser) {
-          const prevTime = prev.updatedAt ? new Date(prev.updatedAt).getTime() : 0;
-          const itemTime = item.updatedAt ? new Date(item.updatedAt).getTime() : 0;
-          if (itemTime >= prevTime) {
-            existingMap.set(key, item);
-          }
+        // Record is on a migrated date: keep item if it was edited by user (isMigrated === false or shows differ)
+        const isUserEdited =
+          item.isMigrated === false ||
+          Boolean(item.updatedAt) ||
+          JSON.stringify(item.shows || []) !== JSON.stringify(mig.shows || []);
+        if (isUserEdited) {
+          existingMap.set(key, { ...item, isMigrated: false });
         }
       }
     }
 
-    for (const migrated of allMigrated) {
-      const key = `${migrated.outletId}_${migrated.date}`;
-      if (!existingMap.has(key)) {
-        existingMap.set(key, migrated);
-        updated = true;
+    // 3. Apply dedicated user overrides layer on top (highest priority)
+    const overrides = this.getUserSalesOverrides();
+    for (const ov of overrides) {
+      if (ov && ov.outletId && ov.date) {
+        const key = `${ov.outletId}_${ov.date}`;
+        existingMap.set(key, {
+          ...ov,
+          id: `sales-${ov.outletId}-${ov.date}`,
+          isMigrated: false,
+        });
       }
     }
 
@@ -1055,8 +1065,18 @@ export const StorageService = {
   },
 
   getDailySaleByOutletAndDate(outletId: string, date: string): DailySalesRecord {
+    // Check user overrides first for instant accuracy
+    const overrides = this.getUserSalesOverrides();
+    const overrideMatch = overrides.find((s) => s.outletId === outletId && s.date === date);
+    if (overrideMatch) {
+      return {
+        ...overrideMatch,
+        id: `sales-${outletId}-${date}`,
+        isMigrated: false,
+      };
+    }
+
     const list = this.getDailySales();
-    // Prefer non-migrated record if multiple exist, otherwise return existing
     const existing = list.find((s) => s.outletId === outletId && s.date === date);
     if (existing) return existing;
 
@@ -1093,6 +1113,12 @@ export const StorageService = {
         `cinema_xxi_sales_local_save_ts_${record.outletId}_${record.date}`,
         String(Date.now())
       );
+      // Save to persistent user overrides layer
+      const overrides = this.getUserSalesOverrides().filter(
+        (s) => !(s.outletId === normalizedRecord.outletId && s.date === normalizedRecord.date)
+      );
+      overrides.push(normalizedRecord);
+      localStorage.setItem('cinema_xxi_user_sales_overrides', JSON.stringify(overrides));
     } catch {
       // ignore
     }
@@ -2313,7 +2339,9 @@ export const StorageService = {
   // Broadcast & Sync (Asynchronous to prevent React setState-in-render collisions)
   broadcastChange(type: string) {
     setTimeout(() => {
-      window.dispatchEvent(new CustomEvent('cinema-xxi-storage-update', { detail: { type } }));
+      window.dispatchEvent(
+        new CustomEvent('cinema-xxi-storage-update', { detail: { type, key: type } })
+      );
     }, 0);
   },
 
