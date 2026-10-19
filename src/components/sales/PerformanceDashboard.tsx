@@ -51,7 +51,8 @@ export const PerformanceDashboard: React.FC<PerformanceDashboardProps> = ({
   // 'all' = SEMUA WILAYAH
   const [selectedAreaId, setSelectedAreaId] = useState<string>('all');
   // Sort order for Achievement column ('desc' = terbesar ke terkecil, 'asc' = terkecil ke terbesar)
-  const [achSortOrder, setAchSortOrder] = useState<'desc' | 'asc'>('desc');
+  const [dailyAchSortOrder, setDailyAchSortOrder] = useState<'desc' | 'asc'>('desc');
+  const [mtdAchSortOrder, setMtdAchSortOrder] = useState<'desc' | 'asc'>('desc');
 
   const filteredOutlets = outlets.filter((o) =>
     isManagerOrCleaner ? true : selectedAreaId === 'all' || !selectedAreaId ? true : o.areaId === selectedAreaId
@@ -73,76 +74,90 @@ export const PerformanceDashboard: React.FC<PerformanceDashboardProps> = ({
       : areas.find((a) => a.id === selectedAreaId)?.name || 'SEMUA WILAYAH';
 
   // Compute metrics per outlet
-  const performanceRows = filteredOutlets
-    .map((outlet) => {
-      const [refYear, refMonth] = selectedDate.split('-');
+  const performanceRows = filteredOutlets.map((outlet) => {
+    const [refYear, refMonth] = selectedDate.split('-');
 
-      const exactSaleRecord = dailySales.find(
-        (s) => s.outletId === outlet.id && s.date === selectedDate
-      );
-      // Strictly use exact record for selectedDate (no fallback to other dates)
-      const saleRecord = exactSaleRecord;
+    const exactSaleRecord = dailySales.find(
+      (s) => s.outletId === outlet.id && s.date === selectedDate
+    );
+    // Strictly use exact record for selectedDate (no fallback to other dates)
+    const saleRecord = exactSaleRecord;
 
-      const shows = saleRecord?.shows || [];
+    const shows = saleRecord?.shows || [];
 
-      const dailyTotals = StorageService.getLatestShowTotals(shows);
-      const sumCinema = dailyTotals.omsetCinema;
-      const sumFnB = dailyTotals.omsetFnB;
-      const sumBill = dailyTotals.bill;
-      const sumPenonton = dailyTotals.penonton;
+    const dailyTotals = StorageService.getLatestShowTotals(shows);
+    const sumCinema = dailyTotals.omsetCinema;
+    const sumFnB = dailyTotals.omsetFnB;
+    const sumBill = dailyTotals.bill;
+    const sumPenonton = dailyTotals.penonton;
 
-      const dailyMetrics = StorageService.calculateMetrics(
-        sumCinema,
-        sumFnB,
-        sumBill,
-        sumPenonton,
-        outlet.targetHead
-      );
+    const dailyMetrics = StorageService.calculateMetrics(
+      sumCinema,
+      sumFnB,
+      sumBill,
+      sumPenonton,
+      outlet.targetHead
+    );
 
-      const mtdSales = dailySales.filter(
-        (s) =>
-          s.outletId === outlet.id &&
-          s.date.startsWith(`${refYear}-${refMonth}`) &&
-          s.date <= selectedDate
-      );
-      let mtdCinema = 0;
-      let mtdFnB = 0;
-      let mtdBill = 0;
-      let mtdPenonton = 0;
+    const mtdSales = dailySales.filter(
+      (s) =>
+        s.outletId === outlet.id &&
+        s.date.startsWith(`${refYear}-${refMonth}`) &&
+        s.date <= selectedDate
+    );
+    let mtdCinema = 0;
+    let mtdFnB = 0;
+    let mtdBill = 0;
+    let mtdPenonton = 0;
 
-      mtdSales.forEach((rec) => {
-        const dayTotals = StorageService.getLatestShowTotals(rec.shows);
-        mtdCinema += dayTotals.omsetCinema;
-        mtdFnB += dayTotals.omsetFnB;
-        mtdBill += dayTotals.bill;
-        mtdPenonton += dayTotals.penonton;
-      });
-
-      const mtdMetrics = StorageService.calculateMetrics(
-        mtdCinema,
-        mtdFnB,
-        mtdBill,
-        mtdPenonton,
-        outlet.targetHead
-      );
-
-      return {
-        outlet,
-        daily: {
-          penonton: sumPenonton,
-          metrics: dailyMetrics,
-        },
-        mtd: {
-          penonton: mtdPenonton,
-          metrics: mtdMetrics,
-        },
-      };
-    })
-    .sort((a, b) => {
-      const achA = a.daily.metrics.achievement || a.mtd.metrics.achievement;
-      const achB = b.daily.metrics.achievement || b.mtd.metrics.achievement;
-      return achSortOrder === 'desc' ? achB - achA : achA - achB;
+    mtdSales.forEach((rec) => {
+      const dayTotals = StorageService.getLatestShowTotals(rec.shows);
+      mtdCinema += dayTotals.omsetCinema;
+      mtdFnB += dayTotals.omsetFnB;
+      mtdBill += dayTotals.bill;
+      mtdPenonton += dayTotals.penonton;
     });
+
+    const mtdMetrics = StorageService.calculateMetrics(
+      mtdCinema,
+      mtdFnB,
+      mtdBill,
+      mtdPenonton,
+      outlet.targetHead
+    );
+
+    return {
+      outlet,
+      daily: {
+        penonton: sumPenonton,
+        metrics: dailyMetrics,
+      },
+      mtd: {
+        penonton: mtdPenonton,
+        metrics: mtdMetrics,
+      },
+    };
+  });
+
+  // Urutan khusus Tabel Kiri (PERFORMANCE REPORT DAILY) berdasarkan Achievement Daily
+  const dailySortedRows = [...performanceRows].sort((a, b) => {
+    const achA = a.daily.metrics.achievement || 0;
+    const achB = b.daily.metrics.achievement || 0;
+    if (achB !== achA) {
+      return dailyAchSortOrder === 'desc' ? achB - achA : achA - achB;
+    }
+    return (b.daily.metrics.head || 0) - (a.daily.metrics.head || 0);
+  });
+
+  // Urutan khusus Tabel Kanan (PERFORMANCE REPORT MTD) berdasarkan Achievement MTD dari persen terbesar
+  const mtdSortedRows = [...performanceRows].sort((a, b) => {
+    const achA = a.mtd.metrics.achievement || 0;
+    const achB = b.mtd.metrics.achievement || 0;
+    if (achB !== achA) {
+      return mtdAchSortOrder === 'desc' ? achB - achA : achA - achB;
+    }
+    return (b.mtd.metrics.head || 0) - (a.mtd.metrics.head || 0);
+  });
 
   // Calculate Area Summary
   const areaDailyPenonton = performanceRows.reduce((acc, r) => acc + r.daily.penonton, 0);
@@ -355,15 +370,15 @@ export const PerformanceDashboard: React.FC<PerformanceDashboardProps> = ({
                   <th className="py-2 px-1 text-right">TARGET SPH</th>
                   <th className="py-2 px-1 text-right">HEAD SPH</th>
 
-                  {/* Interaktif Sort Header ACH dengan ikon panah */}
+                  {/* Interaktif Sort Header ACH Daily dengan ikon panah */}
                   <th
-                    onClick={() => setAchSortOrder((prev) => (prev === 'desc' ? 'asc' : 'desc'))}
+                    onClick={() => setDailyAchSortOrder((prev) => (prev === 'desc' ? 'asc' : 'desc'))}
                     className="py-2 px-1 text-center cursor-pointer select-none hover:bg-purple-100 transition rounded-md"
-                    title="Klik untuk mengurutkan pencapaian terbesar / terkecil"
+                    title="Klik untuk mengurutkan pencapaian Daily terbesar / terkecil"
                   >
                     <div className="flex items-center justify-center space-x-0.5 font-bold text-purple-900">
                       <span>ACH</span>
-                      {achSortOrder === 'desc' ? (
+                      {dailyAchSortOrder === 'desc' ? (
                         <ArrowDown className="w-2.5 h-2.5 text-purple-700" />
                       ) : (
                         <ArrowUp className="w-2.5 h-2.5 text-purple-700" />
@@ -377,7 +392,7 @@ export const PerformanceDashboard: React.FC<PerformanceDashboardProps> = ({
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#E5E7EB] text-[#374151]">
-                {performanceRows.map((row, idx) => (
+                {dailySortedRows.map((row, idx) => (
                   <tr key={row.outlet.id} className="hover:bg-[#F9FAFB] transition">
                     <td className="py-1.5 px-1 text-center font-medium text-[#6B7280]">{idx + 1}</td>
                     <td className="py-1.5 px-1.5 font-bold text-[#111827] truncate max-w-[110px] sm:max-w-[130px]" title={row.outlet.name}>
@@ -457,15 +472,15 @@ export const PerformanceDashboard: React.FC<PerformanceDashboardProps> = ({
                   <th className="py-2 px-1 text-right">TARGET SPH</th>
                   <th className="py-2 px-1 text-right">HEAD SPH</th>
 
-                  {/* Interaktif Sort Header ACH dengan ikon panah */}
+                  {/* Interaktif Sort Header ACH MTD dengan ikon panah */}
                   <th
-                    onClick={() => setAchSortOrder((prev) => (prev === 'desc' ? 'asc' : 'desc'))}
+                    onClick={() => setMtdAchSortOrder((prev) => (prev === 'desc' ? 'asc' : 'desc'))}
                     className="py-2 px-1 text-center cursor-pointer select-none hover:bg-purple-100 transition rounded-md"
-                    title="Klik untuk mengurutkan pencapaian terbesar / terkecil"
+                    title="Klik untuk mengurutkan pencapaian MTD terbesar / terkecil"
                   >
                     <div className="flex items-center justify-center space-x-0.5 font-bold text-purple-900">
                       <span>ACH</span>
-                      {achSortOrder === 'desc' ? (
+                      {mtdAchSortOrder === 'desc' ? (
                         <ArrowDown className="w-2.5 h-2.5 text-purple-700" />
                       ) : (
                         <ArrowUp className="w-2.5 h-2.5 text-purple-700" />
@@ -479,7 +494,7 @@ export const PerformanceDashboard: React.FC<PerformanceDashboardProps> = ({
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#E5E7EB] text-[#374151]">
-                {performanceRows.map((row, idx) => (
+                {mtdSortedRows.map((row, idx) => (
                   <tr key={row.outlet.id} className="hover:bg-[#F9FAFB] transition">
                     <td className="py-1.5 px-1 text-center font-medium text-[#6B7280]">{idx + 1}</td>
                     <td className="py-1.5 px-1.5 font-bold text-[#111827] truncate max-w-[110px] sm:max-w-[130px]" title={row.outlet.name}>
