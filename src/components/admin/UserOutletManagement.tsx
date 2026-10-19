@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Area, Outlet, User } from '../../types';
 import { StorageService } from '../../lib/storage';
 import * as XLSX from 'xlsx';
@@ -37,6 +37,19 @@ export const UserOutletManagement: React.FC<UserOutletManagementProps> = ({
   const [areas, setAreas] = useState<Area[]>(() => StorageService.getAreas());
   const [outlets, setOutlets] = useState<Outlet[]>(() => StorageService.getOutlets());
   const [users, setUsers] = useState<User[]>(() => StorageService.getUsersList());
+
+  useEffect(() => {
+    const handleStorageUpdate = (e: any) => {
+      const type = e?.detail?.type;
+      if (!type || type === 'outlets' || type === 'areas' || type === 'users' || type === 'all-reset') {
+        setAreas(StorageService.getAreas());
+        setOutlets(StorageService.getOutlets());
+        setUsers(StorageService.getUsersList());
+      }
+    };
+    window.addEventListener('cinema-xxi-storage-update', handleStorageUpdate);
+    return () => window.removeEventListener('cinema-xxi-storage-update', handleStorageUpdate);
+  }, []);
 
   // Edit Target Head and UMR state
   const [editingOutletId, setEditingOutletId] = useState<string | null>(null);

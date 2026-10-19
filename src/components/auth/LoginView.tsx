@@ -9,7 +9,6 @@ import {
   Film,
   LogIn,
   ShieldCheck,
-  Sparkles,
 } from 'lucide-react';
 
 interface LoginViewProps {
@@ -111,13 +110,6 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
 
         {/* Card */}
         <div className="bg-white/95 rounded-3xl border border-amber-200/90 shadow-xl shadow-amber-950/5 p-6 sm:p-8 backdrop-blur-md relative transition-all">
-          {/* Top VIP PASS Badge */}
-          <div className="absolute -top-3.5 right-6">
-            <div className="flex items-center space-x-1 px-3 py-1 rounded-full bg-gradient-to-r from-amber-400 via-amber-300 to-amber-400 text-amber-950 text-[10px] font-black uppercase tracking-wider shadow-sm border border-amber-300">
-              <Sparkles className="w-3.5 h-3.5 text-amber-900" />
-              <span>VIP PASS</span>
-            </div>
-          </div>
 
           <div className="mb-5">
             <h2 className="text-xl font-extrabold uppercase tracking-tight text-slate-900 flex items-center space-x-2">
@@ -186,7 +178,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
               className="w-full py-3.5 px-4 rounded-xl font-black text-sm uppercase tracking-wider text-white bg-gradient-to-r from-amber-600 via-amber-500 to-amber-600 hover:from-amber-500 hover:to-amber-500 shadow-md shadow-amber-600/25 active:scale-[0.99] transition flex items-center justify-center space-x-2 mt-3 cursor-pointer"
             >
               <LogIn className="w-4 h-4 text-white" />
-              <span>MASUK APLIKASI VIP</span>
+              <span>MASUK</span>
             </button>
           </form>
         </div>

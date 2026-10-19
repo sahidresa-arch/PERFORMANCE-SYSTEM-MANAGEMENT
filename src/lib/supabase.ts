@@ -1,6 +1,8 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { StorageService } from './storage';
 import {
+  Area,
+  Outlet,
   DailySalesRecord,
   BakingSaleRecord,
   ToiletInspectionRecord,
@@ -1341,6 +1343,116 @@ export async function mergeRemoteDailySectionSalesToLocal(): Promise<boolean> {
   }
 }
 
+export async function syncOutletsAndAreasToSupabase(
+  outlets?: Outlet[],
+  areas?: Area[]
+): Promise<boolean> {
+  const client = getSupabase();
+  if (!client) return false;
+  try {
+    const localOutlets = outlets || StorageService.getOutlets();
+    const localAreas = areas || StorageService.getAreas();
+    const nowIso = new Date().toISOString();
+
+    await client.from('cinema_sales').upsert(
+      [
+        {
+          id: '__SYSTEM_SYNC_OUTLETS__',
+          outlet_id: '__SYSTEM_SYNC__',
+          date: '2026-01-01',
+          shows: localOutlets as any,
+          updated_at: nowIso,
+        },
+        {
+          id: '__SYSTEM_SYNC_AREAS__',
+          outlet_id: '__SYSTEM_SYNC__',
+          date: '2026-01-01',
+          shows: localAreas as any,
+          updated_at: nowIso,
+        },
+      ],
+      { onConflict: 'id' }
+    );
+    return true;
+  } catch (e) {
+    console.warn('Sync outlets and areas error:', e);
+    return false;
+  }
+}
+
+export async function mergeRemoteOutletsAndAreasToLocal(): Promise<boolean> {
+  const client = getSupabase();
+  if (!client) return false;
+  try {
+    const { data, error } = await client
+      .from('cinema_sales')
+      .select('id, shows')
+      .in('id', ['__SYSTEM_SYNC_OUTLETS__', '__SYSTEM_SYNC_AREAS__']);
+
+    if (error || !data) return false;
+
+    let updated = false;
+    const outletsRow = data.find((r: any) => r.id === '__SYSTEM_SYNC_OUTLETS__');
+    const areasRow = data.find((r: any) => r.id === '__SYSTEM_SYNC_AREAS__');
+
+    if (outletsRow && Array.isArray(outletsRow.shows) && outletsRow.shows.length > 0) {
+      const remoteOutlets: Outlet[] = outletsRow.shows;
+      const localOutlets = StorageService.getOutlets();
+      const map = new Map<string, Outlet>();
+      localOutlets.forEach((o) => {
+        if (o && o.id) map.set(o.id, o);
+      });
+      remoteOutlets.forEach((ro: any) => {
+        if (ro && ro.id) {
+          const existing: any = map.get(ro.id);
+          if (!existing || (ro.updatedAt || '') >= (existing.updatedAt || '')) {
+            map.set(ro.id, { ...(existing || {}), ...ro });
+          }
+        }
+      });
+      const mergedOutlets = Array.from(map.values());
+      const currentRaw = localStorage.getItem('cinema_xxi_outlets') || '[]';
+      const mergedRaw = JSON.stringify(mergedOutlets);
+      if (currentRaw !== mergedRaw) {
+        localStorage.setItem('cinema_xxi_outlets', mergedRaw);
+        localStorage.setItem('cinema_xxi_outlets_target_synced_v2_db', 'true');
+        StorageService.broadcastChange('outlets');
+        updated = true;
+      }
+    }
+
+    if (areasRow && Array.isArray(areasRow.shows) && areasRow.shows.length > 0) {
+      const remoteAreas: Area[] = areasRow.shows;
+      const localAreas = StorageService.getAreas();
+      const map = new Map<string, Area>();
+      localAreas.forEach((a) => {
+        if (a && a.id) map.set(a.id, a);
+      });
+      remoteAreas.forEach((ra: any) => {
+        if (ra && ra.id) {
+          const existing: any = map.get(ra.id);
+          if (!existing || (ra.updatedAt || '') >= (existing.updatedAt || '')) {
+            map.set(ra.id, { ...(existing || {}), ...ra });
+          }
+        }
+      });
+      const mergedAreas = Array.from(map.values());
+      const currentRaw = localStorage.getItem('cinema_xxi_areas') || '[]';
+      const mergedRaw = JSON.stringify(mergedAreas);
+      if (currentRaw !== mergedRaw) {
+        localStorage.setItem('cinema_xxi_areas', mergedRaw);
+        localStorage.setItem('cinema_xxi_areas_synced_v2_db', 'true');
+        StorageService.broadcastChange('areas');
+        updated = true;
+      }
+    }
+
+    return updated;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Setup Realtime channel listener and periodic sync for Supabase database changes
  */
@@ -1351,6 +1463,7 @@ export function setupSupabaseRealtimeSync(): () => void {
   }
 
   // Initial pull on load
+  mergeRemoteOutletsAndAreasToLocal();
   mergeRemoteSalesToLocal();
   mergeRemoteBakingSalesToLocal();
   mergeRemoteOccupancyToLocal();
@@ -1374,7 +1487,14 @@ export function setupSupabaseRealtimeSync(): () => void {
             const rowId = String(payload.new.id);
             const rowOutlet = String(payload.new.outlet_id || '');
 
-            // Tangani sinkronisasi real-time untuk Data Karyawan, KPI, Baking, & Performance SDM
+            // Tangani sinkronisasi real-time untuk Outlets, Areas, Data Karyawan, KPI, Baking, & Performance SDM
+            if (
+              rowId === '__SYSTEM_SYNC_OUTLETS__' ||
+              rowId === '__SYSTEM_SYNC_AREAS__'
+            ) {
+              mergeRemoteOutletsAndAreasToLocal();
+              return;
+            }
             if (
               rowId === '__SYSTEM_SYNC_EMPLOYEES__' ||
               rowId === '__SYSTEM_SYNC_DELETED_EMPLOYEES__'
@@ -1504,6 +1624,7 @@ export function setupSupabaseRealtimeSync(): () => void {
 
     // Lightweight 5-second polling fallback in case Realtime WebSockets are restricted
     const intervalId = setInterval(() => {
+      mergeRemoteOutletsAndAreasToLocal();
       mergeRemoteSalesToLocal();
       mergeRemoteBakingSalesToLocal();
       mergeRemoteOccupancyToLocal();
@@ -1526,6 +1647,7 @@ export function setupSupabaseRealtimeSync(): () => void {
   } catch (e) {
     console.warn('Realtime subscription error:', e);
     const intervalId = setInterval(() => {
+      mergeRemoteOutletsAndAreasToLocal();
       mergeRemoteSalesToLocal();
       mergeRemoteBakingSalesToLocal();
       mergeRemoteOccupancyToLocal();
@@ -1557,6 +1679,8 @@ export async function uploadAllLocalToSupabase(): Promise<{
   }
 
   try {
+    await syncOutletsAndAreasToSupabase();
+
     const sales = StorageService.getDailySales();
     let salesCount = 0;
     if (sales.length > 0) {

@@ -840,15 +840,28 @@ export const StorageService = {
 
   saveArea(area: Area): Area[] {
     const list = this.getAreas();
+    const updatedArea = {
+      ...area,
+      ...({ updatedAt: new Date().toISOString() } as any),
+    };
     const idx = list.findIndex((a) => a.id === area.id);
     if (idx >= 0) {
-      list[idx] = area;
+      list[idx] = updatedArea;
     } else {
-      list.push(area);
+      list.push(updatedArea);
     }
     localStorage.setItem(KEYS.AREAS, JSON.stringify(list));
     localStorage.setItem('cinema_xxi_areas_synced_v2_db', 'true');
     this.broadcastChange('areas');
+
+    import('./supabase')
+      .then((m) => {
+        if (typeof (m as any).syncOutletsAndAreasToSupabase === 'function') {
+          (m as any).syncOutletsAndAreasToSupabase(this.getOutlets(), list);
+        }
+      })
+      .catch(() => {});
+
     return list;
   },
 
@@ -863,7 +876,7 @@ export const StorageService = {
     }
     try {
       const stored: Outlet[] = JSON.parse(raw);
-      // Synchronize studios, targetHead, and umr from INITIAL_OUTLETS
+      // Synchronize studios, targetHead, and umr from INITIAL_OUTLETS while preserving user edits
       const updatedList = stored.map((so) => {
         const init = INITIAL_OUTLETS.find((io) => io.id === so.id);
         if (init) {
@@ -873,7 +886,7 @@ export const StorageService = {
               ? init.targetHead
               : (so.targetHead !== undefined ? so.targetHead : init.targetHead),
             studios: init.studios || so.studios,
-            umr: init.umr,
+            umr: so.umr !== undefined && so.umr > 0 ? so.umr : init.umr,
           };
         }
         return so;
@@ -904,14 +917,27 @@ export const StorageService = {
 
   saveOutlet(outlet: Outlet): Outlet[] {
     const list = this.getOutlets();
+    const updatedOutlet: Outlet = {
+      ...outlet,
+      ...({ updatedAt: new Date().toISOString() } as any),
+    };
     const idx = list.findIndex((o) => o.id === outlet.id);
     if (idx >= 0) {
-      list[idx] = outlet;
+      list[idx] = updatedOutlet;
     } else {
-      list.push(outlet);
+      list.push(updatedOutlet);
     }
     localStorage.setItem(KEYS.OUTLETS, JSON.stringify(list));
     this.broadcastChange('outlets');
+
+    import('./supabase')
+      .then((m) => {
+        if (typeof (m as any).syncOutletsAndAreasToSupabase === 'function') {
+          (m as any).syncOutletsAndAreasToSupabase(list, this.getAreas());
+        }
+      })
+      .catch(() => {});
+
     return list;
   },
 
@@ -919,6 +945,15 @@ export const StorageService = {
     const list = this.getOutlets().filter((o) => o.id !== outletId);
     localStorage.setItem(KEYS.OUTLETS, JSON.stringify(list));
     this.broadcastChange('outlets');
+
+    import('./supabase')
+      .then((m) => {
+        if (typeof (m as any).syncOutletsAndAreasToSupabase === 'function') {
+          (m as any).syncOutletsAndAreasToSupabase(list, this.getAreas());
+        }
+      })
+      .catch(() => {});
+
     return list;
   },
 
