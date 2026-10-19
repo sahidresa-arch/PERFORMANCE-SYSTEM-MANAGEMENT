@@ -85,6 +85,18 @@ const DEFAULT_CHECKLIST: ToiletChecklist = {
   calfresh: '',
 };
 
+const isExcludedFromToiletInspection = (outlet: { id: string; name: string }) => {
+  const upperName = (outlet.name || '').toUpperCase();
+  return (
+    outlet.id === 'hs-aeon-sentul-xxi' ||
+    outlet.id === 'hs-margo-city-xxi' ||
+    outlet.id === 'premiere-pesona-square-xxi' ||
+    upperName.includes('HS AEON SENTUL') ||
+    upperName.includes('HS MARGO CITY') ||
+    upperName.includes('PREMIERE PESONA SQUARE')
+  );
+};
+
 export const ToiletInspection: React.FC<ToiletInspectionProps> = ({
   currentUser,
   selectedDate,
@@ -93,7 +105,9 @@ export const ToiletInspection: React.FC<ToiletInspectionProps> = ({
 }) => {
   const [viewMode, setViewMode] = useState<'dashboard' | 'form'>(initialMode);
   const areas = StorageService.getAreas();
-  const rawOutlets = StorageService.getOutlets();
+  const rawOutlets = StorageService.getOutlets().filter(
+    (o) => !isExcludedFromToiletInspection(o)
+  );
   const isManagerOrCleaner = (currentUser?.role === 'manager' || currentUser?.role === 'cleaner') && currentUser?.outletId;
   const outlets = isManagerOrCleaner
     ? rawOutlets.filter((o) => o.id === currentUser.outletId)
@@ -108,7 +122,9 @@ export const ToiletInspection: React.FC<ToiletInspectionProps> = ({
 
   // Form State
   const defaultOutletId =
-    currentUser?.outletId || (outlets.length > 0 ? outlets[0].id : '');
+    (currentUser?.outletId && rawOutlets.some((o) => o.id === currentUser.outletId)
+      ? currentUser.outletId
+      : '') || (outlets.length > 0 ? outlets[0].id : '');
   const [formOutletId, setFormOutletId] = useState<string>(defaultOutletId);
   const [formToiletType, setFormToiletType] = useState<'Pria' | 'Wanita'>('Pria');
   const [formShowNumber, setFormShowNumber] = useState<number>(1);
@@ -129,7 +145,11 @@ export const ToiletInspection: React.FC<ToiletInspectionProps> = ({
   // Load inspections from storage
   const reloadInspections = () => {
     const list = StorageService.getInspections().filter(
-      (ins: ToiletInspectionRecord) => ins.date === selectedDate
+      (ins: ToiletInspectionRecord) =>
+        ins.date === selectedDate &&
+        ins.outletId !== 'hs-aeon-sentul-xxi' &&
+        ins.outletId !== 'hs-margo-city-xxi' &&
+        ins.outletId !== 'premiere-pesona-square-xxi'
     );
     setInspections(list);
   };
