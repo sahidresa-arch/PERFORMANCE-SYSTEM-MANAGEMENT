@@ -128,9 +128,6 @@ export default function App() {
     setActiveMenu(newMenu);
     setSelectedDate(getTodayDateString());
     window.scrollTo({ top: 0, behavior: 'smooth' });
-    import('./lib/supabase')
-      .then((m) => m.pullAllRemoteToLocal())
-      .catch(() => {});
   };
 
   // If not logged in, show Cinema XXI VIP Login Screen

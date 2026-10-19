@@ -346,10 +346,12 @@ export const RekapOkupansi: React.FC<RekapOkupansiProps> = ({
       Object.keys(newMap).forEach((outId) => {
         const rows = newMap[outId] || [];
         const expanded: StudioRowModel[] = [];
+        let outletChanged = false;
         rows.forEach((r) => {
           const title = (r.filmTitle || r.notes || '').trim();
           if (title.includes(';')) {
             splitCount++;
+            outletChanged = true;
             const titles = title.split(';').map((t) => t.trim()).filter(Boolean);
             titles.forEach((singleTitle, tIdx) => {
               const detectedGenre = StorageService.resolveFilmGenre(singleTitle, r.genre);
@@ -369,7 +371,9 @@ export const RekapOkupansi: React.FC<RekapOkupansiProps> = ({
           }
         });
         newMap[outId] = expanded;
-        StorageService.saveOccupancyRecord(outId, selectedDate, expanded);
+        if (outletChanged) {
+          StorageService.saveOccupancyRecord(outId, selectedDate, expanded);
+        }
       });
       return newMap;
     });

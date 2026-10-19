@@ -701,35 +701,6 @@ export const InputDataSales: React.FC<InputDataSalesProps> = ({
               disabled={isLocked}
               onClick={() => {
                 if (isLocked) return;
-                // Simpan langsung saat tombol SIMPAN DATA diklik agar langsung tersinkron ke Cloud/Device lain
-                const nowTime = new Date().toLocaleTimeString('id-ID', {
-                  hour: '2-digit',
-                  minute: '2-digit',
-                });
-                const updatedShows = dailyRecord.shows.map((s) => {
-                  if (s.showNumber === activeShow) {
-                    return {
-                      ...s,
-                      omsetCinema,
-                      omsetFnB,
-                      bill,
-                      penonton,
-                      updatedAt: nowTime,
-                      isFilled: true,
-                      isLocked: s.isLocked || false,
-                    };
-                  }
-                  return s;
-                });
-                const saved = StorageService.saveDailySale({
-                  ...dailyRecord,
-                  outletId: selectedOutletId,
-                  date: selectedDate,
-                  isMigrated: false,
-                  shows: updatedShows,
-                });
-                setDailyRecord(saved);
-                isDirtyRef.current = false;
                 setIsConfirmModalOpen(true);
               }}
               className={`px-5 py-2.5 rounded-xl font-black text-xs transition flex items-center space-x-2 shadow-md ${

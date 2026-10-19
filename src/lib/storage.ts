@@ -2276,7 +2276,6 @@ export const StorageService = {
           (m.date === date || this.normalizeDateStr(m.date) === normTargetDate)
       );
       if (migrated) {
-        this.saveOccupancyRecord(outletId, migrated.date, migrated.rows);
         return migrated.rows.map((s) => ({
           ...s,
           genre: this.resolveFilmGenre(s.filmTitle || s.notes || '', s.genre),

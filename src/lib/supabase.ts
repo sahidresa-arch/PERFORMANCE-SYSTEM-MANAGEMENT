@@ -302,8 +302,12 @@ function scheduleDebouncedRealtimeMerge(key: string, fn: () => Promise<any>, del
   }, delayMs);
 }
 
+const recentSalesDeltaMap = new Map<string, DailySalesRecord>();
+const recentInspectionsDeltaMap = new Map<string, ToiletInspectionRecord>();
+const occupancyWriteTimers: Record<string, any> = {};
+
 /**
- * Sinkronisasi Data Sales Harian ke Supabase (Hemat Egress: 1 Row Master Sync tanpa duplikasi ratusan baris)
+ * Sinkronisasi Data Sales Harian ke Supabase (Hemat Egress: Master Sync + 2 KB Delta Row untuk Live Broadcast)
  */
 export async function syncSalesToSupabase(sales: DailySalesRecord[]): Promise<boolean> {
   const client = getSupabase();
@@ -370,30 +374,51 @@ export async function syncSalesToSupabase(sales: DailySalesRecord[]): Promise<bo
       }
     });
 
-    // Terapkan data sales yang baru saja disimpan sebagai prioritas tertinggi
+    // Terapkan data sales yang baru saja disimpan sebagai prioritas tertinggi & masukkan ke Delta Buffer (~2 KB)
     normalSales.forEach((s) => {
       const key = `${s.outletId}_${s.date}`;
-      overrideMap.set(key, {
+      const normalizedItem: DailySalesRecord = {
         ...s,
         id: `sales-${s.outletId}-${s.date}`,
         isMigrated: false,
         updatedAt: s.updatedAt || nowIso,
-      });
+      };
+      overrideMap.set(key, normalizedItem);
+      recentSalesDeltaMap.delete(key);
+      recentSalesDeltaMap.set(key, normalizedItem);
     });
 
+    // Batasi Delta Buffer maksimal 10 record terbaru (~2-5 KB)
+    while (recentSalesDeltaMap.size > 10) {
+      const oldestKey = recentSalesDeltaMap.keys().next().value;
+      if (oldestKey) recentSalesDeltaMap.delete(oldestKey);
+      else break;
+    }
+
     const finalOverrides = Array.from(overrideMap.values());
+    const deltaSalesList = Array.from(recentSalesDeltaMap.values());
 
     // Catat timestamp tulis lokal SEBELUM upsert agar echo WebSocket diabaikan (0 Egress tambahan)
     recordSyncTimestamp('__SYSTEM_SYNC_DAILY_SALES__', nowIso, true);
+    recordSyncTimestamp('__SYSTEM_SYNC_DAILY_SALES_DELTA__', nowIso, true);
 
     const { error } = await client.from('cinema_sales').upsert(
-      {
-        id: '__SYSTEM_SYNC_DAILY_SALES__',
-        outlet_id: '__SYSTEM_SYNC__',
-        date: '2026-01-01',
-        shows: finalOverrides as any,
-        updated_at: nowIso,
-      },
+      [
+        {
+          id: '__SYSTEM_SYNC_DAILY_SALES_DELTA__',
+          outlet_id: '__SYSTEM_SYNC__',
+          date: '2026-01-01',
+          shows: deltaSalesList as any,
+          updated_at: nowIso,
+        },
+        {
+          id: '__SYSTEM_SYNC_DAILY_SALES__',
+          outlet_id: '__SYSTEM_SYNC__',
+          date: '2026-01-01',
+          shows: finalOverrides as any,
+          updated_at: nowIso,
+        },
+      ],
       { onConflict: 'id' }
     );
 
@@ -409,26 +434,29 @@ export async function syncSalesToSupabase(sales: DailySalesRecord[]): Promise<bo
 }
 
 /**
- * Ambil Data Sales Harian dari Supabase (1 Primary Key Query - Hemat Egress & Log Ingestion)
+ * Ambil Data Sales Harian dari Supabase (Mendukung Mode Delta ~2 KB atau Full Archive)
  */
-export async function fetchSalesFromSupabase(): Promise<DailySalesRecord[] | null> {
+export async function fetchSalesFromSupabase(deltaOnly = false): Promise<DailySalesRecord[] | null> {
   const client = getSupabase();
   if (!client) return null;
 
   try {
     const dedupedMap = new Map<string, DailySalesRecord>();
+    const targetRowId = deltaOnly
+      ? '__SYSTEM_SYNC_DAILY_SALES_DELTA__'
+      : '__SYSTEM_SYNC_DAILY_SALES__';
 
     const { data: syncRow, error } = await client
       .from('cinema_sales')
       .select('id, shows, updated_at')
-      .eq('id', '__SYSTEM_SYNC_DAILY_SALES__')
+      .eq('id', targetRowId)
       .maybeSingle();
 
     if (error) return null;
 
     if (syncRow) {
       if (syncRow.updated_at) {
-        recordSyncTimestamp('__SYSTEM_SYNC_DAILY_SALES__', String(syncRow.updated_at), false);
+        recordSyncTimestamp(targetRowId, String(syncRow.updated_at), false);
       }
       if (Array.isArray(syncRow.shows)) {
         for (const item of syncRow.shows) {
@@ -455,7 +483,7 @@ export async function fetchSalesFromSupabase(): Promise<DailySalesRecord[] | nul
 }
 
 /**
- * Sinkronisasi Data Okupansi Studio ke Supabase
+ * Sinkronisasi Data Okupansi Studio ke Supabase (Dengan Write-Coalescing Debounce 750ms saat mengetik)
  */
 export async function syncOccupancyToSupabase(
   outletId: string,
@@ -466,9 +494,39 @@ export async function syncOccupancyToSupabase(
   const client = getSupabase();
   if (!client) return false;
 
+  const id = `${outletId}_${date}`;
+
+  // Jika dipanggil dari ketikan tabel (skipMetaPointer === false), gabungkan ketikan beruntun selama 750ms menjadi 1 request saja
+  if (!skipMetaPointer) {
+    return new Promise((resolve) => {
+      if (occupancyWriteTimers[id]) {
+        clearTimeout(occupancyWriteTimers[id]);
+      }
+      occupancyWriteTimers[id] = setTimeout(async () => {
+        delete occupancyWriteTimers[id];
+        const ok = await executeOccupancyUpsert(outletId, date, rows, false);
+        resolve(ok);
+      }, 750);
+    });
+  }
+
+  return executeOccupancyUpsert(outletId, date, rows, true);
+}
+
+async function executeOccupancyUpsert(
+  outletId: string,
+  date: string,
+  rows: any[],
+  skipMetaPointer: boolean
+): Promise<boolean> {
+  const client = getSupabase();
+  if (!client) return false;
+
   try {
     const nowIso = new Date().toISOString();
     const id = `${outletId}_${date}`;
+    recordSyncTimestamp('__SYSTEM_SYNC_OCCUPANCY__', nowIso, true);
+
     const { error } = await client.from('cinema_occupancy').upsert(
       {
         id,
@@ -485,20 +543,7 @@ export async function syncOccupancyToSupabase(
       return false;
     }
 
-    if (!skipMetaPointer) {
-      recordSyncTimestamp('__SYSTEM_SYNC_OCCUPANCY__', nowIso, true);
-      await client.from('cinema_sales').upsert(
-        {
-          id: '__SYSTEM_SYNC_OCCUPANCY__',
-          outlet_id: '__SYSTEM_SYNC__',
-          date: '2026-01-01',
-          shows: [{ lastOutletId: outletId, lastDate: date, updatedAt: nowIso }] as any,
-          updated_at: nowIso,
-        },
-        { onConflict: 'id' }
-      );
-    }
-
+    // cinema_occupancy table sudah memiliki realtime channel terdedikasi, tidak perlu double write ke cinema_sales
     return true;
   } catch (e) {
     console.warn('Supabase occupancy sync error:', e);
@@ -532,10 +577,10 @@ export async function fetchOccupancyFromSupabase(
 }
 
 /**
- * Merges remote sales records from Supabase into local storage (Strict Read-Only: Never triggers write loops)
+ * Merges remote sales records from Supabase into local storage (Strict Read-Only: Supports 2 KB Delta Mode)
  */
-export async function mergeRemoteSalesToLocal(): Promise<boolean> {
-  const remoteSales = await fetchSalesFromSupabase();
+export async function mergeRemoteSalesToLocal(deltaOnly = false): Promise<boolean> {
+  const remoteSales = await fetchSalesFromSupabase(deltaOnly);
   if (!remoteSales || remoteSales.length === 0) return false;
 
   const currentLocal = StorageService.getDailySales();
@@ -697,8 +742,11 @@ function isTableMissingError(err: any): boolean {
   );
 }
 
+let inspectionArchiveTimer: NodeJS.Timeout | null = null;
+const pendingArchiveInspections = new Map<string, ToiletInspectionRecord>();
+
 /**
- * Sinkronisasi Satu Record Card Inspection ke Supabase (Tanpa re-download 410 KB jika sudah tersinkron)
+ * Sinkronisasi Satu Record Card Inspection ke Supabase (Delta-First ~2 KB untuk Live Broadcast Cepat, Master Archive Di-debounce)
  */
 export async function syncInspectionToSupabase(record: ToiletInspectionRecord): Promise<boolean> {
   const client = getSupabase();
@@ -706,42 +754,78 @@ export async function syncInspectionToSupabase(record: ToiletInspectionRecord): 
 
   try {
     const nowIso = new Date().toISOString();
-    const map = new Map<string, ToiletInspectionRecord>();
 
-    if (!lastSeenSyncTimestamps['__SYSTEM_SYNC_INSPECTIONS__']) {
-      const { data: syncRow } = await client
-        .from('cinema_sales')
-        .select('id, shows')
-        .eq('id', '__SYSTEM_SYNC_INSPECTIONS__')
-        .maybeSingle();
-
-      const remoteList: ToiletInspectionRecord[] =
-        syncRow && Array.isArray(syncRow.shows) ? syncRow.shows : [];
-      remoteList.forEach((r) => {
-        if (r && r.id) map.set(r.id, r);
-      });
+    // 1. Simpan ke Delta Buffer (maksimal 15 record terbaru = ~2-3 KB)
+    recentInspectionsDeltaMap.delete(record.id);
+    recentInspectionsDeltaMap.set(record.id, record);
+    while (recentInspectionsDeltaMap.size > 15) {
+      const oldestKey = recentInspectionsDeltaMap.keys().next().value;
+      if (oldestKey) recentInspectionsDeltaMap.delete(oldestKey);
+      else break;
     }
 
-    const localList = StorageService.getInspections();
-    localList.forEach((l) => {
-      if (l && l.id) map.set(l.id, l);
-    });
-    map.set(record.id, record);
+    const deltaInspectionsList = Array.from(recentInspectionsDeltaMap.values());
+    recordSyncTimestamp('__SYSTEM_SYNC_INSPECTIONS_DELTA__', nowIso, true);
 
-    recordSyncTimestamp('__SYSTEM_SYNC_INSPECTIONS__', nowIso, true);
-
-    const { error: salesSyncErr } = await client.from('cinema_sales').upsert(
-      {
-        id: '__SYSTEM_SYNC_INSPECTIONS__',
-        outlet_id: '__SYSTEM_SYNC__',
-        date: '2026-01-01',
-        shows: Array.from(map.values()) as any,
-        updated_at: nowIso,
-      },
+    // Kirim HANYA Delta (~2 KB) secara instan ke Supabase agar live realtime antar device super cepat & hemat 99.5% egress
+    const { error: deltaErr } = await client.from('cinema_sales').upsert(
+      [
+        {
+          id: '__SYSTEM_SYNC_INSPECTIONS_DELTA__',
+          outlet_id: '__SYSTEM_SYNC__',
+          date: '2026-01-01',
+          shows: deltaInspectionsList as any,
+          updated_at: nowIso,
+        },
+      ],
       { onConflict: 'id' }
     );
 
-    return !salesSyncErr;
+    // 2. Debounce Master Archive (400 KB) selama 15 detik agar tidak upload ratusan KB di setiap klik ceklis show
+    pendingArchiveInspections.set(record.id, record);
+    if (inspectionArchiveTimer) {
+      clearTimeout(inspectionArchiveTimer);
+    }
+    inspectionArchiveTimer = setTimeout(async () => {
+      inspectionArchiveTimer = null;
+      try {
+        const archiveClient = getSupabase();
+        if (!archiveClient) return;
+        const archiveIso = new Date().toISOString();
+
+        const allMap = new Map<string, ToiletInspectionRecord>();
+        const localList = StorageService.getInspections();
+        localList.forEach((l) => {
+          if (l && l.id) allMap.set(l.id, l);
+        });
+        pendingArchiveInspections.forEach((v, k) => allMap.set(k, v));
+        pendingArchiveInspections.clear();
+
+        // Prune data inspections lama (> 14 hari) dari master cloud sync agar ukuran row tidak terus membesar
+        const fourteenDaysAgo = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+        const filteredArchive = Array.from(allMap.values()).filter(
+          (ins) => !ins.date || ins.date >= fourteenDaysAgo
+        );
+
+        recordSyncTimestamp('__SYSTEM_SYNC_INSPECTIONS__', archiveIso, true);
+        await archiveClient.from('cinema_sales').upsert(
+          [
+            {
+              id: '__SYSTEM_SYNC_INSPECTIONS__',
+              outlet_id: '__SYSTEM_SYNC__',
+              date: '2026-01-01',
+              shows: filteredArchive as any,
+              updated_at: archiveIso,
+            },
+          ],
+          { onConflict: 'id' }
+        );
+      } catch (err) {
+        console.warn('Debounced inspection archive sync error:', err);
+      }
+    }, 15000);
+
+    return !deltaErr;
   } catch (e) {
     console.warn('Supabase inspection sync error:', e);
     return false;
@@ -749,29 +833,33 @@ export async function syncInspectionToSupabase(record: ToiletInspectionRecord): 
 }
 
 /**
- * Ambil Rekap Card Inspection dari Supabase (1 Query __SYSTEM_SYNC_INSPECTIONS__)
+ * Ambil Rekap Card Inspection dari Supabase (Mendukung Mode Delta ~3 KB atau Full Archive)
  */
 export async function fetchInspectionsFromSupabase(
   outletId?: string,
-  date?: string
+  date?: string,
+  deltaOnly = false
 ): Promise<ToiletInspectionRecord[] | null> {
   const client = getSupabase();
   if (!client) return null;
 
   try {
     const map = new Map<string, ToiletInspectionRecord>();
+    const targetRowId = deltaOnly
+      ? '__SYSTEM_SYNC_INSPECTIONS_DELTA__'
+      : '__SYSTEM_SYNC_INSPECTIONS__';
 
     const { data: syncRow, error } = await client
       .from('cinema_sales')
       .select('id, shows, updated_at')
-      .eq('id', '__SYSTEM_SYNC_INSPECTIONS__')
+      .eq('id', targetRowId)
       .maybeSingle();
 
     if (error) return null;
 
     if (syncRow) {
       if (syncRow.updated_at) {
-        recordSyncTimestamp('__SYSTEM_SYNC_INSPECTIONS__', String(syncRow.updated_at), false);
+        recordSyncTimestamp(targetRowId, String(syncRow.updated_at), false);
       }
       if (Array.isArray(syncRow.shows)) {
         for (const item of syncRow.shows) {
@@ -792,10 +880,10 @@ export async function fetchInspectionsFromSupabase(
 }
 
 /**
- * Merges remote inspection records from Supabase into local storage (Read-Only)
+ * Merges remote inspection records from Supabase into local storage (Supports 3 KB Delta Mode)
  */
-export async function mergeRemoteInspectionsToLocal(): Promise<boolean> {
-  const remoteInspections = await fetchInspectionsFromSupabase();
+export async function mergeRemoteInspectionsToLocal(deltaOnly = false): Promise<boolean> {
+  const remoteInspections = await fetchInspectionsFromSupabase(undefined, undefined, deltaOnly);
   if (!remoteInspections || remoteInspections.length === 0) return false;
 
   const currentLocal = StorageService.getInspections();
@@ -1294,7 +1382,34 @@ export async function mergeRemoteCashierProductsToLocal(): Promise<boolean> {
   }
 }
 
+let bakingWriteTimer: NodeJS.Timeout | null = null;
+let pendingBakingRecords: BakingSaleRecord[] = [];
+
 export async function syncBakingSalesToSupabase(
+  records?: BakingSaleRecord[]
+): Promise<boolean> {
+  const client = getSupabase();
+  if (!client) return false;
+
+  if (records && records.length > 0) {
+    pendingBakingRecords.push(...records);
+  }
+
+  return new Promise((resolve) => {
+    if (bakingWriteTimer) {
+      clearTimeout(bakingWriteTimer);
+    }
+    bakingWriteTimer = setTimeout(async () => {
+      bakingWriteTimer = null;
+      const recsToSync = pendingBakingRecords.length > 0 ? [...pendingBakingRecords] : undefined;
+      pendingBakingRecords = [];
+      const ok = await executeBakingSalesUpsert(recsToSync);
+      resolve(ok);
+    }, 750);
+  });
+}
+
+async function executeBakingSalesUpsert(
   records?: BakingSaleRecord[]
 ): Promise<boolean> {
   const client = getSupabase();
@@ -1682,8 +1797,13 @@ export async function mergeRemoteOutletsAndAreasToLocal(): Promise<boolean> {
   }
 }
 
+let additionalModulesTimer: NodeJS.Timeout | null = null;
+const pendingAdditionalModules = new Set<
+  'users' | 'genres' | 'administration' | 'bopo' | 'lost_found' | 'warehouse'
+>();
+
 /**
- * Sinkronisasi Modul Tambahan (Users, Genre Film, Administrasi, BOPO, Lost & Found, Gudang/Inventory)
+ * Sinkronisasi Modul Tambahan (Users, Genre Film, Administrasi, BOPO, Lost & Found, Gudang/Inventory) dengan Debounce
  */
 export async function syncAdditionalModulesToSupabase(
   modules: Array<'users' | 'genres' | 'administration' | 'bopo' | 'lost_found' | 'warehouse'> = [
@@ -1694,6 +1814,28 @@ export async function syncAdditionalModulesToSupabase(
     'lost_found',
     'warehouse',
   ]
+): Promise<boolean> {
+  const client = getSupabase();
+  if (!client) return false;
+
+  modules.forEach((m) => pendingAdditionalModules.add(m));
+
+  return new Promise((resolve) => {
+    if (additionalModulesTimer) {
+      clearTimeout(additionalModulesTimer);
+    }
+    additionalModulesTimer = setTimeout(async () => {
+      additionalModulesTimer = null;
+      const modulesToRun = Array.from(pendingAdditionalModules);
+      pendingAdditionalModules.clear();
+      const ok = await executeAdditionalModulesUpsert(modulesToRun);
+      resolve(ok);
+    }, 500);
+  });
+}
+
+async function executeAdditionalModulesUpsert(
+  modules: Array<'users' | 'genres' | 'administration' | 'bopo' | 'lost_found' | 'warehouse'>
 ): Promise<boolean> {
   const client = getSupabase();
   if (!client) return false;
@@ -2188,8 +2330,16 @@ export function setupSupabaseRealtimeSync(): () => void {
             scheduleDebouncedRealtimeMerge('baking', () => mergeRemoteBakingSalesToLocal());
             return;
           }
+          if (rowId === '__SYSTEM_SYNC_INSPECTIONS_DELTA__') {
+            scheduleDebouncedRealtimeMerge('inspections_delta', () =>
+              mergeRemoteInspectionsToLocal(true)
+            );
+            return;
+          }
           if (rowId === '__SYSTEM_SYNC_INSPECTIONS__') {
-            scheduleDebouncedRealtimeMerge('inspections', () => mergeRemoteInspectionsToLocal());
+            if (!hasCompletedInitialPull) {
+              scheduleDebouncedRealtimeMerge('inspections', () => mergeRemoteInspectionsToLocal(false));
+            }
             return;
           }
           if (rowId === '__SYSTEM_SYNC_SDM_PERFORMANCE__') {
@@ -2208,12 +2358,20 @@ export function setupSupabaseRealtimeSync(): () => void {
             );
             return;
           }
+          if (rowId === '__SYSTEM_SYNC_DAILY_SALES_DELTA__') {
+            scheduleDebouncedRealtimeMerge('daily_sales_delta', () =>
+              mergeRemoteSalesToLocal(true)
+            );
+            return;
+          }
           if (rowId === '__SYSTEM_SYNC_DAILY_SALES__') {
-            scheduleDebouncedRealtimeMerge('daily_sales', () => mergeRemoteSalesToLocal());
+            if (!hasCompletedInitialPull) {
+              scheduleDebouncedRealtimeMerge('daily_sales', () => mergeRemoteSalesToLocal(false));
+            }
             return;
           }
           if (rowId === '__SYSTEM_SYNC_OCCUPANCY__') {
-            scheduleDebouncedRealtimeMerge('occupancy', () => mergeRemoteOccupancyToLocal());
+            // Handled directly by table cinema_occupancy realtime listener below
             return;
           }
         }
@@ -2332,11 +2490,14 @@ export async function uploadAllLocalToSupabase(): Promise<{
     for (let i = 0; i < localStorage.length; i++) {
       const k = localStorage.key(i);
       if (k && k.startsWith('cinema_xxi_occupancy_')) {
-        const cleanKey = k.replace('cinema_xxi_occupancy_records_', '').replace('cinema_xxi_occupancy_', '');
+        const cleanKey = k.replace(/^cinema_xxi_occupancy_(records_)?/, '');
         if (cleanKey === 'manifest') continue;
         const parts = cleanKey.split('_');
         const date = parts.pop() || '';
-        const outletId = parts.join('_');
+        let outletId = parts.join('_');
+        if (outletId.startsWith('records_')) {
+          outletId = outletId.replace(/^records_/, '');
+        }
         const raw = localStorage.getItem(k);
         if (raw && outletId && date) {
           try {
@@ -2365,22 +2526,24 @@ export async function uploadAllLocalToSupabase(): Promise<{
       occupancyCount = batchOcc.length;
     }
 
-    // 4. Upload Inspections dalam 1 Single Batch Request (Hemat 966x Request!)
+    // 4. Upload Inspections dalam 1 Single Batch Request (Pruned to 14 hari terakhir)
     let inspectionCount = 0;
     const inspections = StorageService.getInspections();
-    if (inspections.length > 0) {
+    const fourteenDaysAgo = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const activeInspections = inspections.filter((ins) => !ins.date || ins.date >= fourteenDaysAgo);
+    if (activeInspections.length > 0) {
       recordSyncTimestamp('__SYSTEM_SYNC_INSPECTIONS__', nowIso, true);
       const { error: insErr } = await client.from('cinema_sales').upsert(
         {
           id: '__SYSTEM_SYNC_INSPECTIONS__',
           outlet_id: '__SYSTEM_SYNC__',
           date: '2026-01-01',
-          shows: inspections as any,
+          shows: activeInspections as any,
           updated_at: nowIso,
         },
         { onConflict: 'id' }
       );
-      if (!insErr) inspectionCount = inspections.length;
+      if (!insErr) inspectionCount = activeInspections.length;
     }
 
     // 5. Upload Data Karyawan, KPI, dan SDM (Masing-masing 1 Batch Request)

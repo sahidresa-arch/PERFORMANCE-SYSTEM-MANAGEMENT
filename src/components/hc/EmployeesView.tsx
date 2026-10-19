@@ -2,7 +2,6 @@ import React, { useState, useEffect } from 'react';
 import * as XLSX from 'xlsx';
 import { User, Outlet, Employee } from '../../types';
 import { StorageService } from '../../lib/storage';
-import { syncEmployeesToSupabase, mergeRemoteEmployeesToLocal } from '../../lib/supabase';
 import { exportToPrettyExcel } from '../../lib/excelExport';
 import { INITIAL_AREAS } from '../../lib/constants';
 import {
@@ -122,17 +121,6 @@ export const EmployeesView: React.FC<EmployeesViewProps> = ({ currentUser, selec
     };
     window.addEventListener('cinema-xxi-storage-update', handleStorageUpdate);
     window.addEventListener('storage', handleStorageUpdate);
-
-    // Sinkronisasi otomatis di latar belakang dengan Supabase Cloud saat halaman dibuka
-    (async () => {
-      if (localStorage.getItem('cinema_xxi_employees_modified') === 'true') {
-        await syncEmployeesToSupabase(StorageService.getEmployees());
-      }
-      const updated = await mergeRemoteEmployeesToLocal();
-      if (updated) {
-        setEmployees(StorageService.getEmployees());
-      }
-    })();
 
     return () => {
       window.removeEventListener('cinema-xxi-storage-update', handleStorageUpdate);

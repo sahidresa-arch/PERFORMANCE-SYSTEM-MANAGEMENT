@@ -131,6 +131,7 @@ export const ToiletInspection: React.FC<ToiletInspectionProps> = ({
   const [inspectorName, setInspectorName] = useState('');
   const [notes, setNotes] = useState('');
   const [statusMessage, setStatusMessage] = useState('');
+  const [errorMessage, setErrorMessage] = useState('');
 
   // Checklist items mapping
   const [checklist, setChecklist] = useState<ToiletChecklist>(DEFAULT_CHECKLIST);
@@ -170,21 +171,78 @@ export const ToiletInspection: React.FC<ToiletInspectionProps> = ({
     };
   }, [selectedDate]);
 
+  // Sequential Show Helpers: Show N hanya bisa diceklis jika Show 1 s/d Show N-1 sudah selesai diceklis
+  const getShowRecord = (
+    showNum: number,
+    outletId: string = formOutletId,
+    toiletType: 'Pria' | 'Wanita' = formToiletType
+  ): ToiletInspectionRecord | undefined => {
+    return StorageService.getInspections().find(
+      (ins: ToiletInspectionRecord) =>
+        ins.outletId === outletId &&
+        ins.date === selectedDate &&
+        ins.type === toiletType &&
+        ins.showNumber === showNum &&
+        CHECKLIST_ITEMS.every((ci) => {
+          const val = ins.checklist?.[ci.key as keyof ToiletChecklist];
+          return val === 'B' || val === 'K' || val === 'R';
+        })
+    );
+  };
+
+  const isShowCompleted = (
+    showNum: number,
+    outletId: string = formOutletId,
+    toiletType: 'Pria' | 'Wanita' = formToiletType
+  ): boolean => {
+    return Boolean(getShowRecord(showNum, outletId, toiletType));
+  };
+
+  const getFirstIncompleteShow = (
+    outletId: string = formOutletId,
+    toiletType: 'Pria' | 'Wanita' = formToiletType
+  ): number => {
+    for (let s = 1; s <= 5; s++) {
+      if (!isShowCompleted(s, outletId, toiletType)) {
+        return s;
+      }
+    }
+    return 5;
+  };
+
+  const isShowUnlocked = (
+    showNum: number,
+    outletId: string = formOutletId,
+    toiletType: 'Pria' | 'Wanita' = formToiletType
+  ): boolean => {
+    if (showNum <= 1) return true;
+    for (let prev = 1; prev < showNum; prev++) {
+      if (!isShowCompleted(prev, outletId, toiletType)) {
+        return false;
+      }
+    }
+    return true;
+  };
+
   // Guard Check: Check if an inspection already exists for this exact combination
-  const existingRecord = StorageService.getInspections().find(
-    (ins: ToiletInspectionRecord) =>
-      ins.outletId === formOutletId &&
-      ins.date === selectedDate &&
-      ins.type === formToiletType &&
-      ins.showNumber === formShowNumber
-  );
+  const existingRecord = getShowRecord(formShowNumber, formOutletId, formToiletType);
+
+  // Pastikan jika user mengganti Outlet, Tipe Toilet, atau Tanggal, Show otomatis mengarah ke Show berurutan yang belum diceklis (atau terkunci)
+  useEffect(() => {
+    if (!isShowUnlocked(formShowNumber, formOutletId, formToiletType)) {
+      const nextValidShow = getFirstIncompleteShow(formOutletId, formToiletType);
+      setFormShowNumber(nextValidShow);
+    }
+  }, [formOutletId, selectedDate, formToiletType, inspections]);
 
   // Auto-populate checklist if existing record found
   useEffect(() => {
-    if (existingRecord) {
-      setChecklist(existingRecord.checklist || DEFAULT_CHECKLIST);
-      setInspectorName(existingRecord.inspectorName || '');
-      setNotes(existingRecord.notes || '');
+    setErrorMessage('');
+    const rec = getShowRecord(formShowNumber, formOutletId, formToiletType);
+    if (rec) {
+      setChecklist(rec.checklist || DEFAULT_CHECKLIST);
+      setInspectorName(rec.inspectorName || '');
+      setNotes(rec.notes || '');
     } else {
       setChecklist(DEFAULT_CHECKLIST);
       setInspectorName('');
@@ -192,18 +250,102 @@ export const ToiletInspection: React.FC<ToiletInspectionProps> = ({
     }
   }, [formOutletId, selectedDate, formToiletType, formShowNumber]);
 
+  const handleSelectShowSequential = (targetShow: number) => {
+    if (!isShowUnlocked(targetShow, formOutletId, formToiletType)) {
+      const firstMissing = getFirstIncompleteShow(formOutletId, formToiletType);
+      setErrorMessage(
+        `Show ${targetShow} masih terkunci! Wajib melakukan ceklis secara berurutan. Silakan selesaikan ceklis Show ${firstMissing} (${formToiletType}) terlebih dahulu.`
+      );
+      setFormShowNumber(firstMissing);
+      setTimeout(() => {
+        setErrorMessage('');
+      }, 4500);
+      return;
+    }
+    setErrorMessage('');
+    setFormShowNumber(targetShow);
+  };
+
   const handleStatusChange = (
     key: keyof ToiletChecklist,
     val: 'B' | 'K' | 'R' | ''
   ) => {
+    if (!isShowUnlocked(formShowNumber, formOutletId, formToiletType)) {
+      const firstMissing = getFirstIncompleteShow(formOutletId, formToiletType);
+      setErrorMessage(
+        `Tidak dapat mengisi Show ${formShowNumber} karena Show ${firstMissing} belum dilakukan ceklis!`
+      );
+      setFormShowNumber(firstMissing);
+      return;
+    }
     setChecklist((prev) => ({
       ...prev,
       [key]: val,
     }));
   };
 
+  const handleFillAllClean = () => {
+    if (!isShowUnlocked(formShowNumber, formOutletId, formToiletType)) {
+      const firstMissing = getFirstIncompleteShow(formOutletId, formToiletType);
+      setErrorMessage(
+        `Tidak dapat mengisi Show ${formShowNumber} karena Show ${firstMissing} belum dilakukan ceklis!`
+      );
+      setFormShowNumber(firstMissing);
+      return;
+    }
+    const allClean: ToiletChecklist = {
+      bau: 'B',
+      lantai: 'B',
+      dinding: 'B',
+      pintu: 'B',
+      tSampah: 'B',
+      cermin: 'B',
+      closet: 'B',
+      urinoir: 'B',
+      tissu: 'B',
+      wastafel: 'B',
+      soap: 'B',
+      janitor: 'B',
+      lampu: 'B',
+      floorDrain: 'B',
+      calmatic: 'B',
+      calfresh: 'B',
+    };
+    setChecklist(allClean);
+    setErrorMessage('');
+  };
+
   const handleSaveInspection = (e: React.FormEvent) => {
     e.preventDefault();
+
+    // 1. Validasi Urutan Show (Wajib berurutan Show 1 -> 2 -> 3 -> 4 -> 5)
+    if (!isShowUnlocked(formShowNumber, formOutletId, formToiletType)) {
+      const firstMissing = getFirstIncompleteShow(formOutletId, formToiletType);
+      setErrorMessage(
+        `Gagal menyimpan! Show ${firstMissing} (${formToiletType}) belum dilakukan ceklis. Wajib melakukan ceklis Show secara berurutan.`
+      );
+      setFormShowNumber(firstMissing);
+      return;
+    }
+
+    // 2. Validasi seluruh 16 titik pengecekan wajib dipilih (B / K / R) agar ceklis sah
+    const uncheckedItems = CHECKLIST_ITEMS.filter((ci) => {
+      const val = checklist[ci.key as keyof ToiletChecklist];
+      return val !== 'B' && val !== 'K' && val !== 'R';
+    });
+
+    if (uncheckedItems.length > 0) {
+      const labels = uncheckedItems
+        .slice(0, 4)
+        .map((ci) => (ci.key === 'urinoir' && formToiletType === 'Wanita' ? 'Dispenser FHU' : ci.label))
+        .join(', ');
+      setErrorMessage(
+        `Mohon lengkapi semua 16 titik ceklis pada Show ${formShowNumber} terlebih dahulu! (${uncheckedItems.length} titik belum dipilih: ${labels}${uncheckedItems.length > 4 ? ', dll' : ''}).`
+      );
+      return;
+    }
+
+    setErrorMessage('');
 
     const record: ToiletInspectionRecord = {
       id: `${formOutletId}-${selectedDate}-show${formShowNumber}-${formToiletType}`,
@@ -231,11 +373,11 @@ export const ToiletInspection: React.FC<ToiletInspectionProps> = ({
     if (currentShow < 5) {
       setFormShowNumber(nextShow);
       setStatusMessage(
-        `Laporan Show ${currentShow} (${formToiletType}) Berhasil Disimpan! Pilihan Show otomatis beralih ke Show ${nextShow}.`
+        `Laporan Show ${currentShow} (${formToiletType}) Berhasil Disimpan! Show ${nextShow} kini terbuka dan siap diceklis.`
       );
     } else {
       setStatusMessage(
-        `Laporan Show ${currentShow} (${formToiletType}) Berhasil Disimpan! Semua Show (1-5) Selesai.`
+        `Laporan Show ${currentShow} (${formToiletType}) Berhasil Disimpan! Semua Show (1-5) Selesai secara berurutan.`
       );
     }
 
@@ -321,10 +463,21 @@ export const ToiletInspection: React.FC<ToiletInspectionProps> = ({
     return acc + (values.some((v) => v === 'R') ? 1 : 0);
   }, 0);
 
-  // Function to navigate directly to form with selected outlet
-  const handleDirectInspect = (outletId: string, preferredShow = 1) => {
+  // Function to navigate directly to form with selected outlet (automatically picks valid sequential show)
+  const handleDirectInspect = (
+    outletId: string,
+    preferredShow?: number,
+    toiletType: 'Pria' | 'Wanita' = formToiletType
+  ) => {
     setFormOutletId(outletId);
-    setFormShowNumber(preferredShow);
+    setFormToiletType(toiletType);
+    const firstIncomplete = getFirstIncompleteShow(outletId, toiletType);
+    const targetShow =
+      preferredShow && isShowUnlocked(preferredShow, outletId, toiletType)
+        ? preferredShow
+        : firstIncomplete;
+    setFormShowNumber(targetShow);
+    setErrorMessage('');
     setViewMode('form');
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
@@ -385,6 +538,13 @@ export const ToiletInspection: React.FC<ToiletInspectionProps> = ({
         <div className="p-4 rounded-2xl bg-emerald-50 border border-emerald-300 text-emerald-900 text-xs font-bold flex items-center space-x-2 animate-in fade-in shadow-sm">
           <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
           <span>{statusMessage}</span>
+        </div>
+      )}
+
+      {errorMessage && (
+        <div className="p-4 rounded-2xl bg-rose-50 border-2 border-rose-300 text-rose-900 text-xs font-bold flex items-center space-x-2.5 animate-in fade-in shadow-sm">
+          <ShieldAlert className="w-5 h-5 text-rose-600 shrink-0" />
+          <span>{errorMessage}</span>
         </div>
       )}
 
@@ -477,7 +637,11 @@ export const ToiletInspection: React.FC<ToiletInspectionProps> = ({
                   </label>
                   <select
                     value={formOutletId}
-                    onChange={(e) => setFormOutletId(e.target.value)}
+                    onChange={(e) => {
+                      const nextOutlet = e.target.value;
+                      setFormOutletId(nextOutlet);
+                      setFormShowNumber(getFirstIncompleteShow(nextOutlet, formToiletType));
+                    }}
                     className="w-full text-xs font-bold px-3 py-2.5 rounded-xl border border-slate-300 bg-white text-slate-900 focus:border-amber-500 focus:ring-1 focus:ring-amber-500 shadow-xs"
                   >
                     {outlets.map((o) => (
@@ -494,7 +658,11 @@ export const ToiletInspection: React.FC<ToiletInspectionProps> = ({
                   </label>
                   <select
                     value={formToiletType}
-                    onChange={(e) => setFormToiletType(e.target.value as 'Pria' | 'Wanita')}
+                    onChange={(e) => {
+                      const nextType = e.target.value as 'Pria' | 'Wanita';
+                      setFormToiletType(nextType);
+                      setFormShowNumber(getFirstIncompleteShow(formOutletId, nextType));
+                    }}
                     className="w-full text-xs font-bold px-3 py-2.5 rounded-xl border border-slate-300 bg-white text-slate-900 focus:border-amber-500 focus:ring-1 focus:ring-amber-500 shadow-xs"
                   >
                     <option value="Pria">🚹 Toilet Pria</option>
@@ -504,18 +672,26 @@ export const ToiletInspection: React.FC<ToiletInspectionProps> = ({
 
                 <div>
                   <label className="text-[10px] font-extrabold text-slate-600 uppercase block mb-1.5 flex items-center space-x-1">
-                    <span>PILIHAN SHOW (1 S/D 5)</span>
+                    <span>PILIHAN SHOW (WAJIB BERURUTAN 1 S/D 5)</span>
                   </label>
                   <select
                     value={formShowNumber}
-                    onChange={(e) => setFormShowNumber(Number(e.target.value))}
+                    onChange={(e) => handleSelectShowSequential(Number(e.target.value))}
                     className="w-full text-xs font-bold px-3 py-2.5 rounded-xl border border-slate-300 bg-white text-slate-900 focus:border-amber-500 focus:ring-1 focus:ring-amber-500 shadow-xs"
                   >
-                    {[1, 2, 3, 4, 5].map((sh) => (
-                      <option key={sh} value={sh}>
-                        Show {sh}
-                      </option>
-                    ))}
+                    {[1, 2, 3, 4, 5].map((sh) => {
+                      const completed = isShowCompleted(sh, formOutletId, formToiletType);
+                      const unlocked = isShowUnlocked(sh, formOutletId, formToiletType);
+                      return (
+                        <option key={sh} value={sh} disabled={!unlocked}>
+                          {completed
+                            ? `✅ Show ${sh} (Sudah Ceklis)`
+                            : unlocked
+                            ? `👉 Show ${sh} (Siap Ceklis)`
+                            : `🔒 Show ${sh} (Wajib Ceklis Show ${sh - 1} Dulu)`}
+                        </option>
+                      );
+                    })}
                   </select>
                 </div>
 
@@ -561,26 +737,115 @@ export const ToiletInspection: React.FC<ToiletInspectionProps> = ({
                 </div>
               </div>
 
-              {/* Status Explanation Legend Bar */}
-              <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200/90 text-xs">
-                <div className="flex flex-wrap items-center gap-3">
-                  <span className="font-extrabold text-slate-800 uppercase tracking-wider text-[11px]">
-                    Keterangan Status Penilaian:
-                  </span>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg bg-emerald-100 text-emerald-800 font-extrabold border border-emerald-300 text-[11px]">
-                      <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
-                      <span>B = BERSIH / BAIK</span>
-                    </span>
-                    <span className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg bg-amber-100 text-amber-900 font-extrabold border border-amber-300 text-[11px]">
-                      <span className="w-2 h-2 rounded-full bg-amber-500"></span>
-                      <span>K = KURANG BERSIH</span>
-                    </span>
-                    <span className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg bg-rose-100 text-rose-900 font-extrabold border border-rose-300 text-[11px]">
-                      <span className="w-2 h-2 rounded-full bg-rose-500"></span>
-                      <span>R = RUSAK / TEMUAN</span>
+              {/* Sequential Show Stepper Cards (Show 1 -> Show 2 -> Show 3 -> Show 4 -> Show 5) */}
+              <div className="p-4 rounded-2xl bg-slate-50/90 border border-slate-200/90 space-y-3">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <div className="flex items-center space-x-2">
+                    <Lock className="w-3.5 h-3.5 text-amber-600" />
+                    <span className="text-[11px] font-black uppercase tracking-wider text-slate-800">
+                      Urutan Wajib Ceklis Show ({formToiletType === 'Pria' ? '🚹 Toilet Pria' : '🚺 Toilet Wanita'})
                     </span>
                   </div>
+                  <span className="text-[11px] font-semibold text-slate-500">
+                    Show berikutnya otomatis terbuka setelah Show sebelumnya selesai diceklis
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5">
+                  {[1, 2, 3, 4, 5].map((sh) => {
+                    const completed = isShowCompleted(sh, formOutletId, formToiletType);
+                    const unlocked = isShowUnlocked(sh, formOutletId, formToiletType);
+                    const isActive = formShowNumber === sh;
+                    const rec = getShowRecord(sh, formOutletId, formToiletType);
+
+                    return (
+                      <button
+                        key={sh}
+                        type="button"
+                        onClick={() => handleSelectShowSequential(sh)}
+                        className={`p-3 rounded-2xl border text-left transition flex flex-col justify-between relative ${
+                          isActive
+                            ? 'bg-amber-500 text-white border-amber-600 shadow-md shadow-amber-500/20 ring-2 ring-amber-300 cursor-pointer'
+                            : completed
+                            ? 'bg-emerald-50/80 text-emerald-950 border-emerald-300 hover:bg-emerald-100/70 cursor-pointer'
+                            : unlocked
+                            ? 'bg-white text-slate-800 border-amber-300 hover:border-amber-500 cursor-pointer'
+                            : 'bg-slate-100/80 text-slate-400 border-slate-200 opacity-75 cursor-not-allowed'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between w-full mb-1">
+                          <span className="text-xs font-black uppercase tracking-tight">
+                            SHOW {sh}
+                          </span>
+                          {completed ? (
+                            <CheckCircle2
+                              className={`w-4 h-4 shrink-0 ${
+                                isActive ? 'text-white' : 'text-emerald-600'
+                              }`}
+                            />
+                          ) : unlocked ? (
+                            <Clock
+                              className={`w-4 h-4 shrink-0 ${
+                                isActive ? 'text-white' : 'text-amber-500'
+                              }`}
+                            />
+                          ) : (
+                            <Lock className="w-4 h-4 shrink-0 text-slate-400" />
+                          )}
+                        </div>
+
+                        <div className="text-[10px] font-bold leading-tight">
+                          {completed ? (
+                            <span className={isActive ? 'text-amber-100' : 'text-emerald-700'}>
+                              ✓ Sudah Ceklis ({rec?.time || 'Selesai'})
+                            </span>
+                          ) : unlocked ? (
+                            <span className={isActive ? 'text-white' : 'text-amber-700'}>
+                              ● Giliran Ceklis
+                            </span>
+                          ) : (
+                            <span className="text-slate-400">
+                              🔒 Wajib Ceklis Show {sh - 1}
+                            </span>
+                          )}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Status Explanation Legend Bar */}
+              <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200/90 text-xs">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex flex-wrap items-center gap-3">
+                    <span className="font-extrabold text-slate-800 uppercase tracking-wider text-[11px]">
+                      Keterangan Status Penilaian:
+                    </span>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg bg-emerald-100 text-emerald-800 font-extrabold border border-emerald-300 text-[11px]">
+                        <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
+                        <span>B = BERSIH / BAIK</span>
+                      </span>
+                      <span className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg bg-amber-100 text-amber-900 font-extrabold border border-amber-300 text-[11px]">
+                        <span className="w-2 h-2 rounded-full bg-amber-500"></span>
+                        <span>K = KURANG BERSIH</span>
+                      </span>
+                      <span className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg bg-rose-100 text-rose-900 font-extrabold border border-rose-300 text-[11px]">
+                        <span className="w-2 h-2 rounded-full bg-rose-500"></span>
+                        <span>R = RUSAK / TEMUAN</span>
+                      </span>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={handleFillAllClean}
+                    className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-[11px] flex items-center space-x-1.5 shadow-2xs transition cursor-pointer"
+                  >
+                    <Check className="w-3.5 h-3.5" />
+                    <span>Set Semua Bersih (B)</span>
+                  </button>
                 </div>
               </div>
 
@@ -589,24 +854,29 @@ export const ToiletInspection: React.FC<ToiletInspectionProps> = ({
                 <div className="flex items-center justify-between">
                   <h3 className="text-xs font-extrabold uppercase tracking-wider text-slate-800 flex items-center space-x-2">
                     <Sparkles className="w-4 h-4 text-amber-600" />
-                    <span>16 Titik Pengecekan Sanitasi &amp; Kebersihan Toilet</span>
+                    <span>
+                      16 Titik Pengecekan Sanitasi &amp; Kebersihan Toilet — SHOW {formShowNumber}
+                    </span>
                   </h3>
                   <span className="text-[11px] text-slate-500 font-medium hidden sm:inline">
-                    Pilih status pada dropdown (B / K / R) untuk setiap titik pengecekan
+                    Wajib pilih status (B / K / R) pada seluruh 16 titik untuk membuka Show berikutnya
                   </span>
                 </div>
 
                 {/* Horizontal Grid container for all 16 checklist items */}
                 <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-8 lg:grid-cols-8 xl:grid-cols-16 gap-2.5">
-                  {CHECKLIST_ITEMS.map((item, idx) => {
+                  {CHECKLIST_ITEMS.map((item) => {
                     const itemKey = item.key as keyof ToiletChecklist;
                     const currentVal = checklist[itemKey] ?? '';
+                    const currentShowUnlocked = isShowUnlocked(formShowNumber, formOutletId, formToiletType);
 
                     return (
                       <div
                         key={item.key}
                         className={`p-2.5 rounded-2xl border text-center transition flex flex-col justify-between ${
-                          currentVal === 'B'
+                          !currentShowUnlocked
+                            ? 'bg-slate-100 border-slate-200 opacity-60'
+                            : currentVal === 'B'
                             ? 'bg-emerald-50/40 border-emerald-200'
                             : currentVal === 'K'
                             ? 'bg-amber-50/50 border-amber-300'
@@ -633,10 +903,11 @@ export const ToiletInspection: React.FC<ToiletInspectionProps> = ({
                         <div className="mt-1">
                           <select
                             value={currentVal}
+                            disabled={!currentShowUnlocked}
                             onChange={(e) =>
                               handleStatusChange(itemKey, e.target.value as 'B' | 'K' | 'R' | '')
                             }
-                            className={`w-full text-xs font-black px-2 py-1.5 rounded-xl border transition cursor-pointer shadow-2xs text-center ${
+                            className={`w-full text-xs font-black px-2 py-1.5 rounded-xl border transition cursor-pointer shadow-2xs text-center disabled:cursor-not-allowed ${
                               currentVal === 'B'
                                 ? 'bg-emerald-600 text-white border-emerald-700 focus:ring-emerald-500'
                                 : currentVal === 'K'
@@ -678,13 +949,14 @@ export const ToiletInspection: React.FC<ToiletInspectionProps> = ({
 
                 <button
                   type="submit"
-                  className="px-6 py-3 rounded-xl bg-gradient-to-r from-amber-500 via-amber-600 to-amber-700 hover:from-amber-400 hover:to-amber-600 text-white text-xs font-black uppercase tracking-wider flex items-center space-x-2 shadow-md shadow-amber-500/25 active:scale-[0.99] transition cursor-pointer"
+                  disabled={!isShowUnlocked(formShowNumber, formOutletId, formToiletType)}
+                  className="px-6 py-3 rounded-xl bg-gradient-to-r from-amber-500 via-amber-600 to-amber-700 hover:from-amber-400 hover:to-amber-600 disabled:from-slate-300 disabled:to-slate-400 text-white text-xs font-black uppercase tracking-wider flex items-center space-x-2 shadow-md shadow-amber-500/25 active:scale-[0.99] transition cursor-pointer disabled:cursor-not-allowed"
                 >
                   <Save className="w-4 h-4 text-white" />
                   <span>
                     {existingRecord
                       ? `PERBARUI SHOW ${formShowNumber} & LANJUT`
-                      : `SIMPAN SHOW ${formShowNumber} & AUTO BERALIH`}
+                      : `SIMPAN SHOW ${formShowNumber} & BUKA SHOW BERIKUTNYA`}
                   </span>
                 </button>
               </div>
@@ -1198,34 +1470,44 @@ export const ToiletInspection: React.FC<ToiletInspectionProps> = ({
                             </span>
                           </td>
 
-                          {/* Show 1 - Show 5 Columns with Checkmark Centang icon if submitted */}
+                          {/* Show 1 - Show 5 Columns with Checkmark Centang icon if submitted or Lock if sequential prior show not done */}
                           {[1, 2, 3, 4, 5].map((sNum) => {
-                            const showInsp = inspections.find(
-                              (ins: ToiletInspectionRecord) =>
-                                ins.outletId === o.id &&
-                                ins.type === toiletType &&
-                                ins.showNumber === sNum
-                            );
+                            const showInsp = getShowRecord(sNum, o.id, toiletType);
                             const hasSubmitted = Boolean(showInsp);
+                            const unlocked = isShowUnlocked(sNum, o.id, toiletType);
                             const hasR = showInsp && Object.values(showInsp.checklist || {}).includes('R');
 
                             return (
                               <td key={sNum} className="py-3 px-2 text-center font-black">
                                 {hasSubmitted ? (
-                                  <span
-                                    className={`inline-flex items-center justify-center px-2 py-1 rounded-lg border text-xs font-bold space-x-1 ${
+                                  <button
+                                    type="button"
+                                    onClick={() => handleDirectInspect(o.id, sNum, toiletType)}
+                                    className={`inline-flex items-center justify-center px-2 py-1 rounded-lg border text-xs font-bold space-x-1 cursor-pointer transition hover:scale-105 ${
                                       hasR
                                         ? 'bg-rose-100 text-rose-800 border-rose-300'
                                         : 'bg-emerald-100 text-emerald-800 border-emerald-300'
                                     }`}
-                                    title={hasR ? 'Sudah Lapor (Ada Temuan R)' : 'Sudah Lapor (Bersih)'}
+                                    title={hasR ? 'Sudah Lapor (Ada Temuan R) - Klik untuk lihat' : 'Sudah Lapor (Bersih) - Klik untuk lihat'}
                                   >
                                     <Check className="w-4 h-4 stroke-[3]" />
                                     {hasR && <span className="text-[10px] font-black text-rose-700">R</span>}
-                                  </span>
+                                  </button>
+                                ) : unlocked ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleDirectInspect(o.id, sNum, toiletType)}
+                                    className="inline-flex items-center space-x-1 px-2 py-1 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-300 text-[10px] font-extrabold cursor-pointer transition"
+                                    title={`Giliran Ceklis Show ${sNum}`}
+                                  >
+                                    <span>Isi Show {sNum}</span>
+                                  </button>
                                 ) : (
-                                  <span className="inline-block px-2.5 py-0.5 rounded-md bg-slate-100 text-slate-400 border border-slate-200 text-[11px] font-bold">
-                                    -
+                                  <span
+                                    className="inline-flex items-center justify-center px-2 py-1 rounded-md bg-slate-100 text-slate-400 border border-slate-200 text-[10px] font-bold cursor-not-allowed"
+                                    title={`Terkunci: Wajib ceklis Show ${sNum - 1} terlebih dahulu`}
+                                  >
+                                    <Lock className="w-3 h-3 text-slate-400" />
                                   </span>
                                 )}
                               </td>
@@ -1250,11 +1532,7 @@ export const ToiletInspection: React.FC<ToiletInspectionProps> = ({
                           <td className="py-3 px-3 text-center">
                             <button
                               type="button"
-                              onClick={() => {
-                                setFormOutletId(o.id);
-                                setFormToiletType(toiletType);
-                                setViewMode('form');
-                              }}
+                              onClick={() => handleDirectInspect(o.id, undefined, toiletType)}
                               className="px-2.5 py-1 rounded-lg border border-amber-300 bg-amber-50 hover:bg-amber-100 text-amber-900 text-xs font-extrabold flex items-center space-x-1 mx-auto transition cursor-pointer shadow-2xs"
                             >
                               <Eye className="w-3.5 h-3.5" />

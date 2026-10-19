@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { User, Outlet, BakingProduct, BakingSaleRecord } from '../../types';
 import { StorageService } from '../../lib/storage';
 import { BAKING_PRODUCTS } from '../../lib/constants';
@@ -113,6 +113,8 @@ export const PenjualanBaking: React.FC<PenjualanBakingProps> = ({
     else setSortOrder('default');
   };
 
+  const autoSaveTimerRef = useRef<NodeJS.Timeout | null>(null);
+
   const handleCellChange = (day: number, productId: number, value: number) => {
     const updatedDaily = {
       ...bakingRecord.dailySales,
@@ -131,10 +133,22 @@ export const PenjualanBaking: React.FC<PenjualanBakingProps> = ({
     };
 
     setBakingRecord(nextRecord);
-    StorageService.saveBakingSale(nextRecord);
+
+    // Debounce save (700ms) agar ketikan angka berturut-turut tidak memicu spam save / HTTP request berulang
+    if (autoSaveTimerRef.current) {
+      clearTimeout(autoSaveTimerRef.current);
+    }
+    autoSaveTimerRef.current = setTimeout(() => {
+      autoSaveTimerRef.current = null;
+      StorageService.saveBakingSale(nextRecord);
+    }, 700);
   };
 
   const handleSave = () => {
+    if (autoSaveTimerRef.current) {
+      clearTimeout(autoSaveTimerRef.current);
+      autoSaveTimerRef.current = null;
+    }
     StorageService.saveBakingSale({
       ...bakingRecord,
       outletId: selectedOutletId,
