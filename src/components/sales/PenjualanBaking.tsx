@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { User, Outlet, BakingProduct, BakingSaleRecord } from '../../types';
 import { StorageService } from '../../lib/storage';
 import { BAKING_PRODUCTS } from '../../lib/constants';
@@ -54,6 +54,7 @@ export const PenjualanBaking: React.FC<PenjualanBakingProps> = ({
   const [selectedMonth, setSelectedMonth] = useState<number>(10); // Oktober
   const [selectedYear, setSelectedYear] = useState<number>(2026);
   const [searchQuery, setSearchQuery] = useState('');
+  const [, setRefreshTick] = useState(0);
 
   // Default outlet
   const defaultOutletId =
@@ -65,6 +66,28 @@ export const PenjualanBaking: React.FC<PenjualanBakingProps> = ({
   const [bakingRecord, setBakingRecord] = useState<BakingSaleRecord>(() =>
     StorageService.getBakingSaleByOutlet(defaultOutletId, selectedYear, selectedMonth)
   );
+
+  // Reload bakingRecord when outlet, month, or year changes
+  useEffect(() => {
+    setBakingRecord(
+      StorageService.getBakingSaleByOutlet(selectedOutletId, selectedYear, selectedMonth)
+    );
+  }, [selectedOutletId, selectedYear, selectedMonth]);
+
+  // Listen for real-time Supabase / storage updates across devices
+  useEffect(() => {
+    const handleStorageUpdate = (e: any) => {
+      const type = e?.detail?.type;
+      if (!type || type === 'baking' || type === 'sales' || type === 'all-reset') {
+        setBakingRecord(
+          StorageService.getBakingSaleByOutlet(selectedOutletId, selectedYear, selectedMonth)
+        );
+        setRefreshTick((t) => t + 1);
+      }
+    };
+    window.addEventListener('cinema-xxi-storage-update', handleStorageUpdate);
+    return () => window.removeEventListener('cinema-xxi-storage-update', handleStorageUpdate);
+  }, [selectedOutletId, selectedYear, selectedMonth]);
 
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [isScanModalOpen, setIsScanModalOpen] = useState(false);
@@ -91,18 +114,33 @@ export const PenjualanBaking: React.FC<PenjualanBakingProps> = ({
   };
 
   const handleCellChange = (day: number, productId: number, value: number) => {
-    const updatedDaily = { ...bakingRecord.dailySales };
-    if (!updatedDaily[day]) updatedDaily[day] = {};
-    updatedDaily[day][productId] = value;
+    const updatedDaily = {
+      ...bakingRecord.dailySales,
+      [day]: {
+        ...(bakingRecord.dailySales[day] || {}),
+        [productId]: value,
+      },
+    };
 
-    setBakingRecord((prev) => ({
-      ...prev,
+    const nextRecord: BakingSaleRecord = {
+      ...bakingRecord,
+      outletId: selectedOutletId,
+      year: selectedYear,
+      month: selectedMonth,
       dailySales: updatedDaily,
-    }));
+    };
+
+    setBakingRecord(nextRecord);
+    StorageService.saveBakingSale(nextRecord);
   };
 
   const handleSave = () => {
-    StorageService.saveBakingSale(bakingRecord);
+    StorageService.saveBakingSale({
+      ...bakingRecord,
+      outletId: selectedOutletId,
+      year: selectedYear,
+      month: selectedMonth,
+    });
     setSaveSuccess(true);
     setTimeout(() => setSaveSuccess(false), 2500);
   };

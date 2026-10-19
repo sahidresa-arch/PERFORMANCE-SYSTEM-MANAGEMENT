@@ -1123,17 +1123,31 @@ export const StorageService = {
 
   saveBakingSale(record: BakingSaleRecord): BakingSaleRecord {
     const list = this.getBakingSales();
+    const updatedRecord: BakingSaleRecord = {
+      ...record,
+      id: record.id || `baking-${record.outletId}-${record.year}-${record.month}`,
+      updatedAt: new Date().toISOString(),
+    };
     const idx = list.findIndex(
-      (b) => b.outletId === record.outletId && b.year === record.year && b.month === record.month
+      (b) => b.outletId === updatedRecord.outletId && b.year === updatedRecord.year && b.month === updatedRecord.month
     );
     if (idx >= 0) {
-      list[idx] = record;
+      list[idx] = updatedRecord;
     } else {
-      list.push(record);
+      list.push(updatedRecord);
     }
     localStorage.setItem(KEYS.BAKING, JSON.stringify(list));
     this.broadcastChange('baking');
-    return record;
+
+    import('./supabase')
+      .then((m) => {
+        if (typeof (m as any).syncBakingSalesToSupabase === 'function') {
+          (m as any).syncBakingSalesToSupabase([updatedRecord]);
+        }
+      })
+      .catch(() => {});
+
+    return updatedRecord;
   },
 
   // Toilet Inspections
@@ -3488,6 +3502,15 @@ export const StorageService = {
 
     localStorage.setItem(KEYS.DAILY_SECTION_SALES, JSON.stringify(all));
     this.broadcastChange('sdm-section');
+
+    import('./supabase')
+      .then((m) => {
+        if (typeof (m as any).syncDailySectionSalesToSupabase === 'function') {
+          (m as any).syncDailySectionSalesToSupabase([updated]);
+        }
+      })
+      .catch(() => {});
+
     return all;
   },
 

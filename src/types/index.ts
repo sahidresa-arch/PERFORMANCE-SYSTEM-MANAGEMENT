@@ -75,6 +75,7 @@ export interface BakingSaleRecord {
   month: number; // 1 to 12
   dailySales: { [day: number]: { [productId: number]: number } };
   productTargets: { [productId: number]: number };
+  updatedAt?: string;
 }
 
 export interface ToiletChecklist {

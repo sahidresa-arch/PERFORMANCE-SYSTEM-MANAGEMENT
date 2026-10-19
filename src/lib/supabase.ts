@@ -2,11 +2,13 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { StorageService } from './storage';
 import {
   DailySalesRecord,
+  BakingSaleRecord,
   ToiletInspectionRecord,
   Employee,
   EmployeeKpiRecord,
   CashierDailyPerformanceRecord,
   CashierMonthlyProductRecord,
+  DailySectionSalesRecord,
 } from '../types';
 
 let supabaseInstance: SupabaseClient | null = null;
@@ -1107,6 +1109,238 @@ export async function mergeRemoteCashierProductsToLocal(): Promise<boolean> {
   }
 }
 
+export async function syncBakingSalesToSupabase(
+  records?: BakingSaleRecord[]
+): Promise<boolean> {
+  const client = getSupabase();
+  if (!client) return false;
+  try {
+    const localList = StorageService.getBakingSales();
+    // Fetch current remote baking sales first so we never clobber another device's outlet/month
+    const { data } = await client
+      .from('cinema_sales')
+      .select('id, shows')
+      .eq('id', '__SYSTEM_SYNC_BAKING_SALES__')
+      .maybeSingle();
+
+    const remoteList: BakingSaleRecord[] =
+      data && Array.isArray(data.shows) ? data.shows : [];
+
+    const map = new Map<string, BakingSaleRecord>();
+    const makeKey = (r: BakingSaleRecord) => `${r.outletId}_${r.year}_${r.month}`;
+
+    remoteList.forEach((r) => {
+      if (r && r.outletId && r.year && r.month) {
+        map.set(makeKey(r), r);
+      }
+    });
+
+    const toMerge = records && records.length > 0 ? records : localList;
+    toMerge.forEach((lr) => {
+      if (!lr || !lr.outletId || !lr.year || !lr.month) return;
+      const key = makeKey(lr);
+      const existing = map.get(key);
+      if (!existing) {
+        map.set(key, lr);
+      } else {
+        // Merge dailySales per day and product
+        const mergedDaily: { [day: number]: { [productId: number]: number } } = {
+          ...(existing.dailySales || {}),
+        };
+        Object.entries(lr.dailySales || {}).forEach(([dayStr, prodMap]) => {
+          const d = Number(dayStr);
+          mergedDaily[d] = {
+            ...(mergedDaily[d] || {}),
+            ...(prodMap || {}),
+          };
+        });
+        map.set(key, {
+          ...existing,
+          ...lr,
+          dailySales: mergedDaily,
+          productTargets: {
+            ...(existing.productTargets || {}),
+            ...(lr.productTargets || {}),
+          },
+          updatedAt: lr.updatedAt || new Date().toISOString(),
+        });
+      }
+    });
+
+    const finalArray = Array.from(map.values());
+    const { error } = await client.from('cinema_sales').upsert(
+      {
+        id: '__SYSTEM_SYNC_BAKING_SALES__',
+        outlet_id: '__SYSTEM_SYNC__',
+        date: '2026-01-01',
+        shows: finalArray,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: 'id' }
+    );
+    if (error) {
+      console.warn('Sync baking sales warning:', error);
+      return false;
+    }
+    return true;
+  } catch (e) {
+    console.warn('Sync baking sales error:', e);
+    return false;
+  }
+}
+
+export async function mergeRemoteBakingSalesToLocal(): Promise<boolean> {
+  const client = getSupabase();
+  if (!client) return false;
+  try {
+    const { data, error } = await client
+      .from('cinema_sales')
+      .select('id, shows')
+      .eq('id', '__SYSTEM_SYNC_BAKING_SALES__')
+      .maybeSingle();
+
+    if (error || !data || !Array.isArray(data.shows)) {
+      const localList = StorageService.getBakingSales();
+      if (localList.length > 0) {
+        await syncBakingSalesToSupabase(localList);
+      }
+      return false;
+    }
+
+    const remoteList: BakingSaleRecord[] = data.shows;
+    const localList = StorageService.getBakingSales();
+
+    if (remoteList.length === 0 && localList.length > 0) {
+      await syncBakingSalesToSupabase(localList);
+      return false;
+    }
+
+    const map = new Map<string, BakingSaleRecord>();
+    const makeKey = (r: BakingSaleRecord) => `${r.outletId}_${r.year}_${r.month}`;
+
+    localList.forEach((r) => {
+      if (r && r.outletId && r.year && r.month) {
+        map.set(makeKey(r), r);
+      }
+    });
+
+    remoteList.forEach((rr) => {
+      if (!rr || !rr.outletId || !rr.year || !rr.month) return;
+      const key = makeKey(rr);
+      const existing = map.get(key);
+      if (!existing) {
+        map.set(key, rr);
+      } else {
+        const isRemoteNewer = (rr.updatedAt || '') >= (existing.updatedAt || '');
+        const mergedDaily: { [day: number]: { [productId: number]: number } } = {};
+        const allDays = new Set([
+          ...Object.keys(existing.dailySales || {}),
+          ...Object.keys(rr.dailySales || {}),
+        ]);
+        allDays.forEach((dayStr) => {
+          const d = Number(dayStr);
+          mergedDaily[d] = isRemoteNewer
+            ? { ...(existing.dailySales?.[d] || {}), ...(rr.dailySales?.[d] || {}) }
+            : { ...(rr.dailySales?.[d] || {}), ...(existing.dailySales?.[d] || {}) };
+        });
+
+        map.set(key, {
+          ...(isRemoteNewer ? existing : rr),
+          ...(isRemoteNewer ? rr : existing),
+          dailySales: mergedDaily,
+          productTargets: {
+            ...(existing.productTargets || {}),
+            ...(rr.productTargets || {}),
+          },
+        });
+      }
+    });
+
+    const merged = Array.from(map.values());
+    const currentRaw = localStorage.getItem('cinema_xxi_baking_sales') || '[]';
+    const mergedRaw = JSON.stringify(merged);
+    if (currentRaw !== mergedRaw) {
+      localStorage.setItem('cinema_xxi_baking_sales', mergedRaw);
+      StorageService.broadcastChange('baking');
+      return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+export async function syncDailySectionSalesToSupabase(
+  records?: DailySectionSalesRecord[]
+): Promise<boolean> {
+  const client = getSupabase();
+  if (!client) return false;
+  try {
+    const allLocal = StorageService.getDailySectionSalesAll();
+    await client.from('cinema_sales').upsert(
+      {
+        id: '__SYSTEM_SYNC_DAILY_SECTION__',
+        outlet_id: '__SYSTEM_SYNC__',
+        date: '2026-01-01',
+        shows: allLocal,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: 'id' }
+    );
+    return true;
+  } catch (e) {
+    console.warn('Sync daily section error:', e);
+    return false;
+  }
+}
+
+export async function mergeRemoteDailySectionSalesToLocal(): Promise<boolean> {
+  const client = getSupabase();
+  if (!client) return false;
+  try {
+    const { data, error } = await client
+      .from('cinema_sales')
+      .select('id, shows')
+      .eq('id', '__SYSTEM_SYNC_DAILY_SECTION__')
+      .maybeSingle();
+
+    if (error || !data || !Array.isArray(data.shows)) return false;
+
+    const remoteList: DailySectionSalesRecord[] = data.shows;
+    const localList = StorageService.getDailySectionSalesAll();
+
+    if (remoteList.length === 0 && localList.length > 0) {
+      await syncDailySectionSalesToSupabase(localList);
+      return false;
+    }
+
+    const map = new Map<string, DailySectionSalesRecord>();
+    localList.forEach((r) => {
+      if (r && r.id) map.set(r.id, r);
+    });
+    remoteList.forEach((rr) => {
+      if (rr && rr.id) {
+        const existing = map.get(rr.id);
+        if (!existing || (rr.updatedAt || '') >= (existing.updatedAt || '')) {
+          map.set(rr.id, rr);
+        }
+      }
+    });
+
+    const merged = Array.from(map.values());
+    const currentRaw = localStorage.getItem('cinema_xxi_daily_section_sales') || '[]';
+    const mergedRaw = JSON.stringify(merged);
+    if (currentRaw !== mergedRaw) {
+      localStorage.setItem('cinema_xxi_daily_section_sales', mergedRaw);
+      StorageService.broadcastChange('sdm-section');
+      return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Setup Realtime channel listener and periodic sync for Supabase database changes
  */
@@ -1118,12 +1352,14 @@ export function setupSupabaseRealtimeSync(): () => void {
 
   // Initial pull on load
   mergeRemoteSalesToLocal();
+  mergeRemoteBakingSalesToLocal();
   mergeRemoteOccupancyToLocal();
   mergeRemoteInspectionsToLocal();
   mergeRemoteEmployeesToLocal();
   mergeRemoteEmployeeKpisToLocal();
   mergeRemoteCashierPerformanceToLocal();
   mergeRemoteCashierProductsToLocal();
+  mergeRemoteDailySectionSalesToLocal();
   mergeRemoteConfigToLocal();
 
   // Setup Supabase Realtime channel subscription
@@ -1138,7 +1374,7 @@ export function setupSupabaseRealtimeSync(): () => void {
             const rowId = String(payload.new.id);
             const rowOutlet = String(payload.new.outlet_id || '');
 
-            // Tangani sinkronisasi real-time untuk Data Karyawan & KPI Karyawan & Performance SDM
+            // Tangani sinkronisasi real-time untuk Data Karyawan, KPI, Baking, & Performance SDM
             if (
               rowId === '__SYSTEM_SYNC_EMPLOYEES__' ||
               rowId === '__SYSTEM_SYNC_DELETED_EMPLOYEES__'
@@ -1150,12 +1386,20 @@ export function setupSupabaseRealtimeSync(): () => void {
               mergeRemoteEmployeeKpisToLocal();
               return;
             }
+            if (rowId === '__SYSTEM_SYNC_BAKING_SALES__') {
+              mergeRemoteBakingSalesToLocal();
+              return;
+            }
             if (rowId === '__SYSTEM_SYNC_SDM_PERFORMANCE__') {
               mergeRemoteCashierPerformanceToLocal();
               return;
             }
             if (rowId === '__SYSTEM_SYNC_SDM_PRODUCTS__') {
               mergeRemoteCashierProductsToLocal();
+              return;
+            }
+            if (rowId === '__SYSTEM_SYNC_DAILY_SECTION__') {
+              mergeRemoteDailySectionSalesToLocal();
               return;
             }
             if (rowId.startsWith('__SYSTEM_SYNC_') || rowOutlet.startsWith('__SYSTEM_SYNC_')) {
@@ -1261,10 +1505,14 @@ export function setupSupabaseRealtimeSync(): () => void {
     // Lightweight 5-second polling fallback in case Realtime WebSockets are restricted
     const intervalId = setInterval(() => {
       mergeRemoteSalesToLocal();
+      mergeRemoteBakingSalesToLocal();
       mergeRemoteOccupancyToLocal();
       mergeRemoteInspectionsToLocal();
       mergeRemoteEmployeesToLocal();
       mergeRemoteEmployeeKpisToLocal();
+      mergeRemoteCashierPerformanceToLocal();
+      mergeRemoteCashierProductsToLocal();
+      mergeRemoteDailySectionSalesToLocal();
     }, 5000);
 
     return () => {
@@ -1279,10 +1527,14 @@ export function setupSupabaseRealtimeSync(): () => void {
     console.warn('Realtime subscription error:', e);
     const intervalId = setInterval(() => {
       mergeRemoteSalesToLocal();
+      mergeRemoteBakingSalesToLocal();
       mergeRemoteOccupancyToLocal();
       mergeRemoteInspectionsToLocal();
       mergeRemoteEmployeesToLocal();
       mergeRemoteEmployeeKpisToLocal();
+      mergeRemoteCashierPerformanceToLocal();
+      mergeRemoteCashierProductsToLocal();
+      mergeRemoteDailySectionSalesToLocal();
     }, 5000);
     return () => clearInterval(intervalId);
   }
@@ -1310,6 +1562,11 @@ export async function uploadAllLocalToSupabase(): Promise<{
     if (sales.length > 0) {
       const ok = await syncSalesToSupabase(sales);
       if (ok) salesCount = sales.length;
+    }
+
+    const bakingSales = StorageService.getBakingSales();
+    if (bakingSales.length > 0) {
+      await syncBakingSalesToSupabase(bakingSales);
     }
 
     // Ambil semua occupancy records dari localStorage
@@ -1351,7 +1608,7 @@ export async function uploadAllLocalToSupabase(): Promise<{
       }
     }
 
-    // Ambil dan upload Data Karyawan & KPI Karyawan
+    // Ambil dan upload Data Karyawan & KPI Karyawan & SDM
     const employees = StorageService.getEmployees();
     let employeeCount = 0;
     if (employees.length > 0) {
@@ -1361,6 +1618,18 @@ export async function uploadAllLocalToSupabase(): Promise<{
     const employeeKpis = StorageService.getEmployeeKpis();
     if (employeeKpis.length > 0) {
       await syncEmployeeKpisToSupabase(employeeKpis);
+    }
+    const sdmPerf = StorageService.getCashierDailyPerformanceAll();
+    if (sdmPerf.length > 0) {
+      await syncCashierPerformanceToSupabase(sdmPerf);
+    }
+    const sdmProd = StorageService.getCashierMonthlyProductsAll();
+    if (sdmProd.length > 0) {
+      await syncCashierProductsToSupabase(sdmProd);
+    }
+    const dailySec = StorageService.getDailySectionSalesAll();
+    if (dailySec.length > 0) {
+      await syncDailySectionSalesToSupabase(dailySec);
     }
 
     return {
