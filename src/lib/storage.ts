@@ -565,12 +565,20 @@ export const StorageService = {
       (import.meta as any).env?.VITE_MISTRAL_API_KEY ||
       (window as any).MISTRAL_API_KEY ||
       DEFAULT_MISTRAL_API_KEY;
-    const envSupabaseUrl = sanitizeSupabaseUrl(
-      (import.meta as any).env?.VITE_SUPABASE_URL || DEFAULT_SUPABASE_URL
-    );
+    const rawEnvUrl = sanitizeSupabaseUrl((import.meta as any).env?.VITE_SUPABASE_URL || '');
+    const envSupabaseUrl =
+      !rawEnvUrl || rawEnvUrl.includes('ctwzvxjjorrczwtcbote')
+        ? DEFAULT_SUPABASE_URL
+        : rawEnvUrl;
+
+    const rawEnvKey = ((import.meta as any).env?.VITE_SUPABASE_ANON_KEY || '').trim();
     const envSupabaseAnonKey =
-      (import.meta as any).env?.VITE_SUPABASE_ANON_KEY ||
-      DEFAULT_SUPABASE_ANON_KEY;
+      !rawEnvKey ||
+      rawEnvKey.includes('2UV0MOXUy0C5NqWsXaxhtg') ||
+      rawEnvKey.includes('VITE_SUPABASE_URL') ||
+      rawEnvUrl.includes('ctwzvxjjorrczwtcbote')
+        ? DEFAULT_SUPABASE_ANON_KEY
+        : rawEnvKey;
 
     const raw = localStorage.getItem(KEYS.CONFIG);
     let config: SystemConfig = {
@@ -590,11 +598,13 @@ export const StorageService = {
           !cleanedStoredUrl || cleanedStoredUrl.includes('ctwzvxjjorrczwtcbote');
         const resolvedUrl = isOldUrl ? envSupabaseUrl : cleanedStoredUrl;
 
+        const storedKey = (parsed.supabaseAnonKey || '').trim();
         const isOldKey =
-          !parsed.supabaseAnonKey ||
-          parsed.supabaseAnonKey === OLD_SUPABASE_ANON_KEY ||
+          !storedKey ||
+          storedKey.includes('2UV0MOXUy0C5NqWsXaxhtg') ||
+          storedKey.includes('VITE_SUPABASE_URL') ||
           isOldUrl;
-        const resolvedAnonKey = isOldKey ? envSupabaseAnonKey : parsed.supabaseAnonKey;
+        const resolvedAnonKey = isOldKey ? envSupabaseAnonKey : storedKey;
 
         config = {
           ...config,
@@ -605,7 +615,7 @@ export const StorageService = {
           supabaseConnected: Boolean(resolvedUrl && resolvedAnonKey),
         };
 
-        if (isOldUrl || parsed.supabaseAnonKey === OLD_SUPABASE_ANON_KEY || parsed.supabaseUrl !== resolvedUrl) {
+        if (isOldUrl || isOldKey || parsed.supabaseUrl !== resolvedUrl || parsed.supabaseAnonKey !== resolvedAnonKey) {
           localStorage.setItem(KEYS.CONFIG, JSON.stringify(config));
         }
       } catch {
