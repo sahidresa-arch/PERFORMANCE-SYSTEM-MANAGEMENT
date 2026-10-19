@@ -20,7 +20,8 @@ interface MarketIntelligenceProps {
 export const MarketIntelligence: React.FC<MarketIntelligenceProps> = ({
   currentUser,
 }) => {
-  const rawOutlets = useMemo(() => StorageService.getOutlets(), []);
+  const [syncTick, setSyncTick] = useState(0);
+  const rawOutlets = useMemo(() => StorageService.getOutlets(), [syncTick]);
   const isManagerOrCleaner = (currentUser?.role === 'manager' || currentUser?.role === 'cleaner') && currentUser?.outletId;
   const outlets = useMemo(() => {
     if (isManagerOrCleaner) {
@@ -70,10 +71,13 @@ export const MarketIntelligence: React.FC<MarketIntelligenceProps> = ({
   useEffect(() => {
     const handleStorageUpdate = () => {
       setAllMovies(StorageService.getAllUploadedMovies());
+      setSyncTick((t) => t + 1);
     };
     window.addEventListener('cinema-xxi-storage-update', handleStorageUpdate);
+    window.addEventListener('storage', handleStorageUpdate);
     return () => {
       window.removeEventListener('cinema-xxi-storage-update', handleStorageUpdate);
+      window.removeEventListener('storage', handleStorageUpdate);
     };
   }, []);
 

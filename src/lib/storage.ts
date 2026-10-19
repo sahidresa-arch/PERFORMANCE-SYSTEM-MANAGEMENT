@@ -553,16 +553,24 @@ export const StorageService = {
   // Config
   getConfig(): SystemConfig {
     const DEFAULT_MISTRAL_API_KEY = 'mstrl_AtUyYnNPgt6tVyUqo0TjtDXPwG8RyyS8_3oxmaZ';
+    const OLD_SUPABASE_URL = 'https://ctwzvxjjorrczwtcbote.supabase.co';
+    const DEFAULT_SUPABASE_URL = 'https://mggjtgoucufzftkszqqo.supabase.co';
+    const OLD_SUPABASE_ANON_KEY = 'sb_publishable_2UV0MOXUy0C5NqWsXaxhtg_LRO76v0v';
+    const DEFAULT_SUPABASE_ANON_KEY = 'sb_publishable_8hN55FEmasxtjZRfMM4M4Q_gsvSmk6q';
+
+    const sanitizeSupabaseUrl = (u: string) =>
+      (u || '').trim().replace(/\/rest\/v1\/?$/i, '').replace(/\/+$/, '');
+
     const envMistralKey =
       (import.meta as any).env?.VITE_MISTRAL_API_KEY ||
       (window as any).MISTRAL_API_KEY ||
       DEFAULT_MISTRAL_API_KEY;
-    const envSupabaseUrl =
-      (import.meta as any).env?.VITE_SUPABASE_URL ||
-      'https://ctwzvxjjorrczwtcbote.supabase.co';
+    const envSupabaseUrl = sanitizeSupabaseUrl(
+      (import.meta as any).env?.VITE_SUPABASE_URL || DEFAULT_SUPABASE_URL
+    );
     const envSupabaseAnonKey =
       (import.meta as any).env?.VITE_SUPABASE_ANON_KEY ||
-      'sb_publishable_2UV0MOXUy0C5NqWsXaxhtg_LRO76v0v';
+      DEFAULT_SUPABASE_ANON_KEY;
 
     const raw = localStorage.getItem(KEYS.CONFIG);
     let config: SystemConfig = {
@@ -577,16 +585,29 @@ export const StorageService = {
     if (raw) {
       try {
         const parsed = JSON.parse(raw);
+        const cleanedStoredUrl = sanitizeSupabaseUrl(parsed.supabaseUrl || '');
+        const isOldUrl =
+          !cleanedStoredUrl || cleanedStoredUrl.includes('ctwzvxjjorrczwtcbote');
+        const resolvedUrl = isOldUrl ? envSupabaseUrl : cleanedStoredUrl;
+
+        const isOldKey =
+          !parsed.supabaseAnonKey ||
+          parsed.supabaseAnonKey === OLD_SUPABASE_ANON_KEY ||
+          isOldUrl;
+        const resolvedAnonKey = isOldKey ? envSupabaseAnonKey : parsed.supabaseAnonKey;
+
         config = {
           ...config,
           ...parsed,
           mistralApiKey: parsed.mistralApiKey || envMistralKey,
-          supabaseUrl: parsed.supabaseUrl || envSupabaseUrl,
-          supabaseAnonKey: parsed.supabaseAnonKey || envSupabaseAnonKey,
-          supabaseConnected: Boolean(
-            (parsed.supabaseUrl || envSupabaseUrl) && (parsed.supabaseAnonKey || envSupabaseAnonKey)
-          ),
+          supabaseUrl: resolvedUrl,
+          supabaseAnonKey: resolvedAnonKey,
+          supabaseConnected: Boolean(resolvedUrl && resolvedAnonKey),
         };
+
+        if (isOldUrl || parsed.supabaseAnonKey === OLD_SUPABASE_ANON_KEY || parsed.supabaseUrl !== resolvedUrl) {
+          localStorage.setItem(KEYS.CONFIG, JSON.stringify(config));
+        }
       } catch {
         // use default
       }

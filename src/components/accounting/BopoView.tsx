@@ -34,6 +34,17 @@ const MONTHS = [
 ];
 
 export const BopoView: React.FC<BopoViewProps> = ({ currentUser, selectedDate }) => {
+  const [, setSyncTick] = useState(0);
+  React.useEffect(() => {
+    const handleStorageUpdate = () => setSyncTick((t) => t + 1);
+    window.addEventListener('cinema-xxi-storage-update', handleStorageUpdate);
+    window.addEventListener('storage', handleStorageUpdate);
+    return () => {
+      window.removeEventListener('cinema-xxi-storage-update', handleStorageUpdate);
+      window.removeEventListener('storage', handleStorageUpdate);
+    };
+  }, []);
+
   const [selectedAreaId, setSelectedAreaId] = useState<string>('all');
   const [selectedOutletId, setSelectedOutletId] = useState<string>(
     currentUser?.outletId || 'aeon-sentul-xxi'

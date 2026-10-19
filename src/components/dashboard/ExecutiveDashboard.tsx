@@ -31,6 +31,17 @@ export const ExecutiveDashboard: React.FC<ExecutiveDashboardProps> = ({
   onNavigate,
   onDateChange,
 }) => {
+  const [, setSyncTick] = useState(0);
+  React.useEffect(() => {
+    const handleStorageUpdate = () => setSyncTick((t) => t + 1);
+    window.addEventListener('cinema-xxi-storage-update', handleStorageUpdate);
+    window.addEventListener('storage', handleStorageUpdate);
+    return () => {
+      window.removeEventListener('cinema-xxi-storage-update', handleStorageUpdate);
+      window.removeEventListener('storage', handleStorageUpdate);
+    };
+  }, []);
+
   const areas = StorageService.getAreas();
   const outlets = StorageService.getOutlets();
   const dailySales = StorageService.getDailySales();

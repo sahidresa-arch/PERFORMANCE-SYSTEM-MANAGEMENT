@@ -92,15 +92,19 @@ export default function App() {
     }
   }, []);
 
+  const [, setGlobalSyncTick] = useState(0);
+
   // Sync listener across windows / components & Supabase Realtime
   useEffect(() => {
     const handleStorageUpdate = (e: any) => {
-      const type = e.detail?.type;
+      const type = e?.detail?.type;
       if (type === 'auth' || type === 'all-reset') {
         setCurrentUser(StorageService.getCurrentUser());
       }
+      setGlobalSyncTick((t) => t + 1);
     };
     window.addEventListener('cinema-xxi-storage-update', handleStorageUpdate);
+    window.addEventListener('storage', handleStorageUpdate);
 
     let cleanupSupabase: (() => void) | null = null;
     import('./lib/supabase').then((m) => {
@@ -109,6 +113,7 @@ export default function App() {
 
     return () => {
       window.removeEventListener('cinema-xxi-storage-update', handleStorageUpdate);
+      window.removeEventListener('storage', handleStorageUpdate);
       if (cleanupSupabase) cleanupSupabase();
     };
   }, []);
@@ -123,6 +128,9 @@ export default function App() {
     setActiveMenu(newMenu);
     setSelectedDate(getTodayDateString());
     window.scrollTo({ top: 0, behavior: 'smooth' });
+    import('./lib/supabase')
+      .then((m) => m.pullAllRemoteToLocal())
+      .catch(() => {});
   };
 
   // If not logged in, show Cinema XXI VIP Login Screen

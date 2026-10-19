@@ -80,16 +80,23 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       return;
     }
 
+    // Simpan URL & Anon Key terbaru terlebih dahulu agar langsung mengarah ke Project Supabase yang baru
+    StorageService.saveConfig({
+      supabaseUrl: supabaseUrl.trim(),
+      supabaseAnonKey: supabaseAnonKey.trim(),
+      supabaseConnected: true,
+    });
+
     setIsUploadingSupabase(true);
-    setUploadStatus('Mengunggah data sales, okupansi, inspection & data karyawan ke Supabase...');
+    setUploadStatus('Mengunggah seluruh data sales, target head, okupansi, inspection & karyawan ke Supabase...');
     try {
       const res = await uploadAllLocalToSupabase();
       if (res.success) {
         setUploadStatus(
-          `Berhasil upload! ${res.salesCount} sales, ${res.occupancyCount} okupansi, ${res.inspectionCount} inspection, & ${res.employeeCount || 0} data karyawan tersinkron ke Supabase.`
+          `Berhasil migrasi! ${res.salesCount} sales, ${res.occupancyCount} okupansi, ${res.inspectionCount} inspection, & ${res.employeeCount || 0} data karyawan telah masuk ke Project Supabase.`
         );
       } else {
-        setUploadStatus(`Upload gagal: ${res.error || 'Periksa tabel di Supabase'}`);
+        setUploadStatus(`Upload gagal: ${res.error || 'Pastikan SQL Schema sudah dijalankan di SQL Editor Supabase'}`);
       }
     } catch (e: any) {
       setUploadStatus(`Upload gagal: ${e.message}`);

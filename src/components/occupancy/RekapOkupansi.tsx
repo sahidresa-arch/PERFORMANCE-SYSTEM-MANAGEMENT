@@ -53,8 +53,19 @@ export const RekapOkupansi: React.FC<RekapOkupansiProps> = ({
   selectedDate,
   onDateChange,
 }) => {
-  const areas = useMemo(() => StorageService.getAreas(), []);
-  const rawOutlets = useMemo(() => StorageService.getOutlets(), []);
+  const [syncTick, setSyncTick] = useState(0);
+  useEffect(() => {
+    const handleOutletsUpdate = () => setSyncTick((t) => t + 1);
+    window.addEventListener('cinema-xxi-storage-update', handleOutletsUpdate);
+    window.addEventListener('storage', handleOutletsUpdate);
+    return () => {
+      window.removeEventListener('cinema-xxi-storage-update', handleOutletsUpdate);
+      window.removeEventListener('storage', handleOutletsUpdate);
+    };
+  }, []);
+
+  const areas = useMemo(() => StorageService.getAreas(), [syncTick]);
+  const rawOutlets = useMemo(() => StorageService.getOutlets(), [syncTick]);
   const isManagerOrCleaner = (currentUser?.role === 'manager' || currentUser?.role === 'cleaner') && currentUser?.outletId;
   const outlets = useMemo(() => {
     return isManagerOrCleaner

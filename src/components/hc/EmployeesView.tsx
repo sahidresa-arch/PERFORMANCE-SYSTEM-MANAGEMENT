@@ -57,7 +57,7 @@ interface EmployeesViewProps {
 
 export const EmployeesView: React.FC<EmployeesViewProps> = ({ currentUser, selectedDate }) => {
   const [employees, setEmployees] = useState<Employee[]>(() => StorageService.getEmployees());
-  const [outlets] = useState<Outlet[]>(() => StorageService.getOutlets());
+  const [outlets, setOutlets] = useState<Outlet[]>(() => StorageService.getOutlets());
   const areas = INITIAL_AREAS;
 
   const [selectedAreaId, setSelectedAreaId] = useState<string>('all');
@@ -115,6 +115,9 @@ export const EmployeesView: React.FC<EmployeesViewProps> = ({ currentUser, selec
       const type = e?.detail?.type;
       if (!type || type === 'employees' || type === 'all-reset') {
         setEmployees(StorageService.getEmployees());
+      }
+      if (!type || type === 'outlets' || type === 'all-reset') {
+        setOutlets(StorageService.getOutlets());
       }
     };
     window.addEventListener('cinema-xxi-storage-update', handleStorageUpdate);
