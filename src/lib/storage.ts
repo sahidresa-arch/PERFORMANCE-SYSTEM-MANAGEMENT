@@ -753,14 +753,27 @@ export const StorageService = {
     }
 
     const list = this.getUsersList();
+    const updatedUser: User = {
+      ...user,
+      ...({ updatedAt: new Date().toISOString() } as any),
+    };
     const idx = list.findIndex((u) => u.id === user.id || u.username === user.username);
     if (idx >= 0) {
-      list[idx] = user;
+      list[idx] = updatedUser;
     } else {
-      list.push(user);
+      list.push(updatedUser);
     }
     localStorage.setItem(KEYS.USERS_LIST, JSON.stringify(list));
     this.broadcastChange('users');
+
+    import('./supabase')
+      .then((m) => {
+        if (typeof (m as any).syncAdditionalModulesToSupabase === 'function') {
+          (m as any).syncAdditionalModulesToSupabase(['users']);
+        }
+      })
+      .catch(() => {});
+
     return list;
   },
 
@@ -782,6 +795,15 @@ export const StorageService = {
     const list = currentList.filter((u) => u.id !== userId && u.username !== userId);
     localStorage.setItem(KEYS.USERS_LIST, JSON.stringify(list));
     this.broadcastChange('users');
+
+    import('./supabase')
+      .then((m) => {
+        if (typeof (m as any).syncAdditionalModulesToSupabase === 'function') {
+          (m as any).syncAdditionalModulesToSupabase(['users']);
+        }
+      })
+      .catch(() => {});
+
     return list;
   },
 
@@ -1773,6 +1795,14 @@ export const StorageService = {
     }
 
     this.broadcastChange('genre-updated');
+
+    import('./supabase')
+      .then((m) => {
+        if (typeof (m as any).syncAdditionalModulesToSupabase === 'function') {
+          (m as any).syncAdditionalModulesToSupabase(['genres']);
+        }
+      })
+      .catch(() => {});
   },
 
   // Ekstraksi jumlah penonton presisi tinggi:
@@ -2328,6 +2358,14 @@ export const StorageService = {
     }
     localStorage.setItem(KEYS.ADMINISTRATION, JSON.stringify(records));
     this.broadcastChange('administration');
+
+    import('./supabase')
+      .then((m) => {
+        if (typeof (m as any).syncAdditionalModulesToSupabase === 'function') {
+          (m as any).syncAdditionalModulesToSupabase(['administration']);
+        }
+      })
+      .catch(() => {});
   },
 
   // BOPO Records
@@ -2392,6 +2430,14 @@ export const StorageService = {
     }
     localStorage.setItem(KEYS.BOPO, JSON.stringify(records));
     this.broadcastChange('bopo');
+
+    import('./supabase')
+      .then((m) => {
+        if (typeof (m as any).syncAdditionalModulesToSupabase === 'function') {
+          (m as any).syncAdditionalModulesToSupabase(['bopo']);
+        }
+      })
+      .catch(() => {});
   },
 
   // Employees (HC Area)
@@ -3067,6 +3113,15 @@ export const StorageService = {
     }
     localStorage.setItem(KEYS.LOST_FOUND, JSON.stringify(list));
     this.broadcastChange('lost-found');
+
+    import('./supabase')
+      .then((m) => {
+        if (typeof (m as any).syncAdditionalModulesToSupabase === 'function') {
+          (m as any).syncAdditionalModulesToSupabase(['lost_found']);
+        }
+      })
+      .catch(() => {});
+
     return list;
   },
 
@@ -3074,6 +3129,15 @@ export const StorageService = {
     const list = this.getLostAndFoundRecords().filter((item) => item.id !== id);
     localStorage.setItem(KEYS.LOST_FOUND, JSON.stringify(list));
     this.broadcastChange('lost-found');
+
+    import('./supabase')
+      .then((m) => {
+        if (typeof (m as any).syncAdditionalModulesToSupabase === 'function') {
+          (m as any).syncAdditionalModulesToSupabase(['lost_found']);
+        }
+      })
+      .catch(() => {});
+
     return list;
   },
 
@@ -3117,6 +3181,15 @@ export const StorageService = {
     }
     localStorage.setItem(KEYS.WAREHOUSE_ITEMS, JSON.stringify(list));
     this.broadcastChange('warehouse-items');
+
+    import('./supabase')
+      .then((m) => {
+        if (typeof (m as any).syncAdditionalModulesToSupabase === 'function') {
+          (m as any).syncAdditionalModulesToSupabase(['warehouse']);
+        }
+      })
+      .catch(() => {});
+
     return list;
   },
 
@@ -3124,6 +3197,15 @@ export const StorageService = {
     const list = this.getWarehouseItems().filter((i) => i.id !== id);
     localStorage.setItem(KEYS.WAREHOUSE_ITEMS, JSON.stringify(list));
     this.broadcastChange('warehouse-items');
+
+    import('./supabase')
+      .then((m) => {
+        if (typeof (m as any).syncAdditionalModulesToSupabase === 'function') {
+          (m as any).syncAdditionalModulesToSupabase(['warehouse']);
+        }
+      })
+      .catch(() => {});
+
     return list;
   },
 
@@ -3174,6 +3256,15 @@ export const StorageService = {
     }
     localStorage.setItem(KEYS.STOCK_TRANSACTIONS, JSON.stringify(list));
     this.broadcastChange('stock-transactions');
+
+    import('./supabase')
+      .then((m) => {
+        if (typeof (m as any).syncAdditionalModulesToSupabase === 'function') {
+          (m as any).syncAdditionalModulesToSupabase(['warehouse']);
+        }
+      })
+      .catch(() => {});
+
     return list;
   },
 
@@ -3181,6 +3272,15 @@ export const StorageService = {
     const list = this.getStockTransactions().filter((t) => t.id !== id);
     localStorage.setItem(KEYS.STOCK_TRANSACTIONS, JSON.stringify(list));
     this.broadcastChange('stock-transactions');
+
+    import('./supabase')
+      .then((m) => {
+        if (typeof (m as any).syncAdditionalModulesToSupabase === 'function') {
+          (m as any).syncAdditionalModulesToSupabase(['warehouse']);
+        }
+      })
+      .catch(() => {});
+
     return list;
   },
 
@@ -3201,6 +3301,15 @@ export const StorageService = {
     list.unshift(history);
     localStorage.setItem(KEYS.STOCK_OPNAME_HISTORY, JSON.stringify(list));
     this.broadcastChange('stock-opname');
+
+    import('./supabase')
+      .then((m) => {
+        if (typeof (m as any).syncAdditionalModulesToSupabase === 'function') {
+          (m as any).syncAdditionalModulesToSupabase(['warehouse']);
+        }
+      })
+      .catch(() => {});
+
     return list;
   },
 

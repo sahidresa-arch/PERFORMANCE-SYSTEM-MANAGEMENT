@@ -1446,7 +1446,7 @@ export const GoogleSlideKPI: React.FC<GoogleSlideKPIProps> = ({
                     avgTargetHead
                   );
                   const maxSPH = Math.ceil((rawMax * 1.15) / 1000) * 1000;
-                  const targetPct = Math.min(92, Math.max(5, (avgTargetHead / maxSPH) * 100));
+                  const targetPct = maxSPH > 0 ? Math.min(100, Math.max(3, (avgTargetHead / maxSPH) * 100)) : 0;
 
                   return (
                     <div className="space-y-2.5">
@@ -1463,18 +1463,18 @@ export const GoogleSlideKPI: React.FC<GoogleSlideKPIProps> = ({
                           </div>
                         )}
 
-                        <div className="relative flex-1 w-full flex items-end pt-6">
-                          {/* Target dashed line indicator */}
-                          <div
-                            style={{ bottom: `${targetPct}%` }}
-                            className="absolute inset-x-0 border-t-2 border-dashed border-emerald-600 z-20 pointer-events-none flex justify-end"
-                          >
-                            <span className="text-[10px] font-black text-emerald-950 bg-emerald-100/95 px-2 py-0.5 rounded-md -mt-3 mr-1 border border-emerald-400 shadow-2xs">
-                              Target: Rp {avgTargetHead.toLocaleString('id-ID')}
-                            </span>
-                          </div>
+                        <div className="flex-1 w-full flex items-end pt-6">
+                          <div className="relative w-full h-full flex items-end justify-between gap-1.5 sm:gap-2 z-10">
+                            {/* Target dashed line indicator (shares exact 0%-100% coordinate box with bars) */}
+                            <div
+                              style={{ bottom: `${targetPct}%` }}
+                              className="absolute inset-x-0 border-t-2 border-dashed border-emerald-600 z-20 pointer-events-none flex justify-end"
+                            >
+                              <span className="text-[10px] font-black text-emerald-950 bg-emerald-100/95 px-2 py-0.5 rounded-md -mt-3 mr-1 border border-emerald-400 shadow-2xs">
+                                Target: Rp {avgTargetHead.toLocaleString('id-ID')}
+                              </span>
+                            </div>
 
-                          <div className="w-full h-full flex items-end justify-between gap-1.5 sm:gap-2 z-10">
                             {sphChartItems.map((item, idx) => {
                               const heightA = maxSPH > 0 ? (item.periodA.sph / maxSPH) * 100 : 0;
                               const heightB = maxSPH > 0 ? (item.periodB.sph / maxSPH) * 100 : 0;

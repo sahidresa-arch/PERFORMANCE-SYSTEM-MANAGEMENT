@@ -545,7 +545,7 @@ export const exportKPIToPPTX = async (data: SlideKPIData) => {
 
     // Optional Dashed Target Line across plot
     if (chartOpts.targetLineVal && chartOpts.targetLineVal > 0) {
-      const targetRatio = Math.min(0.95, Math.max(0.08, chartOpts.targetLineVal / maxVal));
+      const targetRatio = maxVal > 0 ? Math.min(1, Math.max(0.03, chartOpts.targetLineVal / maxVal)) : 0.03;
       const targetY = barsBotY - maxBarH * targetRatio;
 
       slide.addShape(pptx.ShapeType.line, {

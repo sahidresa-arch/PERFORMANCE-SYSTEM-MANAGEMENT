@@ -1454,6 +1454,278 @@ export async function mergeRemoteOutletsAndAreasToLocal(): Promise<boolean> {
 }
 
 /**
+ * Sinkronisasi Modul Tambahan (Users, Genre Film, Administrasi, BOPO, Lost & Found, Gudang/Inventory)
+ */
+export async function syncAdditionalModulesToSupabase(
+  modules: Array<'users' | 'genres' | 'administration' | 'bopo' | 'lost_found' | 'warehouse'> = [
+    'users',
+    'genres',
+    'administration',
+    'bopo',
+    'lost_found',
+    'warehouse',
+  ]
+): Promise<boolean> {
+  const client = getSupabase();
+  if (!client) return false;
+
+  try {
+    const nowIso = new Date().toISOString();
+    const rowsToUpsert: Array<{
+      id: string;
+      outlet_id: string;
+      date: string;
+      shows: any;
+      updated_at: string;
+    }> = [];
+
+    if (modules.includes('users')) {
+      const users = StorageService.getUsersList();
+      const deletedUsersRaw = localStorage.getItem('cinema_xxi_deleted_user_ids');
+      const deletedUsers = deletedUsersRaw ? JSON.parse(deletedUsersRaw) : [];
+      rowsToUpsert.push({
+        id: '__SYSTEM_SYNC_USERS__',
+        outlet_id: '__SYSTEM_SYNC__',
+        date: '2026-01-01',
+        shows: [{ users, deletedUsers, updatedAt: nowIso }],
+        updated_at: nowIso,
+      });
+    }
+
+    if (modules.includes('genres')) {
+      const genres = StorageService.getFilmGenreRegistry();
+      rowsToUpsert.push({
+        id: '__SYSTEM_SYNC_FILM_GENRES__',
+        outlet_id: '__SYSTEM_SYNC__',
+        date: '2026-01-01',
+        shows: [genres],
+        updated_at: nowIso,
+      });
+    }
+
+    if (modules.includes('administration')) {
+      const admins = StorageService.getOutletAdministrations();
+      rowsToUpsert.push({
+        id: '__SYSTEM_SYNC_ADMINISTRATION__',
+        outlet_id: '__SYSTEM_SYNC__',
+        date: '2026-01-01',
+        shows: admins,
+        updated_at: nowIso,
+      });
+    }
+
+    if (modules.includes('bopo')) {
+      const bopo = StorageService.getBopoRecords();
+      rowsToUpsert.push({
+        id: '__SYSTEM_SYNC_BOPO__',
+        outlet_id: '__SYSTEM_SYNC__',
+        date: '2026-01-01',
+        shows: bopo,
+        updated_at: nowIso,
+      });
+    }
+
+    if (modules.includes('lost_found')) {
+      const lostFound = StorageService.getLostAndFoundRecords();
+      rowsToUpsert.push({
+        id: '__SYSTEM_SYNC_LOST_FOUND__',
+        outlet_id: '__SYSTEM_SYNC__',
+        date: '2026-01-01',
+        shows: lostFound,
+        updated_at: nowIso,
+      });
+    }
+
+    if (modules.includes('warehouse')) {
+      const items = StorageService.getWarehouseItems();
+      const txs = StorageService.getStockTransactions();
+      const opname = StorageService.getStockOpnameHistory();
+      rowsToUpsert.push({
+        id: '__SYSTEM_SYNC_WAREHOUSE__',
+        outlet_id: '__SYSTEM_SYNC__',
+        date: '2026-01-01',
+        shows: [{ items, txs, opname, updatedAt: nowIso }],
+        updated_at: nowIso,
+      });
+    }
+
+    if (rowsToUpsert.length > 0) {
+      await client.from('cinema_sales').upsert(rowsToUpsert, { onConflict: 'id' });
+    }
+    return true;
+  } catch (e) {
+    console.warn('Sync additional modules error:', e);
+    return false;
+  }
+}
+
+export async function mergeRemoteAdditionalModulesToLocal(): Promise<boolean> {
+  const client = getSupabase();
+  if (!client) return false;
+
+  try {
+    const { data, error } = await client
+      .from('cinema_sales')
+      .select('id, shows')
+      .in('id', [
+        '__SYSTEM_SYNC_USERS__',
+        '__SYSTEM_SYNC_FILM_GENRES__',
+        '__SYSTEM_SYNC_ADMINISTRATION__',
+        '__SYSTEM_SYNC_BOPO__',
+        '__SYSTEM_SYNC_LOST_FOUND__',
+        '__SYSTEM_SYNC_WAREHOUSE__',
+      ]);
+
+    if (error || !data) return false;
+    let updated = false;
+
+    const usersRow = data.find((r: any) => r.id === '__SYSTEM_SYNC_USERS__');
+    if (usersRow && Array.isArray(usersRow.shows) && usersRow.shows[0]) {
+      const payload = usersRow.shows[0];
+      if (Array.isArray(payload.deletedUsers)) {
+        const curDelRaw = localStorage.getItem('cinema_xxi_deleted_user_ids') || '[]';
+        const curDel: string[] = JSON.parse(curDelRaw);
+        const mergedDel = Array.from(new Set([...curDel, ...payload.deletedUsers]));
+        if (JSON.stringify(mergedDel) !== curDelRaw) {
+          localStorage.setItem('cinema_xxi_deleted_user_ids', JSON.stringify(mergedDel));
+        }
+      }
+      if (Array.isArray(payload.users) && payload.users.length > 0) {
+        const localUsers = StorageService.getUsersList();
+        const delSet = new Set<string>(
+          JSON.parse(localStorage.getItem('cinema_xxi_deleted_user_ids') || '[]')
+        );
+        const map = new Map<string, any>();
+        localUsers.forEach((u) => {
+          if (u && u.id && !delSet.has(u.id) && !delSet.has(u.username)) {
+            map.set(u.id, u);
+          }
+        });
+        payload.users.forEach((ru: any) => {
+          if (ru && ru.id && !delSet.has(ru.id) && !delSet.has(ru.username)) {
+            const existing = map.get(ru.id);
+            if (!existing || (ru.updatedAt || '') >= (existing.updatedAt || '')) {
+              map.set(ru.id, { ...(existing || {}), ...ru });
+            }
+          }
+        });
+        const mergedUsers = Array.from(map.values());
+        const curRaw = localStorage.getItem('cinema_xxi_users_list') || '[]';
+        const nextRaw = JSON.stringify(mergedUsers);
+        if (curRaw !== nextRaw) {
+          localStorage.setItem('cinema_xxi_users_list', nextRaw);
+          StorageService.broadcastChange('users');
+          updated = true;
+        }
+      }
+    }
+
+    const genresRow = data.find((r: any) => r.id === '__SYSTEM_SYNC_FILM_GENRES__');
+    if (genresRow && Array.isArray(genresRow.shows) && genresRow.shows[0]) {
+      const remoteGenres = genresRow.shows[0];
+      if (remoteGenres && typeof remoteGenres === 'object') {
+        const localGenres = StorageService.getFilmGenreRegistry();
+        const mergedGenres = { ...localGenres, ...remoteGenres };
+        const curRaw = localStorage.getItem('cinema_xxi_movie_genres') || '{}';
+        const nextRaw = JSON.stringify(mergedGenres);
+        if (curRaw !== nextRaw) {
+          localStorage.setItem('cinema_xxi_movie_genres', nextRaw);
+          StorageService.broadcastChange('genre-updated');
+          updated = true;
+        }
+      }
+    }
+
+    const adminRow = data.find((r: any) => r.id === '__SYSTEM_SYNC_ADMINISTRATION__');
+    if (adminRow && Array.isArray(adminRow.shows) && adminRow.shows.length > 0) {
+      const localAdmins = StorageService.getOutletAdministrations();
+      const map = new Map<string, any>();
+      localAdmins.forEach((a) => map.set(`${a.outletId}_${a.month}`, a));
+      adminRow.shows.forEach((ra: any) => {
+        if (ra && ra.outletId && ra.month) {
+          map.set(`${ra.outletId}_${ra.month}`, ra);
+        }
+      });
+      const merged = Array.from(map.values());
+      const curRaw = localStorage.getItem('cinema_xxi_outlet_administration') || '[]';
+      const nextRaw = JSON.stringify(merged);
+      if (curRaw !== nextRaw) {
+        localStorage.setItem('cinema_xxi_outlet_administration', nextRaw);
+        StorageService.broadcastChange('administration');
+        updated = true;
+      }
+    }
+
+    const bopoRow = data.find((r: any) => r.id === '__SYSTEM_SYNC_BOPO__');
+    if (bopoRow && Array.isArray(bopoRow.shows) && bopoRow.shows.length > 0) {
+      const localBopo = StorageService.getBopoRecords();
+      const map = new Map<string, any>();
+      localBopo.forEach((b) => map.set(`${b.outletId}_${b.month}`, b));
+      bopoRow.shows.forEach((rb: any) => {
+        if (rb && rb.outletId && rb.month) {
+          map.set(`${rb.outletId}_${rb.month}`, rb);
+        }
+      });
+      const merged = Array.from(map.values());
+      const curRaw = localStorage.getItem('cinema_xxi_bopo_records') || '[]';
+      const nextRaw = JSON.stringify(merged);
+      if (curRaw !== nextRaw) {
+        localStorage.setItem('cinema_xxi_bopo_records', nextRaw);
+        StorageService.broadcastChange('bopo');
+        updated = true;
+      }
+    }
+
+    const lfRow = data.find((r: any) => r.id === '__SYSTEM_SYNC_LOST_FOUND__');
+    if (lfRow && Array.isArray(lfRow.shows)) {
+      const curRaw = localStorage.getItem('cinema_xxi_lost_and_found') || '[]';
+      const nextRaw = JSON.stringify(lfRow.shows);
+      if (curRaw !== nextRaw && lfRow.shows.length > 0) {
+        localStorage.setItem('cinema_xxi_lost_and_found', nextRaw);
+        StorageService.broadcastChange('lost-found');
+        updated = true;
+      }
+    }
+
+    const whRow = data.find((r: any) => r.id === '__SYSTEM_SYNC_WAREHOUSE__');
+    if (whRow && Array.isArray(whRow.shows) && whRow.shows[0]) {
+      const payload = whRow.shows[0];
+      if (Array.isArray(payload.items) && payload.items.length > 0) {
+        const curRaw = localStorage.getItem('cinema_xxi_warehouse_items') || '[]';
+        const nextRaw = JSON.stringify(payload.items);
+        if (curRaw !== nextRaw) {
+          localStorage.setItem('cinema_xxi_warehouse_items', nextRaw);
+          StorageService.broadcastChange('warehouse-items');
+          updated = true;
+        }
+      }
+      if (Array.isArray(payload.txs) && payload.txs.length > 0) {
+        const curRaw = localStorage.getItem('cinema_xxi_stock_transactions') || '[]';
+        const nextRaw = JSON.stringify(payload.txs);
+        if (curRaw !== nextRaw) {
+          localStorage.setItem('cinema_xxi_stock_transactions', nextRaw);
+          StorageService.broadcastChange('stock-transactions');
+          updated = true;
+        }
+      }
+      if (Array.isArray(payload.opname) && payload.opname.length > 0) {
+        const curRaw = localStorage.getItem('cinema_xxi_stock_opname_history') || '[]';
+        const nextRaw = JSON.stringify(payload.opname);
+        if (curRaw !== nextRaw) {
+          localStorage.setItem('cinema_xxi_stock_opname_history', nextRaw);
+          StorageService.broadcastChange('stock-opname');
+          updated = true;
+        }
+      }
+    }
+
+    return updated;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Setup Realtime channel listener and periodic sync for Supabase database changes
  */
 export function setupSupabaseRealtimeSync(): () => void {
@@ -1464,6 +1736,7 @@ export function setupSupabaseRealtimeSync(): () => void {
 
   // Initial pull on load
   mergeRemoteOutletsAndAreasToLocal();
+  mergeRemoteAdditionalModulesToLocal();
   mergeRemoteSalesToLocal();
   mergeRemoteBakingSalesToLocal();
   mergeRemoteOccupancyToLocal();
@@ -1493,6 +1766,17 @@ export function setupSupabaseRealtimeSync(): () => void {
               rowId === '__SYSTEM_SYNC_AREAS__'
             ) {
               mergeRemoteOutletsAndAreasToLocal();
+              return;
+            }
+            if (
+              rowId === '__SYSTEM_SYNC_USERS__' ||
+              rowId === '__SYSTEM_SYNC_FILM_GENRES__' ||
+              rowId === '__SYSTEM_SYNC_ADMINISTRATION__' ||
+              rowId === '__SYSTEM_SYNC_BOPO__' ||
+              rowId === '__SYSTEM_SYNC_LOST_FOUND__' ||
+              rowId === '__SYSTEM_SYNC_WAREHOUSE__'
+            ) {
+              mergeRemoteAdditionalModulesToLocal();
               return;
             }
             if (
@@ -1625,6 +1909,7 @@ export function setupSupabaseRealtimeSync(): () => void {
     // Lightweight 5-second polling fallback in case Realtime WebSockets are restricted
     const intervalId = setInterval(() => {
       mergeRemoteOutletsAndAreasToLocal();
+      mergeRemoteAdditionalModulesToLocal();
       mergeRemoteSalesToLocal();
       mergeRemoteBakingSalesToLocal();
       mergeRemoteOccupancyToLocal();
@@ -1648,6 +1933,7 @@ export function setupSupabaseRealtimeSync(): () => void {
     console.warn('Realtime subscription error:', e);
     const intervalId = setInterval(() => {
       mergeRemoteOutletsAndAreasToLocal();
+      mergeRemoteAdditionalModulesToLocal();
       mergeRemoteSalesToLocal();
       mergeRemoteBakingSalesToLocal();
       mergeRemoteOccupancyToLocal();
@@ -1680,6 +1966,7 @@ export async function uploadAllLocalToSupabase(): Promise<{
 
   try {
     await syncOutletsAndAreasToSupabase();
+    await syncAdditionalModulesToSupabase();
 
     const sales = StorageService.getDailySales();
     let salesCount = 0;
