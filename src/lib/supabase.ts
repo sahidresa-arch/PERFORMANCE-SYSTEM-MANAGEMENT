@@ -253,11 +253,57 @@ export async function testSupabaseConnection(
   }
 }
 
+// ============================================================================
+// ZERO-WASTE EGRESS & LOG INGESTION ENGINE (PERSISTENT TIMESTAMP REGISTRY)
+// ============================================================================
+const SYNC_TS_STORAGE_KEY = 'cinema_xxi_sync_timestamps_v3';
+const lastSeenSyncTimestamps: Record<string, string> = (() => {
+  try {
+    const raw = localStorage.getItem(SYNC_TS_STORAGE_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+})();
+const lastLocalWriteTimeByRow: Record<string, number> = {};
+const realtimeDebounceTimers: Record<string, any> = {};
+
+function recordSyncTimestamp(rowId: string, updatedAt: string, isLocalWrite = false): void {
+  if (!rowId || !updatedAt) return;
+  lastSeenSyncTimestamps[rowId] = String(updatedAt);
+  if (isLocalWrite) {
+    lastLocalWriteTimeByRow[rowId] = Date.now();
+  }
+  try {
+    localStorage.setItem(SYNC_TS_STORAGE_KEY, JSON.stringify(lastSeenSyncTimestamps));
+  } catch {
+    // ignore
+  }
+}
+
+function isEchoFromOwnWrite(rowId: string, incomingUpdatedAt?: string): boolean {
+  const lastWriteMs = lastLocalWriteTimeByRow[rowId] || 0;
+  if (lastWriteMs > 0 && Date.now() - lastWriteMs < 6000) {
+    return true;
+  }
+  if (incomingUpdatedAt && lastSeenSyncTimestamps[rowId] === String(incomingUpdatedAt)) {
+    return true;
+  }
+  return false;
+}
+
+function scheduleDebouncedRealtimeMerge(key: string, fn: () => Promise<any>, delayMs = 400): void {
+  if (realtimeDebounceTimers[key]) {
+    clearTimeout(realtimeDebounceTimers[key]);
+  }
+  realtimeDebounceTimers[key] = setTimeout(() => {
+    delete realtimeDebounceTimers[key];
+    fn().catch(() => {});
+  }, delayMs);
+}
+
 /**
- * Sinkronisasi Data Sales Harian ke Supabase
- * Menggunakan Dual-Channel:
- * 1. Master Sync Row (__SYSTEM_SYNC_DAILY_SALES__) via Primary Key lookup (100% bebas limit 1000 baris & identik dengan Target Head / Baking)
- * 2. Individual Row (sales-{outletId}-{date}) untuk kompatibilitas tabel cinema_sales
+ * Sinkronisasi Data Sales Harian ke Supabase (Hemat Egress: 1 Row Master Sync tanpa duplikasi ratusan baris)
  */
 export async function syncSalesToSupabase(sales: DailySalesRecord[]): Promise<boolean> {
   const client = getSupabase();
@@ -265,13 +311,21 @@ export async function syncSalesToSupabase(sales: DailySalesRecord[]): Promise<bo
 
   try {
     const nowIso = new Date().toISOString();
-
-    // 1. Sinkronkan ke Master Sync Row (__SYSTEM_SYNC_DAILY_SALES__) seperti Baking & Target Head
     const normalSales = sales.filter(
-      (s) => s && s.outletId && s.date && !String(s.id || '').startsWith('__SYSTEM_SYNC_')
+      (s) =>
+        s &&
+        s.outletId &&
+        s.date &&
+        !String(s.id || '').startsWith('__SYSTEM_SYNC_') &&
+        !StorageService.isStaticUneditedSalesRecord(s)
     );
 
-    if (normalSales.length > 0) {
+    if (normalSales.length === 0) return true;
+
+    const overrideMap = new Map<string, DailySalesRecord>();
+
+    // Jika perangkat ini belum pernah sinkronisasi awal, ambil dulu dari server agar tidak menimpa data device lain
+    if (!lastSeenSyncTimestamps['__SYSTEM_SYNC_DAILY_SALES__']) {
       const { data: syncRow } = await client
         .from('cinema_sales')
         .select('id, shows')
@@ -280,13 +334,8 @@ export async function syncSalesToSupabase(sales: DailySalesRecord[]): Promise<bo
 
       const remoteOverrides: DailySalesRecord[] =
         syncRow && Array.isArray(syncRow.shows) ? syncRow.shows : [];
-      const localOverrides = StorageService.getUserSalesOverrides();
-
-      const overrideMap = new Map<string, DailySalesRecord>();
-
-      // Masukkan data remote terlebih dahulu
       remoteOverrides.forEach((r) => {
-        if (r && r.outletId && r.date) {
+        if (r && r.outletId && r.date && !StorageService.isStaticUneditedSalesRecord(r)) {
           overrideMap.set(`${r.outletId}_${r.date}`, {
             ...r,
             id: `sales-${r.outletId}-${r.date}`,
@@ -294,69 +343,60 @@ export async function syncSalesToSupabase(sales: DailySalesRecord[]): Promise<bo
           });
         }
       });
+    }
 
-      // Gabungkan dengan local overrides jika local punya updatedAt lebih baru
-      localOverrides.forEach((loc) => {
-        if (!loc || !loc.outletId || !loc.date) return;
-        const key = `${loc.outletId}_${loc.date}`;
-        const existing = overrideMap.get(key);
-        if (!existing) {
+    // Gabungkan dengan local overrides yang sudah ada di memori lokal
+    const localOverrides = StorageService.getUserSalesOverrides();
+    localOverrides.forEach((loc) => {
+      if (!loc || !loc.outletId || !loc.date) return;
+      const key = `${loc.outletId}_${loc.date}`;
+      const existing = overrideMap.get(key);
+      if (!existing) {
+        overrideMap.set(key, {
+          ...loc,
+          id: `sales-${loc.outletId}-${loc.date}`,
+          isMigrated: false,
+        });
+      } else {
+        const remTime = existing.updatedAt ? new Date(existing.updatedAt).getTime() : 0;
+        const locTime = loc.updatedAt ? new Date(loc.updatedAt).getTime() : 0;
+        if (locTime >= remTime) {
           overrideMap.set(key, {
             ...loc,
             id: `sales-${loc.outletId}-${loc.date}`,
             isMigrated: false,
           });
-        } else {
-          const remTime = existing.updatedAt ? new Date(existing.updatedAt).getTime() : 0;
-          const locTime = loc.updatedAt ? new Date(loc.updatedAt).getTime() : 0;
-          if (locTime >= remTime) {
-            overrideMap.set(key, {
-              ...loc,
-              id: `sales-${loc.outletId}-${loc.date}`,
-              isMigrated: false,
-            });
-          }
         }
-      });
-
-      // Terapkan data sales yang baru saja disimpan sebagai prioritas tertinggi
-      normalSales.forEach((s) => {
-        const key = `${s.outletId}_${s.date}`;
-        overrideMap.set(key, {
-          ...s,
-          id: `sales-${s.outletId}-${s.date}`,
-          isMigrated: false,
-          updatedAt: s.updatedAt || nowIso,
-        });
-      });
-
-      const finalOverrides = Array.from(overrideMap.values());
-
-      await client.from('cinema_sales').upsert(
-        {
-          id: '__SYSTEM_SYNC_DAILY_SALES__',
-          outlet_id: '__SYSTEM_SYNC__',
-          date: '2026-01-01',
-          shows: finalOverrides as any,
-          updated_at: nowIso,
-        },
-        { onConflict: 'id' }
-      );
-    }
-
-    // 2. Simpan juga sebagai baris individual di cinema_sales
-    const payload = sales.map((s) => {
-      const isSystem = String(s.id || '').startsWith('__SYSTEM_SYNC_');
-      return {
-        id: isSystem ? s.id : `sales-${s.outletId}-${s.date}`,
-        outlet_id: s.outletId,
-        date: s.date,
-        shows: s.shows,
-        updated_at: s.updatedAt || nowIso,
-      };
+      }
     });
 
-    const { error } = await client.from('cinema_sales').upsert(payload, { onConflict: 'id' });
+    // Terapkan data sales yang baru saja disimpan sebagai prioritas tertinggi
+    normalSales.forEach((s) => {
+      const key = `${s.outletId}_${s.date}`;
+      overrideMap.set(key, {
+        ...s,
+        id: `sales-${s.outletId}-${s.date}`,
+        isMigrated: false,
+        updatedAt: s.updatedAt || nowIso,
+      });
+    });
+
+    const finalOverrides = Array.from(overrideMap.values());
+
+    // Catat timestamp tulis lokal SEBELUM upsert agar echo WebSocket diabaikan (0 Egress tambahan)
+    recordSyncTimestamp('__SYSTEM_SYNC_DAILY_SALES__', nowIso, true);
+
+    const { error } = await client.from('cinema_sales').upsert(
+      {
+        id: '__SYSTEM_SYNC_DAILY_SALES__',
+        outlet_id: '__SYSTEM_SYNC__',
+        date: '2026-01-01',
+        shows: finalOverrides as any,
+        updated_at: nowIso,
+      },
+      { onConflict: 'id' }
+    );
+
     if (error) {
       console.warn('Sync sales to Supabase warning:', error);
       return false;
@@ -369,7 +409,7 @@ export async function syncSalesToSupabase(sales: DailySalesRecord[]): Promise<bo
 }
 
 /**
- * Ambil Data Sales Harian dari Supabase (Dual-Channel: __SYSTEM_SYNC_DAILY_SALES__ + baris individual terbaru)
+ * Ambil Data Sales Harian dari Supabase (1 Primary Key Query - Hemat Egress & Log Ingestion)
  */
 export async function fetchSalesFromSupabase(): Promise<DailySalesRecord[] | null> {
   const client = getSupabase();
@@ -378,82 +418,30 @@ export async function fetchSalesFromSupabase(): Promise<DailySalesRecord[] | nul
   try {
     const dedupedMap = new Map<string, DailySalesRecord>();
 
-    // 1. Channel Utama: Ambil dari __SYSTEM_SYNC_DAILY_SALES__ (Primary Key lookup cepat & akurat)
-    const { data: syncRow } = await client
+    const { data: syncRow, error } = await client
       .from('cinema_sales')
       .select('id, shows, updated_at')
       .eq('id', '__SYSTEM_SYNC_DAILY_SALES__')
       .maybeSingle();
 
-    if (syncRow && Array.isArray(syncRow.shows)) {
-      for (const item of syncRow.shows) {
-        if (item && item.outletId && item.date) {
-          const key = `${item.outletId}_${item.date}`;
-          dedupedMap.set(key, {
-            id: `sales-${item.outletId}-${item.date}`,
-            outletId: item.outletId,
-            date: item.date,
-            shows: Array.isArray(item.shows) ? item.shows : [],
-            isMigrated: false,
-            updatedAt: item.updatedAt || syncRow.updated_at || undefined,
-          });
-        }
+    if (error) return null;
+
+    if (syncRow) {
+      if (syncRow.updated_at) {
+        recordSyncTimestamp('__SYSTEM_SYNC_DAILY_SALES__', String(syncRow.updated_at), false);
       }
-    }
-
-    // 2. Channel Pendukung: Ambil baris individual terbaru dari cinema_sales (filter __SYSTEM_SYNC_ di level SQL untuk hemat Egress 99%)
-    const { data: indRows } = await client
-      .from('cinema_sales')
-      .select('id, outlet_id, date, shows, updated_at')
-      .not('id', 'like', '__SYSTEM_SYNC_%')
-      .not('id', 'like', 'mig_%')
-      .order('updated_at', { ascending: false })
-      .limit(40);
-
-    if (Array.isArray(indRows)) {
-      for (const row of indRows) {
-        const rowId = String(row.id || '');
-        const rowOutlet = String(row.outlet_id || '');
-        if (
-          !rowOutlet ||
-          !row.date ||
-          rowId.startsWith('__SYSTEM_SYNC_') ||
-          rowOutlet.startsWith('__SYSTEM_SYNC_') ||
-          rowId.startsWith('mig_')
-        ) {
-          continue;
-        }
-
-        const shows: any[] = Array.isArray(row.shows) ? row.shows : [];
-        const hasFilledShow = shows.some(
-          (s) =>
-            s &&
-            (s.isFilled ||
-              (s.omsetCinema || 0) > 0 ||
-              (s.omsetFnB || 0) > 0 ||
-              (s.bill || 0) > 0 ||
-              (s.penonton || 0) > 0)
-        );
-        if (!hasFilledShow) continue;
-
-        const key = `${rowOutlet}_${row.date}`;
-        const record: DailySalesRecord = {
-          id: `sales-${rowOutlet}-${row.date}`,
-          outletId: rowOutlet,
-          date: row.date,
-          shows,
-          isMigrated: false,
-          updatedAt: row.updated_at || undefined,
-        };
-
-        const existing = dedupedMap.get(key);
-        if (!existing) {
-          dedupedMap.set(key, record);
-        } else {
-          const prevTime = existing.updatedAt ? new Date(existing.updatedAt).getTime() : 0;
-          const currTime = record.updatedAt ? new Date(record.updatedAt).getTime() : 0;
-          if (currTime > prevTime) {
-            dedupedMap.set(key, record);
+      if (Array.isArray(syncRow.shows)) {
+        for (const item of syncRow.shows) {
+          if (item && item.outletId && item.date) {
+            const key = `${item.outletId}_${item.date}`;
+            dedupedMap.set(key, {
+              id: `sales-${item.outletId}-${item.date}`,
+              outletId: item.outletId,
+              date: item.date,
+              shows: Array.isArray(item.shows) ? item.shows : [],
+              isMigrated: false,
+              updatedAt: item.updatedAt || syncRow.updated_at || undefined,
+            });
           }
         }
       }
@@ -472,12 +460,14 @@ export async function fetchSalesFromSupabase(): Promise<DailySalesRecord[] | nul
 export async function syncOccupancyToSupabase(
   outletId: string,
   date: string,
-  rows: any[]
+  rows: any[],
+  skipMetaPointer = false
 ): Promise<boolean> {
   const client = getSupabase();
   if (!client) return false;
 
   try {
+    const nowIso = new Date().toISOString();
     const id = `${outletId}_${date}`;
     const { error } = await client.from('cinema_occupancy').upsert(
       {
@@ -485,7 +475,7 @@ export async function syncOccupancyToSupabase(
         outlet_id: outletId,
         date,
         rows,
-        updated_at: new Date().toISOString(),
+        updated_at: nowIso,
       },
       { onConflict: 'id' }
     );
@@ -494,6 +484,21 @@ export async function syncOccupancyToSupabase(
       console.warn('Sync occupancy to Supabase warning:', error);
       return false;
     }
+
+    if (!skipMetaPointer) {
+      recordSyncTimestamp('__SYSTEM_SYNC_OCCUPANCY__', nowIso, true);
+      await client.from('cinema_sales').upsert(
+        {
+          id: '__SYSTEM_SYNC_OCCUPANCY__',
+          outlet_id: '__SYSTEM_SYNC__',
+          date: '2026-01-01',
+          shows: [{ lastOutletId: outletId, lastDate: date, updatedAt: nowIso }] as any,
+          updated_at: nowIso,
+        },
+        { onConflict: 'id' }
+      );
+    }
+
     return true;
   } catch (e) {
     console.warn('Supabase occupancy sync error:', e);
@@ -512,7 +517,7 @@ export async function fetchOccupancyFromSupabase(
   if (!client) return null;
 
   try {
-    let query = client.from('cinema_occupancy').select('*');
+    let query = client.from('cinema_occupancy').select('id, outlet_id, date, rows, updated_at');
     if (outletId) query = query.eq('outlet_id', outletId);
     if (date) query = query.eq('date', date);
 
@@ -527,21 +532,14 @@ export async function fetchOccupancyFromSupabase(
 }
 
 /**
- * Merges remote sales records from Supabase into local storage and notifies UI components
+ * Merges remote sales records from Supabase into local storage (Strict Read-Only: Never triggers write loops)
  */
 export async function mergeRemoteSalesToLocal(): Promise<boolean> {
   const remoteSales = await fetchSalesFromSupabase();
-  const localOverrides = StorageService.getUserSalesOverrides();
-
-  // Jika di remote belum ada namun di perangkat lokal ada inputan user, dorong ke Supabase
-  if ((!remoteSales || remoteSales.length === 0) && localOverrides.length > 0) {
-    await syncSalesToSupabase(localOverrides);
-    return false;
-  }
-
   if (!remoteSales || remoteSales.length === 0) return false;
 
   const currentLocal = StorageService.getDailySales();
+  const localOverrides = StorageService.getUserSalesOverrides();
   const overrideMap = new Map<string, DailySalesRecord>();
   localOverrides.forEach((ov) => {
     if (ov && ov.outletId && ov.date) {
@@ -550,21 +548,10 @@ export async function mergeRemoteSalesToLocal(): Promise<boolean> {
   });
 
   let updated = false;
-  let needsPushBack = false;
-
-  // Cek apakah ada override lokal yang belum ada di remote
-  const remoteKeySet = new Set(remoteSales.map((r) => `${r.outletId}_${r.date}`));
-  for (const locOv of localOverrides) {
-    if (locOv && locOv.outletId && locOv.date && !remoteKeySet.has(`${locOv.outletId}_${locOv.date}`)) {
-      needsPushBack = true;
-    }
-  }
 
   remoteSales.forEach((remote) => {
     const key = `${remote.outletId}_${remote.date}`;
 
-    // Jangan timpa data lokal jika user baru saja menyimpan di tab/perangkat ini dalam 10 detik terakhir
-    // kecuali data remote punya timestamp yang lebih baru dari waktu simpan lokal
     try {
       const localSaveTsRaw = localStorage.getItem(`cinema_xxi_sales_local_save_ts_${key}`);
       if (localSaveTsRaw) {
@@ -592,12 +579,16 @@ export async function mergeRemoteSalesToLocal(): Promise<boolean> {
       const remoteStr = JSON.stringify(remote.shows || []);
       if (localStr !== remoteStr) {
         currentLocal[idx] = normalizedRemote;
-        overrideMap.set(key, normalizedRemote);
+        if (!StorageService.isStaticUneditedSalesRecord(normalizedRemote)) {
+          overrideMap.set(key, normalizedRemote);
+        }
         updated = true;
       }
     } else {
       currentLocal.push(normalizedRemote);
-      overrideMap.set(key, normalizedRemote);
+      if (!StorageService.isStaticUneditedSalesRecord(normalizedRemote)) {
+        overrideMap.set(key, normalizedRemote);
+      }
       updated = true;
     }
   });
@@ -615,18 +606,41 @@ export async function mergeRemoteSalesToLocal(): Promise<boolean> {
     StorageService.broadcastChange('sales');
   }
 
-  if (needsPushBack && localOverrides.length > 0) {
-    syncSalesToSupabase(localOverrides);
-  }
-
   return updated;
 }
 
 /**
- * Merges remote occupancy records from Supabase into local storage and notifies UI components
+ * Merges remote occupancy records from Supabase into local storage (Smart Target / Full)
  */
-export async function mergeRemoteOccupancyToLocal(): Promise<boolean> {
-  const remoteOcc = await fetchOccupancyFromSupabase();
+export async function mergeRemoteOccupancyToLocal(
+  targetOutletId?: string,
+  targetDate?: string
+): Promise<boolean> {
+  const client = getSupabase();
+  if (!client) return false;
+
+  // Jika dipanggil dari delta sync tanpa parameter spesifik, cek pointer __SYSTEM_SYNC_OCCUPANCY__ dulu agar hanya unduh 1 baris (~1 KB)
+  if (!targetOutletId && !targetDate && hasCompletedInitialPull) {
+    try {
+      const { data: ptrRow } = await client
+        .from('cinema_sales')
+        .select('id, shows, updated_at')
+        .eq('id', '__SYSTEM_SYNC_OCCUPANCY__')
+        .maybeSingle();
+      if (ptrRow?.updated_at) {
+        recordSyncTimestamp('__SYSTEM_SYNC_OCCUPANCY__', String(ptrRow.updated_at), false);
+      }
+      const ptr = Array.isArray(ptrRow?.shows) ? ptrRow.shows[0] : null;
+      if (ptr && ptr.lastOutletId && ptr.lastDate) {
+        targetOutletId = ptr.lastOutletId;
+        targetDate = ptr.lastDate;
+      }
+    } catch {
+      // fallback
+    }
+  }
+
+  const remoteOcc = await fetchOccupancyFromSupabase(targetOutletId, targetDate);
   if (!remoteOcc || remoteOcc.length === 0) return false;
 
   let updated = false;
@@ -684,8 +698,7 @@ function isTableMissingError(err: any): boolean {
 }
 
 /**
- * Sinkronisasi Satu Record Card Inspection ke Supabase
- * Mendukung Dual-Channel: __SYSTEM_SYNC_INSPECTIONS__ di cinema_sales + tabel cinema_inspections (jika ada)
+ * Sinkronisasi Satu Record Card Inspection ke Supabase (Tanpa re-download 410 KB jika sudah tersinkron)
  */
 export async function syncInspectionToSupabase(record: ToiletInspectionRecord): Promise<boolean> {
   const client = getSupabase();
@@ -693,26 +706,29 @@ export async function syncInspectionToSupabase(record: ToiletInspectionRecord): 
 
   try {
     const nowIso = new Date().toISOString();
-
-    // 1. Simpan ke Master Sync Row __SYSTEM_SYNC_INSPECTIONS__ di cinema_sales (100% tersedia)
-    const { data: syncRow } = await client
-      .from('cinema_sales')
-      .select('id, shows')
-      .eq('id', '__SYSTEM_SYNC_INSPECTIONS__')
-      .maybeSingle();
-
-    const remoteList: ToiletInspectionRecord[] =
-      syncRow && Array.isArray(syncRow.shows) ? syncRow.shows : [];
-    const localList = StorageService.getInspections();
     const map = new Map<string, ToiletInspectionRecord>();
 
-    remoteList.forEach((r) => {
-      if (r && r.id) map.set(r.id, r);
-    });
+    if (!lastSeenSyncTimestamps['__SYSTEM_SYNC_INSPECTIONS__']) {
+      const { data: syncRow } = await client
+        .from('cinema_sales')
+        .select('id, shows')
+        .eq('id', '__SYSTEM_SYNC_INSPECTIONS__')
+        .maybeSingle();
+
+      const remoteList: ToiletInspectionRecord[] =
+        syncRow && Array.isArray(syncRow.shows) ? syncRow.shows : [];
+      remoteList.forEach((r) => {
+        if (r && r.id) map.set(r.id, r);
+      });
+    }
+
+    const localList = StorageService.getInspections();
     localList.forEach((l) => {
       if (l && l.id) map.set(l.id, l);
     });
     map.set(record.id, record);
+
+    recordSyncTimestamp('__SYSTEM_SYNC_INSPECTIONS__', nowIso, true);
 
     const { error: salesSyncErr } = await client.from('cinema_sales').upsert(
       {
@@ -725,31 +741,6 @@ export async function syncInspectionToSupabase(record: ToiletInspectionRecord): 
       { onConflict: 'id' }
     );
 
-    // 2. Simpan juga ke tabel khusus cinema_inspections jika tabel tersedia
-    if (!missingOptionalTables.has('cinema_inspections')) {
-      const payload = {
-        id: record.id,
-        outlet_id: record.outletId,
-        date: record.date,
-        show_number: record.showNumber,
-        type: record.type,
-        inspector_name: record.inspectorName,
-        time: record.time || '',
-        notes: record.notes || '',
-        checklist: record.checklist || {},
-        status: record.status || 'Sudah Lapor',
-        updated_at: nowIso,
-      };
-
-      const { error } = await client
-        .from('cinema_inspections')
-        .upsert(payload, { onConflict: 'id' });
-
-      if (error && isTableMissingError(error)) {
-        missingOptionalTables.add('cinema_inspections');
-      }
-    }
-
     return !salesSyncErr;
   } catch (e) {
     console.warn('Supabase inspection sync error:', e);
@@ -758,7 +749,7 @@ export async function syncInspectionToSupabase(record: ToiletInspectionRecord): 
 }
 
 /**
- * Ambil Rekap Card Inspection dari Supabase
+ * Ambil Rekap Card Inspection dari Supabase (1 Query __SYSTEM_SYNC_INSPECTIONS__)
  */
 export async function fetchInspectionsFromSupabase(
   outletId?: string,
@@ -770,52 +761,25 @@ export async function fetchInspectionsFromSupabase(
   try {
     const map = new Map<string, ToiletInspectionRecord>();
 
-    // 1. Ambil dari Master Sync Row __SYSTEM_SYNC_INSPECTIONS__ di cinema_sales
-    const { data: syncRow } = await client
+    const { data: syncRow, error } = await client
       .from('cinema_sales')
-      .select('id, shows')
+      .select('id, shows, updated_at')
       .eq('id', '__SYSTEM_SYNC_INSPECTIONS__')
       .maybeSingle();
 
-    if (syncRow && Array.isArray(syncRow.shows)) {
-      for (const item of syncRow.shows) {
-        if (item && item.id) {
-          if (outletId && item.outletId !== outletId) continue;
-          if (date && item.date !== date) continue;
-          map.set(item.id, item);
-        }
+    if (error) return null;
+
+    if (syncRow) {
+      if (syncRow.updated_at) {
+        recordSyncTimestamp('__SYSTEM_SYNC_INSPECTIONS__', String(syncRow.updated_at), false);
       }
-    }
-
-    // 2. Cek tabel khusus cinema_inspections jika tersedia
-    if (!missingOptionalTables.has('cinema_inspections')) {
-      let query = client
-        .from('cinema_inspections')
-        .select('*')
-        .order('date', { ascending: false });
-
-      if (outletId) query = query.eq('outlet_id', outletId);
-      if (date) query = query.eq('date', date);
-
-      const { data, error } = await query;
-      if (error) {
-        if (isTableMissingError(error)) {
-          missingOptionalTables.add('cinema_inspections');
-        }
-      } else if (Array.isArray(data)) {
-        for (const row of data) {
-          map.set(row.id, {
-            id: row.id,
-            outletId: row.outlet_id,
-            date: row.date,
-            showNumber: row.show_number,
-            type: row.type,
-            inspectorName: row.inspector_name,
-            time: row.time || '',
-            notes: row.notes || '',
-            checklist: row.checklist || {},
-            status: row.status || 'Sudah Lapor',
-          });
+      if (Array.isArray(syncRow.shows)) {
+        for (const item of syncRow.shows) {
+          if (item && item.id) {
+            if (outletId && item.outletId !== outletId) continue;
+            if (date && item.date !== date) continue;
+            map.set(item.id, item);
+          }
         }
       }
     }
@@ -828,7 +792,7 @@ export async function fetchInspectionsFromSupabase(
 }
 
 /**
- * Merges remote inspection records from Supabase into local storage and notifies UI components
+ * Merges remote inspection records from Supabase into local storage (Read-Only)
  */
 export async function mergeRemoteInspectionsToLocal(): Promise<boolean> {
   const remoteInspections = await fetchInspectionsFromSupabase();
@@ -859,8 +823,7 @@ export async function mergeRemoteInspectionsToLocal(): Promise<boolean> {
 }
 
 /**
- * Sinkronisasi Data Karyawan & Daftar Karyawan Dihapus ke Supabase
- * Mendukung tabel khusus public.cinema_employees sekaligus fallback ke cinema_sales
+ * Sinkronisasi Data Karyawan & Daftar Karyawan Dihapus ke Supabase (1 Batch Request)
  */
 export async function syncEmployeesToSupabase(
   employees?: Employee[],
@@ -875,48 +838,9 @@ export async function syncEmployeesToSupabase(
     const delList: string[] = deletedIds || (delRaw ? JSON.parse(delRaw) : []);
     const nowIso = new Date().toISOString();
 
-    let tableSuccess = false;
+    recordSyncTimestamp('__SYSTEM_SYNC_EMPLOYEES__', nowIso, true);
+    recordSyncTimestamp('__SYSTEM_SYNC_DELETED_EMPLOYEES__', nowIso, true);
 
-    // 1. Coba sinkronisasi ke tabel khusus public.cinema_employees (jika sudah di-run di Supabase)
-    if (empList.length > 0 && !missingOptionalTables.has('cinema_employees')) {
-      const rows = empList.map((e: any) => ({
-        id: e.id,
-        nik: e.nik || '-',
-        name: e.name || '',
-        jabatan: e.jabatan || 'Cinema Manager',
-        divisi: e.divisi || 'Cinema',
-        outlet_id: e.outletId || 'the-park-sawangan-xxi',
-        gender: e.gender || 'L',
-        tanggal_lahir: e.tanggalLahir || '-',
-        status_kerja: e.statusKerja || 'Kontrak',
-        tanggal_kontrak: e.tanggalKontrak || '2026-01-01',
-        habis_kontrak: e.habisKontrak || '-',
-        phone: e.phone || '-',
-        photo_url: e.photoUrl || '',
-        is_deleted: false,
-        updated_at: e.updatedAt || nowIso,
-      }));
-
-      const { error: empTableErr } = await client
-        .from('cinema_employees')
-        .upsert(rows, { onConflict: 'id' });
-
-      if (empTableErr) {
-        if (isTableMissingError(empTableErr)) {
-          missingOptionalTables.add('cinema_employees');
-        }
-      } else {
-        tableSuccess = true;
-        if (delList.length > 0) {
-          await client
-            .from('cinema_employees')
-            .update({ is_deleted: true, updated_at: nowIso })
-            .in('id', delList);
-        }
-      }
-    }
-
-    // 2. Simpan juga ke reserved row pada cinema_sales sebagai backup / kompatibilitas penuh
     const payload = [
       {
         id: '__SYSTEM_SYNC_EMPLOYEES__',
@@ -935,7 +859,7 @@ export async function syncEmployeesToSupabase(
     ];
 
     const { error } = await client.from('cinema_sales').upsert(payload, { onConflict: 'id' });
-    if (error && !tableSuccess) {
+    if (error) {
       console.warn('Sync employees to Supabase warning:', error);
       return false;
     }
@@ -947,7 +871,7 @@ export async function syncEmployeesToSupabase(
 }
 
 /**
- * Ambil & Gabungkan Data Karyawan dari Supabase ke Local Storage secara Cerdas
+ * Ambil & Gabungkan Data Karyawan dari Supabase ke Local Storage (Strict Read-Only: Tanpa Loop Push-Back)
  */
 export async function mergeRemoteEmployeesToLocal(): Promise<boolean> {
   const client = getSupabase();
@@ -959,88 +883,34 @@ export async function mergeRemoteEmployeesToLocal(): Promise<boolean> {
     const localDeletedIds: string[] = localDelRaw ? JSON.parse(localDelRaw) : [];
 
     let remoteEmployees: Employee[] = [];
-    let remoteDeletedIds: string[] = [];
-    let hasDedicatedTable = false;
+    const remoteDeletedIds: string[] = [];
 
-    // 1. Cek tabel khusus public.cinema_employees terlebih dahulu (jika tersedia)
-    if (!missingOptionalTables.has('cinema_employees')) {
-      const { data: tableRows, error: tableErr } = await client
-        .from('cinema_employees')
-        .select('*');
-
-      if (tableErr) {
-        if (isTableMissingError(tableErr)) {
-          missingOptionalTables.add('cinema_employees');
-        }
-      } else if (Array.isArray(tableRows)) {
-        hasDedicatedTable = true;
-        if (tableRows.length === 0 && localEmployees.length > 0) {
-          await syncEmployeesToSupabase(localEmployees, localDeletedIds);
-        } else {
-          for (const r of tableRows) {
-            if (r.is_deleted) {
-              if (r.id) remoteDeletedIds.push(String(r.id));
-              if (r.nik && r.nik !== '-') remoteDeletedIds.push(String(r.nik).trim());
-            } else if (r.id) {
-              remoteEmployees.push({
-                id: String(r.id),
-                nik: String(r.nik || '-'),
-                name: String(r.name || ''),
-                jabatan: String(r.jabatan || 'Cinema Manager'),
-                divisi: (r.divisi || 'Cinema') as any,
-                outletId: String(r.outlet_id || 'the-park-sawangan-xxi'),
-                gender: (r.gender === 'P' ? 'P' : 'L') as 'L' | 'P',
-                tanggalLahir: r.tanggal_lahir || '-',
-                statusKerja: (r.status_kerja || 'Kontrak') as any,
-                tanggalKontrak: r.tanggal_kontrak || '2026-01-01',
-                habisKontrak: r.habis_kontrak || '-',
-                phone: r.phone || '-',
-                photoUrl: r.photo_url || undefined,
-                ...({ updatedAt: r.updated_at } as any),
-              });
-            }
-          }
-        }
-      }
-    }
-
-    // 2. Cek juga backup row di cinema_sales
     const { data, error } = await client
       .from('cinema_sales')
       .select('id, shows, updated_at')
       .in('id', ['__SYSTEM_SYNC_EMPLOYEES__', '__SYSTEM_SYNC_DELETED_EMPLOYEES__']);
 
-    if (!error && data) {
-      const empRow = data.find((r: any) => r.id === '__SYSTEM_SYNC_EMPLOYEES__');
-      const delRow = data.find((r: any) => r.id === '__SYSTEM_SYNC_DELETED_EMPLOYEES__');
+    if (error || !data) return false;
 
-      if (delRow && Array.isArray(delRow.shows)) {
-        remoteDeletedIds.push(...delRow.shows);
-      }
+    const empRow = data.find((r: any) => r.id === '__SYSTEM_SYNC_EMPLOYEES__');
+    const delRow = data.find((r: any) => r.id === '__SYSTEM_SYNC_DELETED_EMPLOYEES__');
 
-      if (remoteEmployees.length === 0 && empRow && Array.isArray(empRow.shows) && empRow.shows.length > 0) {
-        remoteEmployees = empRow.shows;
-        if (hasDedicatedTable) {
-          await syncEmployeesToSupabase(remoteEmployees, remoteDeletedIds);
-        }
-      }
+    if (empRow?.updated_at) {
+      recordSyncTimestamp('__SYSTEM_SYNC_EMPLOYEES__', String(empRow.updated_at), false);
+    }
+    if (delRow?.updated_at) {
+      recordSyncTimestamp('__SYSTEM_SYNC_DELETED_EMPLOYEES__', String(delRow.updated_at), false);
+    }
+
+    if (delRow && Array.isArray(delRow.shows)) {
+      remoteDeletedIds.push(...delRow.shows);
+    }
+
+    if (empRow && Array.isArray(empRow.shows) && empRow.shows.length > 0) {
+      remoteEmployees = empRow.shows;
     }
 
     if (remoteEmployees.length === 0) {
-      const hasLocalEdits =
-        hasDedicatedTable ||
-        localStorage.getItem('cinema_xxi_employees_modified') === 'true' ||
-        localDeletedIds.length > 0 ||
-        localEmployees.some(
-          (e: any) =>
-            (e.tanggalLahir && e.tanggalLahir !== '-') ||
-            Boolean(e.updatedAt) ||
-            String(e.id || '').startsWith('emp_')
-        );
-
-      if (hasLocalEdits && localEmployees.length > 0) {
-        await syncEmployeesToSupabase(localEmployees, localDeletedIds);
-      }
       return false;
     }
 
@@ -1048,11 +918,6 @@ export async function mergeRemoteEmployeesToLocal(): Promise<boolean> {
     const mergedDeletedList = Array.from(mergedDeletedSet);
     if (mergedDeletedList.length !== localDeletedIds.length) {
       localStorage.setItem('cinema_xxi_deleted_employee_ids', JSON.stringify(mergedDeletedList));
-    }
-
-    let needsPushBack = false;
-    if (localDeletedIds.some((id) => !remoteDeletedIds.includes(id))) {
-      needsPushBack = true;
     }
 
     const localById = new Map<string, Employee>();
@@ -1083,13 +948,11 @@ export async function mergeRemoteEmployeesToLocal(): Promise<boolean> {
 
         if (locTime > remTime) {
           chosen = { ...rem, ...loc };
-          needsPushBack = true;
         } else {
           const remHasDob = rem.tanggalLahir && rem.tanggalLahir !== '-';
           const locHasDob = loc.tanggalLahir && loc.tanggalLahir !== '-';
           if (!remHasDob && locHasDob && remTime === 0) {
             chosen = { ...rem, tanggalLahir: loc.tanggalLahir };
-            needsPushBack = true;
           }
         }
       }
@@ -1118,7 +981,6 @@ export async function mergeRemoteEmployeesToLocal(): Promise<boolean> {
           seenIds.add(loc.id);
           if (cleanNik && cleanNik !== '-') seenNiks.add(cleanNik);
           mergedList.unshift(loc);
-          needsPushBack = true;
         }
       }
     }
@@ -1126,19 +988,14 @@ export async function mergeRemoteEmployeesToLocal(): Promise<boolean> {
     const currentRaw = localStorage.getItem('cinema_xxi_employees') || '';
     const mergedRaw = JSON.stringify(mergedList);
 
-    let updated = false;
     if (currentRaw !== mergedRaw && mergedList.length > 0) {
       localStorage.setItem('cinema_xxi_employees', mergedRaw);
       localStorage.setItem('EMPLOYEES_INITIALIZED_V6', 'true');
       StorageService.broadcastChange('employees');
-      updated = true;
+      return true;
     }
 
-    if (needsPushBack && mergedList.length > 0) {
-      await syncEmployeesToSupabase(mergedList, mergedDeletedList);
-    }
-
-    return updated;
+    return false;
   } catch (e) {
     console.warn('Merge remote employees error:', e);
     return false;
@@ -1146,8 +1003,7 @@ export async function mergeRemoteEmployeesToLocal(): Promise<boolean> {
 }
 
 /**
- * Sinkronisasi Data KPI Karyawan ke Supabase
- * Mendukung tabel khusus public.cinema_employee_kpis sekaligus fallback ke cinema_sales
+ * Sinkronisasi Data KPI Karyawan ke Supabase (1 Query __SYSTEM_SYNC_EMPLOYEE_KPIS__)
  */
 export async function syncEmployeeKpisToSupabase(records?: EmployeeKpiRecord[]): Promise<boolean> {
   const client = getSupabase();
@@ -1156,29 +1012,8 @@ export async function syncEmployeeKpisToSupabase(records?: EmployeeKpiRecord[]):
   try {
     const list = records || StorageService.getEmployeeKpis();
     const nowIso = new Date().toISOString();
-    let tableSuccess = false;
 
-    if (list.length > 0 && !missingOptionalTables.has('cinema_employee_kpis')) {
-      const kpiRows = list.map((k) => ({
-        id: k.id,
-        employee_id: k.employeeId,
-        month: k.month,
-        score: k.score,
-        notes: k.notes || '',
-        graded_by: k.gradedBy || '',
-        updated_at: nowIso,
-      }));
-      const { error: kpiTableErr } = await client
-        .from('cinema_employee_kpis')
-        .upsert(kpiRows, { onConflict: 'id' });
-      if (kpiTableErr) {
-        if (isTableMissingError(kpiTableErr)) {
-          missingOptionalTables.add('cinema_employee_kpis');
-        }
-      } else {
-        tableSuccess = true;
-      }
-    }
+    recordSyncTimestamp('__SYSTEM_SYNC_EMPLOYEE_KPIS__', nowIso, true);
 
     const { error } = await client.from('cinema_sales').upsert(
       {
@@ -1190,7 +1025,7 @@ export async function syncEmployeeKpisToSupabase(records?: EmployeeKpiRecord[]):
       },
       { onConflict: 'id' }
     );
-    if (error && !tableSuccess) {
+    if (error) {
       console.warn('Sync employee KPIs to Supabase warning:', error);
       return false;
     }
@@ -1202,7 +1037,7 @@ export async function syncEmployeeKpisToSupabase(records?: EmployeeKpiRecord[]):
 }
 
 /**
- * Ambil & Gabungkan Data KPI Karyawan dari Supabase ke Local Storage
+ * Ambil & Gabungkan Data KPI Karyawan dari Supabase ke Local Storage (Read-Only)
  */
 export async function mergeRemoteEmployeeKpisToLocal(): Promise<boolean> {
   const client = getSupabase();
@@ -1210,47 +1045,20 @@ export async function mergeRemoteEmployeeKpisToLocal(): Promise<boolean> {
 
   try {
     const localKpis = StorageService.getEmployeeKpis();
-    let remoteKpis: EmployeeKpiRecord[] = [];
 
-    // 1. Cek tabel khusus public.cinema_employee_kpis terlebih dahulu (jika tersedia)
-    if (!missingOptionalTables.has('cinema_employee_kpis')) {
-      const { data: tableKpis, error: tableErr } = await client
-        .from('cinema_employee_kpis')
-        .select('*');
+    const { data, error } = await client
+      .from('cinema_sales')
+      .select('id, shows, updated_at')
+      .eq('id', '__SYSTEM_SYNC_EMPLOYEE_KPIS__')
+      .maybeSingle();
 
-      if (tableErr) {
-        if (isTableMissingError(tableErr)) {
-          missingOptionalTables.add('cinema_employee_kpis');
-        }
-      } else if (Array.isArray(tableKpis)) {
-        if (tableKpis.length === 0 && localKpis.length > 0) {
-          await syncEmployeeKpisToSupabase(localKpis);
-        } else {
-          remoteKpis = tableKpis.map((r: any) => ({
-            id: String(r.id),
-            employeeId: String(r.employee_id),
-            month: String(r.month),
-            score: Number(r.score || 0),
-            notes: String(r.notes || ''),
-            gradedBy: String(r.graded_by || ''),
-          }));
-        }
-      }
+    if (error || !data) return false;
+
+    if (data.updated_at) {
+      recordSyncTimestamp('__SYSTEM_SYNC_EMPLOYEE_KPIS__', String(data.updated_at), false);
     }
 
-    // 2. Fallback ke backup row di cinema_sales jika tabel khusus belum berisi data
-    if (remoteKpis.length === 0) {
-      const { data, error } = await client
-        .from('cinema_sales')
-        .select('id, shows')
-        .eq('id', '__SYSTEM_SYNC_EMPLOYEE_KPIS__')
-        .maybeSingle();
-
-      if (!error && data && Array.isArray(data.shows)) {
-        remoteKpis = data.shows;
-      }
-    }
-
+    const remoteKpis: EmployeeKpiRecord[] = Array.isArray(data.shows) ? data.shows : [];
     if (remoteKpis.length === 0) return false;
 
     const kpiMap = new Map<string, EmployeeKpiRecord>();
@@ -1286,19 +1094,28 @@ export async function syncCashierPerformanceToSupabase(
   const client = getSupabase();
   if (!client) return false;
   try {
+    const nowIso = new Date().toISOString();
     const allLocal = records || StorageService.getCashierDailyPerformanceAll();
-    const { data } = await client
-      .from('cinema_sales')
-      .select('id, shows')
-      .eq('id', '__SYSTEM_SYNC_SDM_PERFORMANCE__')
-      .maybeSingle();
-
-    const remoteList: CashierDailyPerformanceRecord[] =
-      data && Array.isArray(data.shows) ? data.shows : [];
     const map = new Map<string, CashierDailyPerformanceRecord>();
-    remoteList.forEach((r) => {
-      if (r && r.id) map.set(r.id, r);
-    });
+
+    if (!lastSeenSyncTimestamps['__SYSTEM_SYNC_SDM_PERFORMANCE__']) {
+      const { data } = await client
+        .from('cinema_sales')
+        .select('id, shows')
+        .eq('id', '__SYSTEM_SYNC_SDM_PERFORMANCE__')
+        .maybeSingle();
+
+      const remoteList: CashierDailyPerformanceRecord[] =
+        data && Array.isArray(data.shows) ? data.shows : [];
+      remoteList.forEach((r) => {
+        if (r && r.id) map.set(r.id, r);
+      });
+    } else {
+      StorageService.getCashierDailyPerformanceAll().forEach((r) => {
+        if (r && r.id) map.set(r.id, r);
+      });
+    }
+
     allLocal.forEach((lr) => {
       if (lr && lr.id) {
         const existing = map.get(lr.id);
@@ -1309,13 +1126,15 @@ export async function syncCashierPerformanceToSupabase(
     });
 
     const finalList = Array.from(map.values());
+    recordSyncTimestamp('__SYSTEM_SYNC_SDM_PERFORMANCE__', nowIso, true);
+
     await client.from('cinema_sales').upsert(
       {
         id: '__SYSTEM_SYNC_SDM_PERFORMANCE__',
         outlet_id: '__SYSTEM_SYNC__',
         date: '2026-01-01',
         shows: finalList,
-        updated_at: new Date().toISOString(),
+        updated_at: nowIso,
       },
       { onConflict: 'id' }
     );
@@ -1332,20 +1151,19 @@ export async function mergeRemoteCashierPerformanceToLocal(): Promise<boolean> {
   try {
     const { data, error } = await client
       .from('cinema_sales')
-      .select('id, shows')
+      .select('id, shows, updated_at')
       .eq('id', '__SYSTEM_SYNC_SDM_PERFORMANCE__')
       .maybeSingle();
 
     if (error || !data || !Array.isArray(data.shows)) return false;
-
-    const remoteList: CashierDailyPerformanceRecord[] = data.shows;
-    const localList = StorageService.getCashierDailyPerformanceAll();
-
-    if (remoteList.length === 0 && localList.length > 0) {
-      await syncCashierPerformanceToSupabase(localList);
-      return false;
+    if (data.updated_at) {
+      recordSyncTimestamp('__SYSTEM_SYNC_SDM_PERFORMANCE__', String(data.updated_at), false);
     }
 
+    const remoteList: CashierDailyPerformanceRecord[] = data.shows;
+    if (remoteList.length === 0) return false;
+
+    const localList = StorageService.getCashierDailyPerformanceAll();
     const map = new Map<string, CashierDailyPerformanceRecord>();
     localList.forEach((r) => {
       if (r && r.id) map.set(r.id, r);
@@ -1379,19 +1197,28 @@ export async function syncCashierProductsToSupabase(
   const client = getSupabase();
   if (!client) return false;
   try {
+    const nowIso = new Date().toISOString();
     const allLocal = records || StorageService.getCashierMonthlyProductsAll();
-    const { data } = await client
-      .from('cinema_sales')
-      .select('id, shows')
-      .eq('id', '__SYSTEM_SYNC_SDM_PRODUCTS__')
-      .maybeSingle();
-
-    const remoteList: CashierMonthlyProductRecord[] =
-      data && Array.isArray(data.shows) ? data.shows : [];
     const map = new Map<string, CashierMonthlyProductRecord>();
-    remoteList.forEach((r) => {
-      if (r && r.id) map.set(r.id, r);
-    });
+
+    if (!lastSeenSyncTimestamps['__SYSTEM_SYNC_SDM_PRODUCTS__']) {
+      const { data } = await client
+        .from('cinema_sales')
+        .select('id, shows')
+        .eq('id', '__SYSTEM_SYNC_SDM_PRODUCTS__')
+        .maybeSingle();
+
+      const remoteList: CashierMonthlyProductRecord[] =
+        data && Array.isArray(data.shows) ? data.shows : [];
+      remoteList.forEach((r) => {
+        if (r && r.id) map.set(r.id, r);
+      });
+    } else {
+      StorageService.getCashierMonthlyProductsAll().forEach((r) => {
+        if (r && r.id) map.set(r.id, r);
+      });
+    }
+
     allLocal.forEach((lr) => {
       if (lr && lr.id) {
         const existing = map.get(lr.id);
@@ -1402,13 +1229,15 @@ export async function syncCashierProductsToSupabase(
     });
 
     const finalList = Array.from(map.values());
+    recordSyncTimestamp('__SYSTEM_SYNC_SDM_PRODUCTS__', nowIso, true);
+
     await client.from('cinema_sales').upsert(
       {
         id: '__SYSTEM_SYNC_SDM_PRODUCTS__',
         outlet_id: '__SYSTEM_SYNC__',
         date: '2026-01-01',
         shows: finalList,
-        updated_at: new Date().toISOString(),
+        updated_at: nowIso,
       },
       { onConflict: 'id' }
     );
@@ -1425,20 +1254,19 @@ export async function mergeRemoteCashierProductsToLocal(): Promise<boolean> {
   try {
     const { data, error } = await client
       .from('cinema_sales')
-      .select('id, shows')
+      .select('id, shows, updated_at')
       .eq('id', '__SYSTEM_SYNC_SDM_PRODUCTS__')
       .maybeSingle();
 
     if (error || !data || !Array.isArray(data.shows)) return false;
-
-    const remoteList: CashierMonthlyProductRecord[] = data.shows;
-    const localList = StorageService.getCashierMonthlyProductsAll();
-
-    if (remoteList.length === 0 && localList.length > 0) {
-      await syncCashierProductsToSupabase(localList);
-      return false;
+    if (data.updated_at) {
+      recordSyncTimestamp('__SYSTEM_SYNC_SDM_PRODUCTS__', String(data.updated_at), false);
     }
 
+    const remoteList: CashierMonthlyProductRecord[] = data.shows;
+    if (remoteList.length === 0) return false;
+
+    const localList = StorageService.getCashierMonthlyProductsAll();
     const map = new Map<string, CashierMonthlyProductRecord>();
     localList.forEach((r) => {
       if (r && r.id) map.set(r.id, r);
@@ -1472,25 +1300,32 @@ export async function syncBakingSalesToSupabase(
   const client = getSupabase();
   if (!client) return false;
   try {
+    const nowIso = new Date().toISOString();
     const localList = StorageService.getBakingSales();
-    // Fetch current remote baking sales first so we never clobber another device's outlet/month
-    const { data } = await client
-      .from('cinema_sales')
-      .select('id, shows')
-      .eq('id', '__SYSTEM_SYNC_BAKING_SALES__')
-      .maybeSingle();
-
-    const remoteList: BakingSaleRecord[] =
-      data && Array.isArray(data.shows) ? data.shows : [];
-
     const map = new Map<string, BakingSaleRecord>();
     const makeKey = (r: BakingSaleRecord) => `${r.outletId}_${r.year}_${r.month}`;
 
-    remoteList.forEach((r) => {
-      if (r && r.outletId && r.year && r.month) {
-        map.set(makeKey(r), r);
-      }
-    });
+    if (!lastSeenSyncTimestamps['__SYSTEM_SYNC_BAKING_SALES__']) {
+      const { data } = await client
+        .from('cinema_sales')
+        .select('id, shows')
+        .eq('id', '__SYSTEM_SYNC_BAKING_SALES__')
+        .maybeSingle();
+
+      const remoteList: BakingSaleRecord[] =
+        data && Array.isArray(data.shows) ? data.shows : [];
+      remoteList.forEach((r) => {
+        if (r && r.outletId && r.year && r.month) {
+          map.set(makeKey(r), r);
+        }
+      });
+    } else {
+      localList.forEach((r) => {
+        if (r && r.outletId && r.year && r.month) {
+          map.set(makeKey(r), r);
+        }
+      });
+    }
 
     const toMerge = records && records.length > 0 ? records : localList;
     toMerge.forEach((lr) => {
@@ -1500,7 +1335,6 @@ export async function syncBakingSalesToSupabase(
       if (!existing) {
         map.set(key, lr);
       } else {
-        // Merge dailySales per day and product
         const mergedDaily: { [day: number]: { [productId: number]: number } } = {
           ...(existing.dailySales || {}),
         };
@@ -1519,19 +1353,21 @@ export async function syncBakingSalesToSupabase(
             ...(existing.productTargets || {}),
             ...(lr.productTargets || {}),
           },
-          updatedAt: lr.updatedAt || new Date().toISOString(),
+          updatedAt: lr.updatedAt || nowIso,
         });
       }
     });
 
     const finalArray = Array.from(map.values());
+    recordSyncTimestamp('__SYSTEM_SYNC_BAKING_SALES__', nowIso, true);
+
     const { error } = await client.from('cinema_sales').upsert(
       {
         id: '__SYSTEM_SYNC_BAKING_SALES__',
         outlet_id: '__SYSTEM_SYNC__',
         date: '2026-01-01',
         shows: finalArray,
-        updated_at: new Date().toISOString(),
+        updated_at: nowIso,
       },
       { onConflict: 'id' }
     );
@@ -1552,26 +1388,22 @@ export async function mergeRemoteBakingSalesToLocal(): Promise<boolean> {
   try {
     const { data, error } = await client
       .from('cinema_sales')
-      .select('id, shows')
+      .select('id, shows, updated_at')
       .eq('id', '__SYSTEM_SYNC_BAKING_SALES__')
       .maybeSingle();
 
     if (error || !data || !Array.isArray(data.shows)) {
-      const localList = StorageService.getBakingSales();
-      if (localList.length > 0) {
-        await syncBakingSalesToSupabase(localList);
-      }
       return false;
+    }
+
+    if (data.updated_at) {
+      recordSyncTimestamp('__SYSTEM_SYNC_BAKING_SALES__', String(data.updated_at), false);
     }
 
     const remoteList: BakingSaleRecord[] = data.shows;
+    if (remoteList.length === 0) return false;
+
     const localList = StorageService.getBakingSales();
-
-    if (remoteList.length === 0 && localList.length > 0) {
-      await syncBakingSalesToSupabase(localList);
-      return false;
-    }
-
     const map = new Map<string, BakingSaleRecord>();
     const makeKey = (r: BakingSaleRecord) => `${r.outletId}_${r.year}_${r.month}`;
 
@@ -1633,19 +1465,28 @@ export async function syncDailySectionSalesToSupabase(
   const client = getSupabase();
   if (!client) return false;
   try {
+    const nowIso = new Date().toISOString();
     const allLocal = records || StorageService.getDailySectionSalesAll();
-    const { data } = await client
-      .from('cinema_sales')
-      .select('id, shows')
-      .eq('id', '__SYSTEM_SYNC_DAILY_SECTION__')
-      .maybeSingle();
-
-    const remoteList: DailySectionSalesRecord[] =
-      data && Array.isArray(data.shows) ? data.shows : [];
     const map = new Map<string, DailySectionSalesRecord>();
-    remoteList.forEach((r) => {
-      if (r && r.id) map.set(r.id, r);
-    });
+
+    if (!lastSeenSyncTimestamps['__SYSTEM_SYNC_DAILY_SECTION__']) {
+      const { data } = await client
+        .from('cinema_sales')
+        .select('id, shows')
+        .eq('id', '__SYSTEM_SYNC_DAILY_SECTION__')
+        .maybeSingle();
+
+      const remoteList: DailySectionSalesRecord[] =
+        data && Array.isArray(data.shows) ? data.shows : [];
+      remoteList.forEach((r) => {
+        if (r && r.id) map.set(r.id, r);
+      });
+    } else {
+      StorageService.getDailySectionSalesAll().forEach((r) => {
+        if (r && r.id) map.set(r.id, r);
+      });
+    }
+
     allLocal.forEach((lr) => {
       if (lr && lr.id) {
         const existing = map.get(lr.id);
@@ -1656,13 +1497,15 @@ export async function syncDailySectionSalesToSupabase(
     });
 
     const finalList = Array.from(map.values());
+    recordSyncTimestamp('__SYSTEM_SYNC_DAILY_SECTION__', nowIso, true);
+
     await client.from('cinema_sales').upsert(
       {
         id: '__SYSTEM_SYNC_DAILY_SECTION__',
         outlet_id: '__SYSTEM_SYNC__',
         date: '2026-01-01',
         shows: finalList,
-        updated_at: new Date().toISOString(),
+        updated_at: nowIso,
       },
       { onConflict: 'id' }
     );
@@ -1679,20 +1522,19 @@ export async function mergeRemoteDailySectionSalesToLocal(): Promise<boolean> {
   try {
     const { data, error } = await client
       .from('cinema_sales')
-      .select('id, shows')
+      .select('id, shows, updated_at')
       .eq('id', '__SYSTEM_SYNC_DAILY_SECTION__')
       .maybeSingle();
 
     if (error || !data || !Array.isArray(data.shows)) return false;
-
-    const remoteList: DailySectionSalesRecord[] = data.shows;
-    const localList = StorageService.getDailySectionSalesAll();
-
-    if (remoteList.length === 0 && localList.length > 0) {
-      await syncDailySectionSalesToSupabase(localList);
-      return false;
+    if (data.updated_at) {
+      recordSyncTimestamp('__SYSTEM_SYNC_DAILY_SECTION__', String(data.updated_at), false);
     }
 
+    const remoteList: DailySectionSalesRecord[] = data.shows;
+    if (remoteList.length === 0) return false;
+
+    const localList = StorageService.getDailySectionSalesAll();
     const map = new Map<string, DailySectionSalesRecord>();
     localList.forEach((r) => {
       if (r && r.id) map.set(r.id, r);
@@ -1731,6 +1573,9 @@ export async function syncOutletsAndAreasToSupabase(
     const localAreas = areas || StorageService.getAreas();
     const nowIso = new Date().toISOString();
 
+    recordSyncTimestamp('__SYSTEM_SYNC_OUTLETS__', nowIso, true);
+    recordSyncTimestamp('__SYSTEM_SYNC_AREAS__', nowIso, true);
+
     await client.from('cinema_sales').upsert(
       [
         {
@@ -1763,7 +1608,7 @@ export async function mergeRemoteOutletsAndAreasToLocal(): Promise<boolean> {
   try {
     const { data, error } = await client
       .from('cinema_sales')
-      .select('id, shows')
+      .select('id, shows, updated_at')
       .in('id', ['__SYSTEM_SYNC_OUTLETS__', '__SYSTEM_SYNC_AREAS__']);
 
     if (error || !data) return false;
@@ -1771,6 +1616,13 @@ export async function mergeRemoteOutletsAndAreasToLocal(): Promise<boolean> {
     let updated = false;
     const outletsRow = data.find((r: any) => r.id === '__SYSTEM_SYNC_OUTLETS__');
     const areasRow = data.find((r: any) => r.id === '__SYSTEM_SYNC_AREAS__');
+
+    if (outletsRow?.updated_at) {
+      recordSyncTimestamp('__SYSTEM_SYNC_OUTLETS__', String(outletsRow.updated_at), false);
+    }
+    if (areasRow?.updated_at) {
+      recordSyncTimestamp('__SYSTEM_SYNC_AREAS__', String(areasRow.updated_at), false);
+    }
 
     if (outletsRow && Array.isArray(outletsRow.shows) && outletsRow.shows.length > 0) {
       const remoteOutlets: Outlet[] = outletsRow.shows;
@@ -1860,6 +1712,7 @@ export async function syncAdditionalModulesToSupabase(
       const users = StorageService.getUsersList();
       const deletedUsersRaw = localStorage.getItem('cinema_xxi_deleted_user_ids');
       const deletedUsers = deletedUsersRaw ? JSON.parse(deletedUsersRaw) : [];
+      recordSyncTimestamp('__SYSTEM_SYNC_USERS__', nowIso, true);
       rowsToUpsert.push({
         id: '__SYSTEM_SYNC_USERS__',
         outlet_id: '__SYSTEM_SYNC__',
@@ -1871,6 +1724,7 @@ export async function syncAdditionalModulesToSupabase(
 
     if (modules.includes('genres')) {
       const genres = StorageService.getFilmGenreRegistry();
+      recordSyncTimestamp('__SYSTEM_SYNC_FILM_GENRES__', nowIso, true);
       rowsToUpsert.push({
         id: '__SYSTEM_SYNC_FILM_GENRES__',
         outlet_id: '__SYSTEM_SYNC__',
@@ -1882,6 +1736,7 @@ export async function syncAdditionalModulesToSupabase(
 
     if (modules.includes('administration')) {
       const admins = StorageService.getOutletAdministrations();
+      recordSyncTimestamp('__SYSTEM_SYNC_ADMINISTRATION__', nowIso, true);
       rowsToUpsert.push({
         id: '__SYSTEM_SYNC_ADMINISTRATION__',
         outlet_id: '__SYSTEM_SYNC__',
@@ -1893,6 +1748,7 @@ export async function syncAdditionalModulesToSupabase(
 
     if (modules.includes('bopo')) {
       const bopo = StorageService.getBopoRecords();
+      recordSyncTimestamp('__SYSTEM_SYNC_BOPO__', nowIso, true);
       rowsToUpsert.push({
         id: '__SYSTEM_SYNC_BOPO__',
         outlet_id: '__SYSTEM_SYNC__',
@@ -1904,6 +1760,7 @@ export async function syncAdditionalModulesToSupabase(
 
     if (modules.includes('lost_found')) {
       const lostFound = StorageService.getLostAndFoundRecords();
+      recordSyncTimestamp('__SYSTEM_SYNC_LOST_FOUND__', nowIso, true);
       rowsToUpsert.push({
         id: '__SYSTEM_SYNC_LOST_FOUND__',
         outlet_id: '__SYSTEM_SYNC__',
@@ -1917,6 +1774,7 @@ export async function syncAdditionalModulesToSupabase(
       const items = StorageService.getWarehouseItems();
       const txs = StorageService.getStockTransactions();
       const opname = StorageService.getStockOpnameHistory();
+      recordSyncTimestamp('__SYSTEM_SYNC_WAREHOUSE__', nowIso, true);
       rowsToUpsert.push({
         id: '__SYSTEM_SYNC_WAREHOUSE__',
         outlet_id: '__SYSTEM_SYNC__',
@@ -1936,25 +1794,38 @@ export async function syncAdditionalModulesToSupabase(
   }
 }
 
-export async function mergeRemoteAdditionalModulesToLocal(): Promise<boolean> {
+export async function mergeRemoteAdditionalModulesToLocal(
+  specificIds?: string[]
+): Promise<boolean> {
   const client = getSupabase();
   if (!client) return false;
 
   try {
+    const idsToFetch =
+      specificIds && specificIds.length > 0
+        ? specificIds
+        : [
+            '__SYSTEM_SYNC_USERS__',
+            '__SYSTEM_SYNC_FILM_GENRES__',
+            '__SYSTEM_SYNC_ADMINISTRATION__',
+            '__SYSTEM_SYNC_BOPO__',
+            '__SYSTEM_SYNC_LOST_FOUND__',
+            '__SYSTEM_SYNC_WAREHOUSE__',
+          ];
+
     const { data, error } = await client
       .from('cinema_sales')
-      .select('id, shows')
-      .in('id', [
-        '__SYSTEM_SYNC_USERS__',
-        '__SYSTEM_SYNC_FILM_GENRES__',
-        '__SYSTEM_SYNC_ADMINISTRATION__',
-        '__SYSTEM_SYNC_BOPO__',
-        '__SYSTEM_SYNC_LOST_FOUND__',
-        '__SYSTEM_SYNC_WAREHOUSE__',
-      ]);
+      .select('id, shows, updated_at')
+      .in('id', idsToFetch);
 
     if (error || !data) return false;
     let updated = false;
+
+    data.forEach((r: any) => {
+      if (r && r.id && r.updated_at) {
+        recordSyncTimestamp(String(r.id), String(r.updated_at), false);
+      }
+    });
 
     const usersRow = data.find((r: any) => r.id === '__SYSTEM_SYNC_USERS__');
     if (usersRow && Array.isArray(usersRow.shows) && usersRow.shows[0]) {
@@ -2102,77 +1973,74 @@ export async function mergeRemoteAdditionalModulesToLocal(): Promise<boolean> {
   }
 }
 
-// Cache timestamp per-modul untuk Zero-Waste Egress (hanya unduh JSONB jika updated_at berubah)
-const lastSeenSyncTimestamps: Record<string, string> = {};
 let hasCompletedInitialPull = false;
 let isPullInFlight = false;
+let lastDeltaPullMs = 0;
+const MIN_PULL_COOLDOWN_MS = 12000;
 
 export async function pullAllRemoteToLocal(forceFull = false): Promise<void> {
   const client = getSupabase();
   if (!client || isPullInFlight) return;
+
+  const nowMs = Date.now();
+  if (!forceFull && hasCompletedInitialPull && nowMs - lastDeltaPullMs < MIN_PULL_COOLDOWN_MS) {
+    // Cooldown aktif: cegah spam HTTP saat klik pindah-pindah menu / tab focus (Realtime WebSocket sudah aktif)
+    return;
+  }
+
   isPullInFlight = true;
+  lastDeltaPullMs = nowMs;
 
   try {
-    // Saat pertama kali aplikasi dibuka atau dipaksa full sync:
-    if (forceFull || !hasCompletedInitialPull) {
-      const { data: metaRows, error: metaErr } = await client
-        .from('cinema_sales')
-        .select('id, updated_at')
-        .like('id', '__SYSTEM_SYNC_%');
-
-      if (!metaErr && Array.isArray(metaRows)) {
-        if (metaRows.length === 0) {
-          // Database Supabase baru masih kosong -> inisialisasi otomatis dengan data lokal perangkat ini
-          await uploadAllLocalToSupabase();
-        } else {
-          metaRows.forEach((r: any) => {
-            if (r && r.id && r.updated_at) {
-              lastSeenSyncTimestamps[String(r.id)] = String(r.updated_at);
-            }
-          });
-        }
-      }
-
-      await Promise.allSettled([
-        mergeRemoteOutletsAndAreasToLocal(),
-        mergeRemoteAdditionalModulesToLocal(),
-        mergeRemoteSalesToLocal(),
-        mergeRemoteBakingSalesToLocal(),
-        mergeRemoteOccupancyToLocal(),
-        mergeRemoteInspectionsToLocal(),
-        mergeRemoteEmployeesToLocal(),
-        mergeRemoteEmployeeKpisToLocal(),
-        mergeRemoteCashierPerformanceToLocal(),
-        mergeRemoteCashierProductsToLocal(),
-        mergeRemoteDailySectionSalesToLocal(),
-        mergeRemoteConfigToLocal(),
-      ]);
-      hasCompletedInitialPull = true;
-      return;
-    }
-
-    // Mode Hemat Egress (Smart Delta Check):
     // Hanya 1 query super ringan (~400 Bytes) untuk mengecek id & updated_at tanpa mengunduh JSONB 'shows'
-    const { data: metaRows, error } = await client
+    const { data: metaRows, error: metaErr } = await client
       .from('cinema_sales')
       .select('id, updated_at')
       .like('id', '__SYSTEM_SYNC_%');
 
-    if (error || !Array.isArray(metaRows)) return;
+    if (metaErr || !Array.isArray(metaRows)) return;
 
+    // Jika database Supabase baru benar-benar masih kosong (0 baris __SYSTEM_SYNC_), inisialisasi sekali saja
+    if (metaRows.length === 0) {
+      const seedKey = `cinema_xxi_db_seeded_${StorageService.getConfig().supabaseUrl}`;
+      if (localStorage.getItem(seedKey) !== 'true') {
+        localStorage.setItem(seedKey, 'true');
+        await uploadAllLocalToSupabase();
+      }
+      hasCompletedInitialPull = true;
+      return;
+    }
+
+    // Bandingkan timestamp server dengan timestamp yang sudah tersimpan di perangkat ini
     const changedIds = new Set<string>();
     for (const row of metaRows) {
       const id = String(row.id || '');
       const updatedAt = String(row.updated_at || '');
       if (!id) continue;
       if (lastSeenSyncTimestamps[id] !== updatedAt) {
-        lastSeenSyncTimestamps[id] = updatedAt;
         changedIds.add(id);
       }
     }
 
+    // Jika pada saat buka pertama kali ada modul yang belum pernah ada di localStorage sama sekali, pastikan di-fetch
+    if (!hasCompletedInitialPull) {
+      if (!localStorage.getItem('cinema_xxi_user_sales_overrides')) {
+        changedIds.add('__SYSTEM_SYNC_DAILY_SALES__');
+      }
+      if (!localStorage.getItem('cinema_xxi_outlets')) {
+        changedIds.add('__SYSTEM_SYNC_OUTLETS__');
+      }
+      if (!localStorage.getItem('cinema_xxi_toilet_inspections')) {
+        changedIds.add('__SYSTEM_SYNC_INSPECTIONS__');
+      }
+      if (!localStorage.getItem('cinema_xxi_occupancy_manifest')) {
+        changedIds.add('__SYSTEM_SYNC_OCCUPANCY__');
+      }
+      hasCompletedInitialPull = true;
+    }
+
     if (changedIds.size === 0) {
-      // Tidak ada perubahan di server -> 0 KB JSONB diunduh (Hemat 99.9% Egress & Log Ingestion)
+      // 100% Sinkron -> 0 KB JSONB diunduh (Hemat 99.9% Egress & Log Ingestion bahkan saat Refresh F5!)
       return;
     }
 
@@ -2181,21 +2049,28 @@ export async function pullAllRemoteToLocal(forceFull = false): Promise<void> {
     if (changedIds.has('__SYSTEM_SYNC_OUTLETS__') || changedIds.has('__SYSTEM_SYNC_AREAS__')) {
       tasks.push(mergeRemoteOutletsAndAreasToLocal());
     }
-    if (
-      changedIds.has('__SYSTEM_SYNC_USERS__') ||
-      changedIds.has('__SYSTEM_SYNC_FILM_GENRES__') ||
-      changedIds.has('__SYSTEM_SYNC_ADMINISTRATION__') ||
-      changedIds.has('__SYSTEM_SYNC_BOPO__') ||
-      changedIds.has('__SYSTEM_SYNC_LOST_FOUND__') ||
-      changedIds.has('__SYSTEM_SYNC_WAREHOUSE__')
-    ) {
-      tasks.push(mergeRemoteAdditionalModulesToLocal());
+
+    const changedAdditional = [
+      '__SYSTEM_SYNC_USERS__',
+      '__SYSTEM_SYNC_FILM_GENRES__',
+      '__SYSTEM_SYNC_ADMINISTRATION__',
+      '__SYSTEM_SYNC_BOPO__',
+      '__SYSTEM_SYNC_LOST_FOUND__',
+      '__SYSTEM_SYNC_WAREHOUSE__',
+    ].filter((id) => changedIds.has(id));
+
+    if (changedAdditional.length > 0) {
+      tasks.push(mergeRemoteAdditionalModulesToLocal(changedAdditional));
     }
+
     if (changedIds.has('__SYSTEM_SYNC_DAILY_SALES__')) {
       tasks.push(mergeRemoteSalesToLocal());
     }
     if (changedIds.has('__SYSTEM_SYNC_BAKING_SALES__')) {
       tasks.push(mergeRemoteBakingSalesToLocal());
+    }
+    if (changedIds.has('__SYSTEM_SYNC_OCCUPANCY__')) {
+      tasks.push(mergeRemoteOccupancyToLocal());
     }
     if (changedIds.has('__SYSTEM_SYNC_INSPECTIONS__')) {
       tasks.push(mergeRemoteInspectionsToLocal());
@@ -2222,6 +2097,15 @@ export async function pullAllRemoteToLocal(forceFull = false): Promise<void> {
     if (tasks.length > 0) {
       await Promise.allSettled(tasks);
     }
+
+    // Simpan semua timestamp terbaru yang sudah berhasil ditarik
+    for (const row of metaRows) {
+      const id = String(row.id || '');
+      const updatedAt = String(row.updated_at || '');
+      if (id && updatedAt && changedIds.has(id)) {
+        recordSyncTimestamp(id, updatedAt, false);
+      }
+    }
   } finally {
     isPullInFlight = false;
   }
@@ -2236,19 +2120,17 @@ export function setupSupabaseRealtimeSync(): () => void {
     return () => {};
   }
 
-  // Initial pull on load (1x saat buka aplikasi)
+  // Delta pull cerdas saat buka aplikasi (hanya unduh modul yang berubah)
   pullAllRemoteToLocal(true);
 
-  // Delta check (~400 bytes) saat user kembali ke tab AI Studio / Web Live
-  const handleFocusOrVisibility = () => {
+  const handleVisibility = () => {
     if (document.visibilityState === 'visible') {
       pullAllRemoteToLocal(false);
     }
   };
-  window.addEventListener('focus', handleFocusOrVisibility);
-  document.addEventListener('visibilitychange', handleFocusOrVisibility);
+  document.addEventListener('visibilitychange', handleVisibility);
 
-  // Setup Supabase Realtime channel subscription (WebSocket Push - Hemat Egress)
+  // Setup Supabase Realtime channel subscription (WebSocket Push + Anti Self-Echo + Debounce)
   try {
     const channel = client
       .channel('cinema_xxi_realtime_changes')
@@ -2256,73 +2138,83 @@ export function setupSupabaseRealtimeSync(): () => void {
         'postgres_changes',
         { event: '*', schema: 'public', table: 'cinema_sales' },
         (payload: any) => {
-          if (payload.new && payload.new.id) {
-            const rowId = String(payload.new.id);
-            const rowOutlet = String(payload.new.outlet_id || '');
-            if (payload.new.updated_at) {
-              lastSeenSyncTimestamps[rowId] = String(payload.new.updated_at);
-            }
+          if (!payload.new || !payload.new.id) return;
+          const rowId = String(payload.new.id);
+          if (!rowId.startsWith('__SYSTEM_SYNC_')) {
+            // Abaikan baris individual agar tidak memicu double fetch
+            return;
+          }
 
-            if (
-              rowId === '__SYSTEM_SYNC_OUTLETS__' ||
-              rowId === '__SYSTEM_SYNC_AREAS__'
-            ) {
-              mergeRemoteOutletsAndAreasToLocal();
-              return;
-            }
-            if (
-              rowId === '__SYSTEM_SYNC_USERS__' ||
-              rowId === '__SYSTEM_SYNC_FILM_GENRES__' ||
-              rowId === '__SYSTEM_SYNC_ADMINISTRATION__' ||
-              rowId === '__SYSTEM_SYNC_BOPO__' ||
-              rowId === '__SYSTEM_SYNC_LOST_FOUND__' ||
-              rowId === '__SYSTEM_SYNC_WAREHOUSE__'
-            ) {
-              mergeRemoteAdditionalModulesToLocal();
-              return;
-            }
-            if (
-              rowId === '__SYSTEM_SYNC_EMPLOYEES__' ||
-              rowId === '__SYSTEM_SYNC_DELETED_EMPLOYEES__'
-            ) {
-              mergeRemoteEmployeesToLocal();
-              return;
-            }
-            if (rowId === '__SYSTEM_SYNC_EMPLOYEE_KPIS__') {
-              mergeRemoteEmployeeKpisToLocal();
-              return;
-            }
-            if (rowId === '__SYSTEM_SYNC_BAKING_SALES__') {
-              mergeRemoteBakingSalesToLocal();
-              return;
-            }
-            if (rowId === '__SYSTEM_SYNC_INSPECTIONS__') {
-              mergeRemoteInspectionsToLocal();
-              return;
-            }
-            if (rowId === '__SYSTEM_SYNC_SDM_PERFORMANCE__') {
-              mergeRemoteCashierPerformanceToLocal();
-              return;
-            }
-            if (rowId === '__SYSTEM_SYNC_SDM_PRODUCTS__') {
-              mergeRemoteCashierProductsToLocal();
-              return;
-            }
-            if (rowId === '__SYSTEM_SYNC_DAILY_SECTION__') {
-              mergeRemoteDailySectionSalesToLocal();
-              return;
-            }
-            if (rowId === '__SYSTEM_SYNC_DAILY_SALES__') {
-              mergeRemoteSalesToLocal();
-              return;
-            }
-            if (rowId.startsWith('__SYSTEM_SYNC_') || rowOutlet.startsWith('__SYSTEM_SYNC_')) {
-              return;
-            }
+          const incomingUpdatedAt = payload.new.updated_at
+            ? String(payload.new.updated_at)
+            : undefined;
 
-            if (payload.new.outlet_id && payload.new.date) {
-              mergeRemoteSalesToLocal();
-            }
+          // Jika event ini berasal dari simpanan perangkat ini sendiri atau timestamp sudah sama, abaikan (0 Egress!)
+          if (isEchoFromOwnWrite(rowId, incomingUpdatedAt)) {
+            return;
+          }
+
+          if (rowId === '__SYSTEM_SYNC_OUTLETS__' || rowId === '__SYSTEM_SYNC_AREAS__') {
+            scheduleDebouncedRealtimeMerge('outlets_areas', () =>
+              mergeRemoteOutletsAndAreasToLocal()
+            );
+            return;
+          }
+          if (
+            rowId === '__SYSTEM_SYNC_USERS__' ||
+            rowId === '__SYSTEM_SYNC_FILM_GENRES__' ||
+            rowId === '__SYSTEM_SYNC_ADMINISTRATION__' ||
+            rowId === '__SYSTEM_SYNC_BOPO__' ||
+            rowId === '__SYSTEM_SYNC_LOST_FOUND__' ||
+            rowId === '__SYSTEM_SYNC_WAREHOUSE__'
+          ) {
+            scheduleDebouncedRealtimeMerge(`add_${rowId}`, () =>
+              mergeRemoteAdditionalModulesToLocal([rowId])
+            );
+            return;
+          }
+          if (
+            rowId === '__SYSTEM_SYNC_EMPLOYEES__' ||
+            rowId === '__SYSTEM_SYNC_DELETED_EMPLOYEES__'
+          ) {
+            scheduleDebouncedRealtimeMerge('employees', () => mergeRemoteEmployeesToLocal());
+            return;
+          }
+          if (rowId === '__SYSTEM_SYNC_EMPLOYEE_KPIS__') {
+            scheduleDebouncedRealtimeMerge('kpis', () => mergeRemoteEmployeeKpisToLocal());
+            return;
+          }
+          if (rowId === '__SYSTEM_SYNC_BAKING_SALES__') {
+            scheduleDebouncedRealtimeMerge('baking', () => mergeRemoteBakingSalesToLocal());
+            return;
+          }
+          if (rowId === '__SYSTEM_SYNC_INSPECTIONS__') {
+            scheduleDebouncedRealtimeMerge('inspections', () => mergeRemoteInspectionsToLocal());
+            return;
+          }
+          if (rowId === '__SYSTEM_SYNC_SDM_PERFORMANCE__') {
+            scheduleDebouncedRealtimeMerge('sdm_perf', () =>
+              mergeRemoteCashierPerformanceToLocal()
+            );
+            return;
+          }
+          if (rowId === '__SYSTEM_SYNC_SDM_PRODUCTS__') {
+            scheduleDebouncedRealtimeMerge('sdm_prod', () => mergeRemoteCashierProductsToLocal());
+            return;
+          }
+          if (rowId === '__SYSTEM_SYNC_DAILY_SECTION__') {
+            scheduleDebouncedRealtimeMerge('daily_sec', () =>
+              mergeRemoteDailySectionSalesToLocal()
+            );
+            return;
+          }
+          if (rowId === '__SYSTEM_SYNC_DAILY_SALES__') {
+            scheduleDebouncedRealtimeMerge('daily_sales', () => mergeRemoteSalesToLocal());
+            return;
+          }
+          if (rowId === '__SYSTEM_SYNC_OCCUPANCY__') {
+            scheduleDebouncedRealtimeMerge('occupancy', () => mergeRemoteOccupancyToLocal());
+            return;
           }
         }
       )
@@ -2355,61 +2247,17 @@ export function setupSupabaseRealtimeSync(): () => void {
           }
         }
       )
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'cinema_inspections' },
-        (payload: any) => {
-          if (payload.new && payload.new.id) {
-            const remoteRecord: ToiletInspectionRecord = {
-              id: payload.new.id,
-              outletId: payload.new.outlet_id,
-              date: payload.new.date,
-              showNumber: payload.new.show_number,
-              type: payload.new.type,
-              inspectorName: payload.new.inspector_name,
-              time: payload.new.time || '',
-              notes: payload.new.notes || '',
-              checklist: payload.new.checklist || {},
-              status: payload.new.status || 'Sudah Lapor',
-            };
-            const currentLocal = StorageService.getInspections();
-            const idx = currentLocal.findIndex((i) => i.id === remoteRecord.id);
-            if (idx >= 0) {
-              currentLocal[idx] = remoteRecord;
-            } else {
-              currentLocal.unshift(remoteRecord);
-            }
-            localStorage.setItem('cinema_xxi_toilet_inspections', JSON.stringify(currentLocal));
-            StorageService.broadcastChange('inspection');
-          }
-        }
-      )
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'cinema_employees' },
-        () => {
-          mergeRemoteEmployeesToLocal();
-        }
-      )
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'cinema_employee_kpis' },
-        () => {
-          mergeRemoteEmployeeKpisToLocal();
-        }
-      )
       .subscribe();
 
-    // Lightweight 20-second timestamp heartbeat (~400 bytes) HANYA saat tab aktif/terlihat
+    // Heartbeat fallback ringan (~400 bytes) setiap 60 detik HANYA saat tab aktif/terlihat
     const intervalId = setInterval(() => {
       if (document.visibilityState === 'visible') {
         pullAllRemoteToLocal(false);
       }
-    }, 20000);
+    }, 60000);
 
     return () => {
-      window.removeEventListener('focus', handleFocusOrVisibility);
-      document.removeEventListener('visibilitychange', handleFocusOrVisibility);
+      document.removeEventListener('visibilitychange', handleVisibility);
       try {
         client.removeChannel(channel);
       } catch {
@@ -2423,17 +2271,16 @@ export function setupSupabaseRealtimeSync(): () => void {
       if (document.visibilityState === 'visible') {
         pullAllRemoteToLocal(false);
       }
-    }, 20000);
+    }, 60000);
     return () => {
-      window.removeEventListener('focus', handleFocusOrVisibility);
-      document.removeEventListener('visibilitychange', handleFocusOrVisibility);
+      document.removeEventListener('visibilitychange', handleVisibility);
       clearInterval(intervalId);
     };
   }
 }
 
 /**
- * Push Semua Data Local ke Supabase
+ * Push Semua Data Local ke Supabase (Batch Mode: Tanpa Loop Ratusan Request!)
  */
 export async function uploadAllLocalToSupabase(): Promise<{
   success: boolean;
@@ -2445,17 +2292,27 @@ export async function uploadAllLocalToSupabase(): Promise<{
 }> {
   const client = getSupabase();
   if (!client) {
-    return { success: false, salesCount: 0, occupancyCount: 0, inspectionCount: 0, error: 'Supabase belum terhubung.' };
+    return {
+      success: false,
+      salesCount: 0,
+      occupancyCount: 0,
+      inspectionCount: 0,
+      error: 'Supabase belum terhubung.',
+    };
   }
 
   try {
+    const nowIso = new Date().toISOString();
     await syncOutletsAndAreasToSupabase();
     await syncAdditionalModulesToSupabase();
 
-    // Hanya upload data sales yang diinput/diedit user (bukan data statis migrasi bawaan)
+    // 1. Upload Data Sales (1 Request Batch)
     const allSales = StorageService.getDailySales();
     const userSales = allSales.filter(
-      (s) => s.isMigrated === false && !String(s.id || '').startsWith('mig_')
+      (s) =>
+        s.isMigrated === false &&
+        !String(s.id || '').startsWith('mig_') &&
+        !StorageService.isStaticUneditedSalesRecord(s)
     );
     let salesCount = 0;
     if (userSales.length > 0) {
@@ -2463,51 +2320,70 @@ export async function uploadAllLocalToSupabase(): Promise<{
       if (ok) salesCount = userSales.length;
     }
 
+    // 2. Upload Baking Sales (1 Request Batch)
     const bakingSales = StorageService.getBakingSales();
     if (bakingSales.length > 0) {
       await syncBakingSalesToSupabase(bakingSales);
     }
 
-    // Ambil semua occupancy records dari localStorage
+    // 3. Upload Occupancy Records dalam 1 Batch Request (Bukan loop satu-satu!)
     let occupancyCount = 0;
-    const occupancyKeys: string[] = [];
+    const occupancyPayloads = new Map<string, any>();
     for (let i = 0; i < localStorage.length; i++) {
       const k = localStorage.key(i);
       if (k && k.startsWith('cinema_xxi_occupancy_')) {
-        occupancyKeys.push(k);
-      }
-    }
-
-    for (const key of occupancyKeys) {
-      const parts = key.replace('cinema_xxi_occupancy_', '').split('_');
-      const date = parts.pop() || '';
-      const outletId = parts.join('_');
-      const raw = localStorage.getItem(key);
-      if (raw && outletId && date) {
-        try {
-          const parsed = JSON.parse(raw);
-          const rows = Array.isArray(parsed) ? parsed : parsed.rows || [];
-          if (rows.length > 0) {
-            await syncOccupancyToSupabase(outletId, date, rows);
-            occupancyCount++;
+        const cleanKey = k.replace('cinema_xxi_occupancy_records_', '').replace('cinema_xxi_occupancy_', '');
+        if (cleanKey === 'manifest') continue;
+        const parts = cleanKey.split('_');
+        const date = parts.pop() || '';
+        const outletId = parts.join('_');
+        const raw = localStorage.getItem(k);
+        if (raw && outletId && date) {
+          try {
+            const parsed = JSON.parse(raw);
+            const rows = Array.isArray(parsed) ? parsed : parsed.rows || [];
+            if (rows.length > 0) {
+              const id = `${outletId}_${date}`;
+              occupancyPayloads.set(id, {
+                id,
+                outlet_id: outletId,
+                date,
+                rows,
+                updated_at: nowIso,
+              });
+            }
+          } catch {
+            // ignore
           }
-        } catch {
-          // ignore
         }
       }
     }
 
-    // Ambil dan upload inspections
+    if (occupancyPayloads.size > 0) {
+      const batchOcc = Array.from(occupancyPayloads.values());
+      await client.from('cinema_occupancy').upsert(batchOcc, { onConflict: 'id' });
+      occupancyCount = batchOcc.length;
+    }
+
+    // 4. Upload Inspections dalam 1 Single Batch Request (Hemat 966x Request!)
     let inspectionCount = 0;
     const inspections = StorageService.getInspections();
     if (inspections.length > 0) {
-      for (const ins of inspections) {
-        const ok = await syncInspectionToSupabase(ins);
-        if (ok) inspectionCount++;
-      }
+      recordSyncTimestamp('__SYSTEM_SYNC_INSPECTIONS__', nowIso, true);
+      const { error: insErr } = await client.from('cinema_sales').upsert(
+        {
+          id: '__SYSTEM_SYNC_INSPECTIONS__',
+          outlet_id: '__SYSTEM_SYNC__',
+          date: '2026-01-01',
+          shows: inspections as any,
+          updated_at: nowIso,
+        },
+        { onConflict: 'id' }
+      );
+      if (!insErr) inspectionCount = inspections.length;
     }
 
-    // Ambil dan upload Data Karyawan & KPI Karyawan & SDM
+    // 5. Upload Data Karyawan, KPI, dan SDM (Masing-masing 1 Batch Request)
     const employees = StorageService.getEmployees();
     let employeeCount = 0;
     if (employees.length > 0) {

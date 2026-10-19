@@ -1010,13 +1010,40 @@ export const StorageService = {
     return list;
   },
 
-  // Daily Sales - User Overrides Layer (100% immune to static migration overwrites)
+  isStaticUneditedSalesRecord(record: DailySalesRecord): boolean {
+    if (!record || !record.outletId || !record.date) return true;
+    const allMigrated = [...MIGRATED_SALES_2025, ...MIGRATED_SALES_2026];
+    const mig = allMigrated.find(
+      (m) => m.outletId === record.outletId && m.date === record.date
+    );
+    if (!mig) return false;
+    const norm = (shows: ShowSaleInput[] = []) =>
+      JSON.stringify(
+        shows.map((s) => ({
+          n: s.showNumber,
+          c: s.omsetCinema || 0,
+          f: s.omsetFnB || 0,
+          b: s.bill || 0,
+          p: s.penonton || 0,
+        }))
+      );
+    return norm(record.shows) === norm(mig.shows);
+  },
+
+  // Daily Sales - User Overrides Layer (100% immune to static migration overwrites & stripped of untouched static clones)
   getUserSalesOverrides(): DailySalesRecord[] {
     try {
       const raw = localStorage.getItem('cinema_xxi_user_sales_overrides');
       if (!raw) return [];
       const parsed = JSON.parse(raw);
-      return Array.isArray(parsed) ? parsed : [];
+      if (!Array.isArray(parsed)) return [];
+      const filtered = parsed.filter(
+        (r: DailySalesRecord) => r && r.outletId && r.date && !this.isStaticUneditedSalesRecord(r)
+      );
+      if (filtered.length !== parsed.length) {
+        localStorage.setItem('cinema_xxi_user_sales_overrides', JSON.stringify(filtered));
+      }
+      return filtered;
     } catch {
       return [];
     }
@@ -1062,15 +1089,9 @@ export const StorageService = {
       if (!mig) {
         // Record on a date not in static migrated list (e.g. user input on any daily date)
         existingMap.set(key, { ...item, isMigrated: false });
-      } else {
-        // Record is on a migrated date: keep item if it was edited by user (isMigrated === false or shows differ)
-        const isUserEdited =
-          item.isMigrated === false ||
-          Boolean(item.updatedAt) ||
-          JSON.stringify(item.shows || []) !== JSON.stringify(mig.shows || []);
-        if (isUserEdited) {
-          existingMap.set(key, { ...item, isMigrated: false });
-        }
+      } else if (!this.isStaticUneditedSalesRecord(item)) {
+        // Record is on a migrated date AND its numbers were genuinely edited by user
+        existingMap.set(key, { ...item, isMigrated: false });
       }
     }
 
