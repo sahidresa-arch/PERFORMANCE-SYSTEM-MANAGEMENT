@@ -1470,12 +1470,12 @@ export const ToiletInspection: React.FC<ToiletInspectionProps> = ({
                             </span>
                           </td>
 
-                          {/* Show 1 - Show 5 Columns with Checkmark Centang icon if submitted or Lock if sequential prior show not done */}
+                          {/* Show 1 - Show 5 Columns: Tanda Ceklis (✓) jika sudah diceklis, Tanda Strip (-) jika belum */}
                           {[1, 2, 3, 4, 5].map((sNum) => {
                             const showInsp = getShowRecord(sNum, o.id, toiletType);
                             const hasSubmitted = Boolean(showInsp);
-                            const unlocked = isShowUnlocked(sNum, o.id, toiletType);
                             const hasR = showInsp && Object.values(showInsp.checklist || {}).includes('R');
+                            const unlocked = isShowUnlocked(sNum, o.id, toiletType);
 
                             return (
                               <td key={sNum} className="py-3 px-2 text-center font-black">
@@ -1483,32 +1483,25 @@ export const ToiletInspection: React.FC<ToiletInspectionProps> = ({
                                   <button
                                     type="button"
                                     onClick={() => handleDirectInspect(o.id, sNum, toiletType)}
-                                    className={`inline-flex items-center justify-center px-2 py-1 rounded-lg border text-xs font-bold space-x-1 cursor-pointer transition hover:scale-105 ${
+                                    className={`inline-flex items-center justify-center px-2.5 py-1 rounded-lg border text-xs font-bold space-x-1 cursor-pointer transition hover:scale-105 shadow-2xs ${
                                       hasR
                                         ? 'bg-rose-100 text-rose-800 border-rose-300'
                                         : 'bg-emerald-100 text-emerald-800 border-emerald-300'
                                     }`}
-                                    title={hasR ? 'Sudah Lapor (Ada Temuan R) - Klik untuk lihat' : 'Sudah Lapor (Bersih) - Klik untuk lihat'}
+                                    title={hasR ? `Show ${sNum}: Sudah Ceklis (Ada Temuan R) - Klik untuk lihat` : `Show ${sNum}: Sudah Ceklis (Bersih) - Klik untuk lihat`}
                                   >
                                     <Check className="w-4 h-4 stroke-[3]" />
                                     {hasR && <span className="text-[10px] font-black text-rose-700">R</span>}
                                   </button>
-                                ) : unlocked ? (
+                                ) : (
                                   <button
                                     type="button"
                                     onClick={() => handleDirectInspect(o.id, sNum, toiletType)}
-                                    className="inline-flex items-center space-x-1 px-2 py-1 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-300 text-[10px] font-extrabold cursor-pointer transition"
-                                    title={`Giliran Ceklis Show ${sNum}`}
+                                    className="inline-flex items-center justify-center w-7 h-7 rounded-md text-slate-400 hover:text-amber-800 hover:bg-amber-50/80 font-black text-base cursor-pointer transition select-none"
+                                    title={unlocked ? `Show ${sNum}: Belum diceklis (Klik untuk isi)` : `Show ${sNum}: Belum diceklis (Wajib isi Show sebelumnya dulu)`}
                                   >
-                                    <span>Isi Show {sNum}</span>
+                                    -
                                   </button>
-                                ) : (
-                                  <span
-                                    className="inline-flex items-center justify-center px-2 py-1 rounded-md bg-slate-100 text-slate-400 border border-slate-200 text-[10px] font-bold cursor-not-allowed"
-                                    title={`Terkunci: Wajib ceklis Show ${sNum - 1} terlebih dahulu`}
-                                  >
-                                    <Lock className="w-3 h-3 text-slate-400" />
-                                  </span>
                                 )}
                               </td>
                             );
