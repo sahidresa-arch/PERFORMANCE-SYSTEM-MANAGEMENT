@@ -44,6 +44,7 @@ export interface DailySalesRecord {
   shows: ShowSaleInput[];
   notes?: string;
   isMigrated?: boolean;
+  updatedAt?: string;
 }
 
 export interface ComputedShowMetrics {

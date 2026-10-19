@@ -55,6 +55,9 @@ export const InputDataSales: React.FC<InputDataSalesProps> = ({
   const [isConfirmModalOpen, setIsConfirmModalOpen] = useState<boolean>(false);
   const [showToast, setShowToast] = useState<boolean>(false);
   const toastTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const isDirtyRef = useRef<boolean>(false);
+  const activeShowRef = useRef<number>(1);
+  activeShowRef.current = activeShow;
 
   // Sales record state
   const [dailyRecord, setDailyRecord] = useState<DailySalesRecord>(() =>
@@ -93,9 +96,42 @@ export const InputDataSales: React.FC<InputDataSalesProps> = ({
 
   // Sync record when outlet or date changes
   useEffect(() => {
+    isDirtyRef.current = false;
     const rec = StorageService.getDailySaleByOutletAndDate(selectedOutletId, selectedDate);
     setDailyRecord(rec);
     loadShowData(rec, activeShow);
+  }, [selectedOutletId, selectedDate]);
+
+  // Real-time sync listener when data arrives from Supabase / Web Live / AI Studio
+  useEffect(() => {
+    const handleStorageUpdate = (e: any) => {
+      const key = e?.detail?.key;
+      if (key && key !== 'sales' && key !== 'outlets' && key !== 'all') return;
+      const latestRec = StorageService.getDailySaleByOutletAndDate(selectedOutletId, selectedDate);
+      if (!isDirtyRef.current) {
+        setDailyRecord(latestRec);
+        loadShowData(latestRec, activeShowRef.current);
+      } else {
+        // User sedang mengetik di activeShow: perbarui show lain tanpa menghapus ketikan aktif
+        setDailyRecord((prev) => {
+          const mergedShows = latestRec.shows.map((remoteShow) => {
+            if (remoteShow.showNumber === activeShowRef.current) {
+              const localActive = prev.shows.find((s) => s.showNumber === activeShowRef.current);
+              return localActive || remoteShow;
+            }
+            return remoteShow;
+          });
+          return { ...latestRec, shows: mergedShows };
+        });
+      }
+    };
+
+    window.addEventListener('cinema-xxi-storage-update', handleStorageUpdate);
+    window.addEventListener('storage', handleStorageUpdate);
+    return () => {
+      window.removeEventListener('cinema-xxi-storage-update', handleStorageUpdate);
+      window.removeEventListener('storage', handleStorageUpdate);
+    };
   }, [selectedOutletId, selectedDate]);
 
   // Load show inputs & per-show lock state
@@ -123,23 +159,28 @@ export const InputDataSales: React.FC<InputDataSalesProps> = ({
   };
 
   const handleCinemaChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    isDirtyRef.current = true;
     const rawDigits = e.target.value.replace(/\D/g, '');
     const num = rawDigits ? Number(rawDigits) : 0;
     setOmsetCinema(num);
     setOmsetCinemaStr(num ? num.toLocaleString('id-ID') : '');
+    updateMemoryShow(activeShow, num, omsetFnB, bill, penonton, isLocked);
   };
 
   const handleFnBChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    isDirtyRef.current = true;
     const rawDigits = e.target.value.replace(/\D/g, '');
     const num = rawDigits ? Number(rawDigits) : 0;
     setOmsetFnB(num);
     setOmsetFnBStr(num ? num.toLocaleString('id-ID') : '');
+    updateMemoryShow(activeShow, omsetCinema, num, bill, penonton, isLocked);
   };
 
   const handleTabChange = (showNum: number) => {
-    if (!isLocked) {
+    if (!isLocked && isDirtyRef.current) {
       updateMemoryShow(activeShow, omsetCinema, omsetFnB, bill, penonton, isLocked);
     }
+    isDirtyRef.current = false;
     setActiveShow(showNum);
     loadShowData(dailyRecord, showNum);
   };
@@ -152,21 +193,23 @@ export const InputDataSales: React.FC<InputDataSalesProps> = ({
     p: number,
     lockedStatus: boolean
   ) => {
-    const updatedShows = dailyRecord.shows.map((s) => {
-      if (s.showNumber === showNum) {
-        return {
-          ...s,
-          omsetCinema: cin,
-          omsetFnB: fnb,
-          bill: b,
-          penonton: p,
-          isFilled: cin > 0 || fnb > 0 || b > 0 || p > 0,
-          isLocked: lockedStatus,
-        };
-      }
-      return s;
+    setDailyRecord((prev) => {
+      const updatedShows = prev.shows.map((s) => {
+        if (s.showNumber === showNum) {
+          return {
+            ...s,
+            omsetCinema: cin,
+            omsetFnB: fnb,
+            bill: b,
+            penonton: p,
+            isFilled: cin > 0 || fnb > 0 || b > 0 || p > 0,
+            isLocked: lockedStatus,
+          };
+        }
+        return s;
+      });
+      return { ...prev, shows: updatedShows };
     });
-    setDailyRecord((prev) => ({ ...prev, shows: updatedShows }));
   };
 
   // Calculate Net/Inkremental Murni for currently active show
@@ -177,6 +220,12 @@ export const InputDataSales: React.FC<InputDataSalesProps> = ({
   // Handle OCR fill
   const handleApplyOcrData = (data: ExtractedSalesData) => {
     if (isLocked) return;
+    isDirtyRef.current = true;
+    const nextCin = data.omsetCinema !== undefined ? data.omsetCinema : omsetCinema;
+    const nextFnb = data.omsetFnB !== undefined ? data.omsetFnB : omsetFnB;
+    const nextBill = data.bill !== undefined ? data.bill : bill;
+    const nextPen = data.penonton !== undefined ? data.penonton : penonton;
+
     if (data.omsetCinema !== undefined) {
       setOmsetCinema(data.omsetCinema);
       setOmsetCinemaStr(data.omsetCinema ? data.omsetCinema.toLocaleString('id-ID') : '0');
@@ -187,12 +236,14 @@ export const InputDataSales: React.FC<InputDataSalesProps> = ({
     }
     if (data.bill !== undefined) setBill(data.bill);
     if (data.penonton !== undefined) setPenonton(data.penonton);
+    updateMemoryShow(activeShow, nextCin, nextFnb, nextBill, nextPen, isLocked);
   };
 
   // Toggle lock state ONLY FOR CURRENT SHOW
   const handleToggleLock = () => {
     const nextLocked = !isLocked;
     setIsLocked(nextLocked);
+    isDirtyRef.current = false;
 
     const updatedShows = dailyRecord.shows.map((s) => {
       if (s.showNumber === activeShow) {
@@ -204,14 +255,19 @@ export const InputDataSales: React.FC<InputDataSalesProps> = ({
       return s;
     });
 
-    const newRecord = { ...dailyRecord, shows: updatedShows };
-    setDailyRecord(newRecord);
-    StorageService.saveDailySale(newRecord);
+    const newRecord: DailySalesRecord = {
+      ...dailyRecord,
+      isMigrated: false,
+      shows: updatedShows,
+    };
+    const saved = StorageService.saveDailySale(newRecord);
+    setDailyRecord(saved);
   };
 
   // Save confirmed from modal: LOCKS ONLY ACTIVE SHOW
   const handleConfirmSave = () => {
     setIsConfirmModalOpen(false);
+    isDirtyRef.current = false;
 
     const nowTime = new Date().toLocaleTimeString('id-ID', {
       hour: '2-digit',
@@ -238,11 +294,12 @@ export const InputDataSales: React.FC<InputDataSalesProps> = ({
       ...dailyRecord,
       outletId: selectedOutletId,
       date: selectedDate,
+      isMigrated: false,
       shows: updatedShows,
     };
 
-    StorageService.saveDailySale(newRecord);
-    setDailyRecord(newRecord);
+    const saved = StorageService.saveDailySale(newRecord);
+    setDailyRecord(saved);
     setIsLocked(true);
 
     setShowToast(true);
@@ -559,7 +616,12 @@ export const InputDataSales: React.FC<InputDataSalesProps> = ({
                   disabled={isLocked}
                   readOnly={isLocked}
                   value={bill || ''}
-                  onChange={(e) => setBill(Number(e.target.value))}
+                  onChange={(e) => {
+                    isDirtyRef.current = true;
+                    const nextBill = Number(e.target.value);
+                    setBill(nextBill);
+                    updateMemoryShow(activeShow, omsetCinema, omsetFnB, nextBill, penonton, isLocked);
+                  }}
                   placeholder="0"
                   className={`w-full px-3 py-2.5 rounded-xl border text-sm font-extrabold transition outline-hidden ${
                     isLocked
@@ -582,7 +644,12 @@ export const InputDataSales: React.FC<InputDataSalesProps> = ({
                   disabled={isLocked}
                   readOnly={isLocked}
                   value={penonton || ''}
-                  onChange={(e) => setPenonton(Number(e.target.value))}
+                  onChange={(e) => {
+                    isDirtyRef.current = true;
+                    const nextPen = Number(e.target.value);
+                    setPenonton(nextPen);
+                    updateMemoryShow(activeShow, omsetCinema, omsetFnB, bill, nextPen, isLocked);
+                  }}
                   placeholder="0"
                   className={`w-full px-3 py-2.5 rounded-xl border text-sm font-extrabold transition outline-hidden ${
                     isLocked

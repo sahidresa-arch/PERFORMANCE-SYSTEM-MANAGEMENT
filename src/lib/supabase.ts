@@ -253,13 +253,33 @@ export async function syncSalesToSupabase(sales: DailySalesRecord[]): Promise<bo
   if (!client || sales.length === 0) return false;
 
   try {
-    const payload = sales.map((s) => ({
-      id: s.id || `${s.outletId}_${s.date}`,
-      outlet_id: s.outletId,
-      date: s.date,
-      shows: s.shows,
-      updated_at: new Date().toISOString(),
-    }));
+    const nowIso = new Date().toISOString();
+    const payload = sales.map((s) => {
+      const isSystem = String(s.id || '').startsWith('__SYSTEM_SYNC_');
+      return {
+        id: isSystem ? s.id : `sales-${s.outletId}-${s.date}`,
+        outlet_id: s.outletId,
+        date: s.date,
+        shows: s.shows,
+        updated_at: s.updatedAt || nowIso,
+      };
+    });
+
+    // Jika ini adalah penyimpanan input user (bukan bulk upload), bersihkan ID duplikat lama untuk outlet & tanggal yang sama
+    if (sales.length <= 10) {
+      for (const s of sales) {
+        if (!String(s.id || '').startsWith('__SYSTEM_SYNC_')) {
+          const legacyIds = [
+            `${s.outletId}_${s.date}`,
+            `${s.outletId}-${s.date}`,
+            `mig_${s.outletId}_${s.date}`,
+            `mig_2025_${s.outletId}_${s.date}`,
+            `mig_2026_${s.outletId}_${s.date}`,
+          ];
+          await client.from('cinema_sales').delete().in('id', legacyIds);
+        }
+      }
+    }
 
     const { error } = await client.from('cinema_sales').upsert(payload, { onConflict: 'id' });
     if (error) {
@@ -274,35 +294,65 @@ export async function syncSalesToSupabase(sales: DailySalesRecord[]): Promise<bo
 }
 
 /**
- * Ambil Data Sales Harian dari Supabase
+ * Ambil Data Sales Harian dari Supabase (Prioritaskan data input user & updated_at terbaru)
  */
 export async function fetchSalesFromSupabase(): Promise<DailySalesRecord[] | null> {
   const client = getSupabase();
   if (!client) return null;
 
   try {
-    const { data, error } = await client
+    const { data: userRows, error: userErr } = await client
       .from('cinema_sales')
       .select('*')
-      .order('date', { ascending: false });
+      .not('id', 'like', 'mig_%')
+      .not('id', 'like', '__SYSTEM_SYNC_%')
+      .order('updated_at', { ascending: false })
+      .limit(1000);
 
-    if (error || !data) {
-      console.warn('Fetch sales from Supabase warning:', error);
+    if (userErr && !userRows) {
+      console.warn('Fetch sales from Supabase warning:', userErr);
       return null;
     }
 
-    return data
-      .filter(
-        (row: any) =>
-          !String(row.id || '').startsWith('__SYSTEM_SYNC_') &&
-          !String(row.outlet_id || '').startsWith('__SYSTEM_SYNC_')
-      )
-      .map((row: any) => ({
-        id: row.id,
-        outletId: row.outlet_id,
+    const rows = Array.isArray(userRows) ? userRows : [];
+
+    // Deduplikasi berdasarkan outlet_id + date (ambil yang updated_at paling baru)
+    const dedupedMap = new Map<string, DailySalesRecord>();
+    for (const row of rows) {
+      const rowId = String(row.id || '');
+      const rowOutlet = String(row.outlet_id || '');
+      if (
+        !rowOutlet ||
+        !row.date ||
+        rowId.startsWith('__SYSTEM_SYNC_') ||
+        rowOutlet.startsWith('__SYSTEM_SYNC_')
+      ) {
+        continue;
+      }
+
+      const key = `${rowOutlet}_${row.date}`;
+      const record: DailySalesRecord = {
+        id: `sales-${rowOutlet}-${row.date}`,
+        outletId: rowOutlet,
         date: row.date,
         shows: Array.isArray(row.shows) ? row.shows : [],
-      }));
+        isMigrated: false,
+        updatedAt: row.updated_at || undefined,
+      };
+
+      const existing = dedupedMap.get(key);
+      if (!existing) {
+        dedupedMap.set(key, record);
+      } else {
+        const prevTime = existing.updatedAt ? new Date(existing.updatedAt).getTime() : 0;
+        const currTime = record.updatedAt ? new Date(record.updatedAt).getTime() : 0;
+        if (currTime > prevTime) {
+          dedupedMap.set(key, record);
+        }
+      }
+    }
+
+    return Array.from(dedupedMap.values());
   } catch (e) {
     console.warn('Supabase fetch sales error:', e);
     return null;
@@ -380,6 +430,23 @@ export async function mergeRemoteSalesToLocal(): Promise<boolean> {
   let updated = false;
 
   remoteSales.forEach((remote) => {
+    const key = `${remote.outletId}_${remote.date}`;
+
+    // Jangan timpa data lokal jika user baru saja menyimpan di tab/perangkat ini dalam 12 detik terakhir
+    // kecuali data remote punya timestamp yang lebih baru dari waktu simpan lokal
+    try {
+      const localSaveTsRaw = localStorage.getItem(`cinema_xxi_sales_local_save_ts_${key}`);
+      if (localSaveTsRaw) {
+        const localSaveTs = Number(localSaveTsRaw);
+        const remoteTs = remote.updatedAt ? new Date(remote.updatedAt).getTime() : 0;
+        if (Date.now() - localSaveTs < 12000 && remoteTs < localSaveTs) {
+          return;
+        }
+      }
+    } catch {
+      // ignore
+    }
+
     const idx = currentLocal.findIndex(
       (s) => s.outletId === remote.outletId && s.date === remote.date
     );
@@ -387,11 +454,19 @@ export async function mergeRemoteSalesToLocal(): Promise<boolean> {
       const localStr = JSON.stringify(currentLocal[idx].shows || []);
       const remoteStr = JSON.stringify(remote.shows || []);
       if (localStr !== remoteStr) {
-        currentLocal[idx] = remote;
+        currentLocal[idx] = {
+          ...remote,
+          id: `sales-${remote.outletId}-${remote.date}`,
+          isMigrated: false,
+        };
         updated = true;
       }
     } else {
-      currentLocal.push(remote);
+      currentLocal.push({
+        ...remote,
+        id: `sales-${remote.outletId}-${remote.date}`,
+        isMigrated: false,
+      });
       updated = true;
     }
   });
@@ -1812,10 +1887,12 @@ export function setupSupabaseRealtimeSync(): () => void {
 
             if (payload.new.outlet_id && payload.new.date) {
               const remoteRecord: DailySalesRecord = {
-                id: payload.new.id,
+                id: `sales-${payload.new.outlet_id}-${payload.new.date}`,
                 outletId: payload.new.outlet_id,
                 date: payload.new.date,
                 shows: Array.isArray(payload.new.shows) ? payload.new.shows : [],
+                isMigrated: false,
+                updatedAt: payload.new.updated_at || new Date().toISOString(),
               };
               const currentLocal = StorageService.getDailySales();
               const idx = currentLocal.findIndex(
@@ -1906,11 +1983,11 @@ export function setupSupabaseRealtimeSync(): () => void {
       )
       .subscribe();
 
-    // Lightweight 5-second polling fallback in case Realtime WebSockets are restricted
+    // Fast 3-second polling fallback in case Realtime WebSockets are restricted
     const intervalId = setInterval(() => {
+      mergeRemoteSalesToLocal();
       mergeRemoteOutletsAndAreasToLocal();
       mergeRemoteAdditionalModulesToLocal();
-      mergeRemoteSalesToLocal();
       mergeRemoteBakingSalesToLocal();
       mergeRemoteOccupancyToLocal();
       mergeRemoteInspectionsToLocal();
@@ -1919,7 +1996,7 @@ export function setupSupabaseRealtimeSync(): () => void {
       mergeRemoteCashierPerformanceToLocal();
       mergeRemoteCashierProductsToLocal();
       mergeRemoteDailySectionSalesToLocal();
-    }, 5000);
+    }, 3000);
 
     return () => {
       try {
@@ -1932,9 +2009,9 @@ export function setupSupabaseRealtimeSync(): () => void {
   } catch (e) {
     console.warn('Realtime subscription error:', e);
     const intervalId = setInterval(() => {
+      mergeRemoteSalesToLocal();
       mergeRemoteOutletsAndAreasToLocal();
       mergeRemoteAdditionalModulesToLocal();
-      mergeRemoteSalesToLocal();
       mergeRemoteBakingSalesToLocal();
       mergeRemoteOccupancyToLocal();
       mergeRemoteInspectionsToLocal();
@@ -1943,7 +2020,7 @@ export function setupSupabaseRealtimeSync(): () => void {
       mergeRemoteCashierPerformanceToLocal();
       mergeRemoteCashierProductsToLocal();
       mergeRemoteDailySectionSalesToLocal();
-    }, 5000);
+    }, 3000);
     return () => clearInterval(intervalId);
   }
 }
@@ -1968,11 +2045,15 @@ export async function uploadAllLocalToSupabase(): Promise<{
     await syncOutletsAndAreasToSupabase();
     await syncAdditionalModulesToSupabase();
 
-    const sales = StorageService.getDailySales();
+    // Hanya upload data sales yang diinput/diedit user (bukan data statis migrasi bawaan)
+    const allSales = StorageService.getDailySales();
+    const userSales = allSales.filter(
+      (s) => s.isMigrated === false && !String(s.id || '').startsWith('mig_')
+    );
     let salesCount = 0;
-    if (sales.length > 0) {
-      const ok = await syncSalesToSupabase(sales);
-      if (ok) salesCount = sales.length;
+    if (userSales.length > 0) {
+      const ok = await syncSalesToSupabase(userSales);
+      if (ok) salesCount = userSales.length;
     }
 
     const bakingSales = StorageService.getBakingSales();

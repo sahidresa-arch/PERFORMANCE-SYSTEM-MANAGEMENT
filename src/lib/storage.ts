@@ -991,52 +991,72 @@ export const StorageService = {
       }
     }
 
-    // Auto-seed and sync migrated 2025 & 2026 data
+    // Auto-seed migrated 2025 & 2026 data WITHOUT overwriting user edits
     let updated = false;
     const allMigrated = [...MIGRATED_SALES_2025, ...MIGRATED_SALES_2026];
     const migratedMap = new Set(allMigrated.map((m) => `${m.outletId}_${m.date}`));
 
-    // Purge any stale/obsolete migrated records or system sync rows
-    const initialLen = list.length;
-    list = list.filter((item) => {
+    const existingMap = new Map<string, DailySalesRecord>();
+    for (const item of list) {
+      if (!item || !item.outletId || !item.date) {
+        updated = true;
+        continue;
+      }
       if (
-        String(item?.id || '').startsWith('__SYSTEM_SYNC_') ||
-        String(item?.outletId || '').startsWith('__SYSTEM_SYNC_')
+        String(item.id || '').startsWith('__SYSTEM_SYNC_') ||
+        String(item.outletId || '').startsWith('__SYSTEM_SYNC_')
       ) {
-        return false;
-      }
-      if (item.isMigrated || item.date <= '2026-09-30') {
-        return migratedMap.has(`${item.outletId}_${item.date}`);
-      }
-      return true;
-    });
-    if (list.length !== initialLen) {
-      updated = true;
-    }
-
-    allMigrated.forEach((migrated) => {
-      const index = list.findIndex(
-        (item) => item.outletId === migrated.outletId && item.date === migrated.date
-      );
-      if (index === -1) {
-        list.push(migrated);
         updated = true;
+        continue;
+      }
+      // Only purge a record if it is explicitly marked isMigrated === true AND no longer in migratedMap
+      const isPureMigrated =
+        item.isMigrated === true && String(item.id || '').startsWith('mig_');
+      if (isPureMigrated && !migratedMap.has(`${item.outletId}_${item.date}`)) {
+        updated = true;
+        continue;
+      }
+
+      const key = `${item.outletId}_${item.date}`;
+      const prev = existingMap.get(key);
+      if (!prev) {
+        existingMap.set(key, item);
       } else {
-        // Always keep migrated record synchronized with source definition
-        list[index] = migrated;
+        // Deduplicate: always prefer user-saved (!isMigrated) or newer updatedAt
         updated = true;
+        const prevIsUser = prev.isMigrated === false || !String(prev.id || '').startsWith('mig_');
+        const itemIsUser = item.isMigrated === false || !String(item.id || '').startsWith('mig_');
+        if (itemIsUser && !prevIsUser) {
+          existingMap.set(key, item);
+        } else if (itemIsUser === prevIsUser) {
+          const prevTime = prev.updatedAt ? new Date(prev.updatedAt).getTime() : 0;
+          const itemTime = item.updatedAt ? new Date(item.updatedAt).getTime() : 0;
+          if (itemTime >= prevTime) {
+            existingMap.set(key, item);
+          }
+        }
       }
-    });
-
-    if (updated || !raw) {
-      localStorage.setItem(KEYS.SALES, JSON.stringify(list));
     }
 
-    return list;
+    for (const migrated of allMigrated) {
+      const key = `${migrated.outletId}_${migrated.date}`;
+      if (!existingMap.has(key)) {
+        existingMap.set(key, migrated);
+        updated = true;
+      }
+    }
+
+    const finalList = Array.from(existingMap.values());
+    if (updated || !raw) {
+      localStorage.setItem(KEYS.SALES, JSON.stringify(finalList));
+    }
+
+    return finalList;
   },
 
   getDailySaleByOutletAndDate(outletId: string, date: string): DailySalesRecord {
     const list = this.getDailySales();
+    // Prefer non-migrated record if multiple exist, otherwise return existing
     const existing = list.find((s) => s.outletId === outletId && s.date === date);
     if (existing) return existing;
 
@@ -1045,6 +1065,7 @@ export const StorageService = {
       id: `sales-${outletId}-${date}`,
       outletId,
       date,
+      isMigrated: false,
       shows: [1, 2, 3, 4, 5].map((num) => ({
         showNumber: num,
         omsetCinema: 0,
@@ -1052,27 +1073,43 @@ export const StorageService = {
         bill: 0,
         penonton: 0,
         isFilled: false,
+        isLocked: false,
       })),
     };
   },
 
   saveDailySale(record: DailySalesRecord): DailySalesRecord {
-    const list = this.getDailySales();
-    const idx = list.findIndex((s) => s.outletId === record.outletId && s.date === record.date);
-    if (idx >= 0) {
-      list[idx] = record;
-    } else {
-      list.push(record);
+    const nowIso = new Date().toISOString();
+    const canonicalId = `sales-${record.outletId}-${record.date}`;
+    const normalizedRecord: DailySalesRecord = {
+      ...record,
+      id: canonicalId,
+      isMigrated: false,
+      updatedAt: nowIso,
+    };
+
+    try {
+      localStorage.setItem(
+        `cinema_xxi_sales_local_save_ts_${record.outletId}_${record.date}`,
+        String(Date.now())
+      );
+    } catch {
+      // ignore
     }
+
+    const list = this.getDailySales().filter(
+      (s) => !(s.outletId === normalizedRecord.outletId && s.date === normalizedRecord.date)
+    );
+    list.push(normalizedRecord);
     localStorage.setItem(KEYS.SALES, JSON.stringify(list));
     this.broadcastChange('sales');
 
     // Asynchronous background sync ke Supabase jika terhubung
     import('./supabase')
-      .then((m) => m.syncSalesToSupabase([record]))
+      .then((m) => m.syncSalesToSupabase([normalizedRecord]))
       .catch(() => {});
 
-    return record;
+    return normalizedRecord;
   },
 
   // Get latest cumulative show POS totals for a daily record
