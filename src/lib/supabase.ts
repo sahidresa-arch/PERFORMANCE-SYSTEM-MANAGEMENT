@@ -164,6 +164,84 @@ const DEVICE_CLIENT_ID = `dev_${Math.random().toString(36).slice(2, 10)}_${Date.
 let hybridClientInstance: SupabaseClient | null = null;
 let hybridClientKey = '';
 
+function getWorkerSyncEndpoints(action: 'query' | 'upsert' | 'status'): string[] {
+  const endpoints = [`/api/sync/${action}`];
+  if (typeof window !== 'undefined' && window.location?.hostname?.includes('bdv3.workers.dev')) {
+    const host = window.location.hostname;
+    if (host.includes('-v2.')) {
+      endpoints.push(`https://performance-system-management.bdv3.workers.dev/api/sync/${action}`);
+    } else {
+      endpoints.push(`https://performance-system-management-v2.bdv3.workers.dev/api/sync/${action}`);
+    }
+  }
+  return endpoints;
+}
+
+async function callInternalSyncQuery(payload: any): Promise<any> {
+  const endpoints = getWorkerSyncEndpoints('query');
+  let bestResult: any = null;
+
+  for (const url of endpoints) {
+    try {
+      const resp = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (resp.ok && (resp.headers.get('content-type') || '').includes('application/json')) {
+        const json = await resp.json();
+        const hasData = payload.headOnly
+          ? (json?.count ?? 0) > 0
+          : Array.isArray(json?.data)
+          ? json.data.length > 0
+          : Boolean(json?.data);
+        if (hasData) {
+          return json;
+        }
+        if (!bestResult) bestResult = json;
+      }
+    } catch {
+      // try next endpoint
+    }
+  }
+  return bestResult;
+}
+
+async function callInternalSyncUpsert(payload: any): Promise<{ ok: boolean; data: any }> {
+  const endpoints = getWorkerSyncEndpoints('upsert');
+  let primaryOk = false;
+  let primaryData: any = null;
+
+  for (let i = 0; i < endpoints.length; i++) {
+    const url = endpoints[i];
+    if (i === 0 || !primaryOk) {
+      try {
+        const resp = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        if (resp.ok && (resp.headers.get('content-type') || '').includes('application/json')) {
+          const json = await resp.json();
+          primaryData = json.data;
+          primaryOk = true;
+        }
+      } catch {
+        // try sibling worker endpoint
+      }
+    } else {
+      // Mirror in background to sibling Worker (-v2 <-> main) so both links stay 100% identical
+      fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      }).catch(() => {});
+    }
+  }
+
+  return { ok: primaryOk, data: primaryData };
+}
+
 function createInternalTableQueryBuilder(table: string, rawSupabase: SupabaseClient | null) {
   let selectCols = '*';
   let headOnly = false;
@@ -173,29 +251,16 @@ function createInternalTableQueryBuilder(table: string, rawSupabase: SupabaseCli
   let singleMode: 'none' | 'maybeSingle' | 'single' = 'none';
 
   const executeSelect = async (): Promise<{ data: any; error: any; count?: number }> => {
-    const fetchInternal = async () => {
-      try {
-        const resp = await fetch('/api/sync/query', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            table,
-            columns: selectCols,
-            eqFilters,
-            inFilter,
-            likeFilter,
-            singleMode,
-            headOnly,
-          }),
-        });
-        if (resp.ok && (resp.headers.get('content-type') || '').includes('application/json')) {
-          return await resp.json();
-        }
-      } catch {
-        // ignore
-      }
-      return null;
-    };
+    const fetchInternal = () =>
+      callInternalSyncQuery({
+        table,
+        columns: selectCols,
+        eqFilters,
+        inFilter,
+        likeFilter,
+        singleMode,
+        headOnly,
+      });
 
     const fetchSupa = async () => {
       if (!rawSupabase) return null;
@@ -264,15 +329,11 @@ function createInternalTableQueryBuilder(table: string, rawSupabase: SupabaseCli
     ) {
       const rowsToCache = Array.isArray(supaRes.data) ? supaRes.data : [supaRes.data];
       if (rowsToCache.length > 0 && rowsToCache[0]?.id) {
-        fetch('/api/sync/upsert', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            table,
-            records: rowsToCache,
-            clientId: DEVICE_CLIENT_ID,
-            seedMode: true,
-          }),
+        callInternalSyncUpsert({
+          table,
+          records: rowsToCache,
+          clientId: DEVICE_CLIENT_ID,
+          seedMode: true,
         }).catch(() => {});
       }
     }
@@ -354,36 +415,20 @@ function createInternalTableQueryBuilder(table: string, rawSupabase: SupabaseCli
       return executeSelect().then(onfulfilled, onrejected);
     },
     async upsert(records: any, options?: any) {
-      let internalOk = false;
-      let internalData: any = null;
-
-      // 1. Primary: Save to Internal Server Sync Engine (/api/sync/upsert) -> Instant SSE Broadcast to all devices & 100% Quota-Free!
-      try {
-        const resp = await fetch('/api/sync/upsert', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            table,
-            records,
-            clientId: DEVICE_CLIENT_ID,
-          }),
-        });
-        if (resp.ok && (resp.headers.get('content-type') || '').includes('application/json')) {
-          const json = await resp.json();
-          internalData = json.data;
-          internalOk = true;
-        }
-      } catch {
-        // Fallback to Supabase if internal endpoint fails
-      }
+      // 1. Primary: Save to Internal Server Sync Engine + Cross-Worker Auto-Bridge (main <-> v2)
+      const internalRes = await callInternalSyncUpsert({
+        table,
+        records,
+        clientId: DEVICE_CLIENT_ID,
+      });
 
       // 2. Secondary Background Mirror: Mirror to Supabase Cloud asynchronously without blocking UI or failing if Egress/Log Ingestion is full
       if (rawSupabase) {
         Promise.resolve(rawSupabase.from(table).upsert(records, options)).catch(() => {});
       }
 
-      if (internalOk) {
-        return { data: internalData, error: null };
+      if (internalRes.ok) {
+        return { data: internalRes.data, error: null };
       }
 
       if (rawSupabase) {
@@ -2798,15 +2843,11 @@ async function seedInternalServerFromLocalDevice(): Promise<void> {
     }
 
     if (batchRecords.length > 0) {
-      await fetch('/api/sync/upsert', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          table: 'cinema_sales',
-          records: batchRecords,
-          clientId: DEVICE_CLIENT_ID,
-          seedMode: true,
-        }),
+      await callInternalSyncUpsert({
+        table: 'cinema_sales',
+        records: batchRecords,
+        clientId: DEVICE_CLIENT_ID,
+        seedMode: true,
       });
     }
   } catch {
