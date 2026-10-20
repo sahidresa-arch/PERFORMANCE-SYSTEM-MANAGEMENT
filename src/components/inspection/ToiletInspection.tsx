@@ -173,19 +173,24 @@ export const ToiletInspection: React.FC<ToiletInspectionProps> = ({
 
   useEffect(() => {
     reloadInspections();
+    import('../../lib/supabase')
+      .then((m) => {
+        m.mergeRemoteInspectionsToLocal(false).then((changed) => {
+          if (changed) reloadInspections();
+        });
+        m.pullAllRemoteToLocal(false);
+      })
+      .catch(() => {});
+
     const runLiveInspectionSync = () => {
       if (document.visibilityState !== 'visible') return;
       import('../../lib/supabase')
         .then((m) => {
-          m.mergeRemoteInspectionsToLocal(false).then((changed) => {
-            if (changed) reloadInspections();
-          });
           m.pullAllRemoteToLocal(false);
         })
         .catch(() => {});
     };
 
-    runLiveInspectionSync();
     const liveInterval = setInterval(runLiveInspectionSync, 5000);
 
     const handleStorageUpdate = (e: any) => {

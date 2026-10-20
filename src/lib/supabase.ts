@@ -169,6 +169,7 @@ export function sanitizeSupabaseBaseUrl(rawUrl: string): string {
 const DEVICE_CLIENT_ID = `dev_${Math.random().toString(36).slice(2, 10)}_${Date.now().toString(36)}`;
 let hybridClientInstance: SupabaseClient | null = null;
 let hybridClientKey = '';
+let supabaseQuotaBackoffUntil = 0;
 
 function getWorkerSyncEndpoints(action: 'query' | 'upsert' | 'status'): string[] {
   const endpoints = [`/api/sync/${action}`];
@@ -320,6 +321,10 @@ function createInternalTableQueryBuilder(table: string, rawSupabase: SupabaseCli
 
     const fetchSupa = async () => {
       if (!rawSupabase) return null;
+      if (Date.now() < supabaseQuotaBackoffUntil) {
+        // Circuit-breaker aktif saat kuota Supabase penuh/gangguan -> 100% jalan lewat Internal Server tanpa delay
+        return null;
+      }
       try {
         let q: any = rawSupabase
           .from(table)
@@ -338,12 +343,20 @@ function createInternalTableQueryBuilder(table: string, rawSupabase: SupabaseCli
         } else if (singleMode === 'single') {
           q = q.single();
         }
-        const supaRes = await q;
-        if (!supaRes.error) {
+
+        const timeoutPromise = new Promise<null>((resolve) =>
+          setTimeout(() => resolve(null), 2500)
+        );
+        const supaRes: any = await Promise.race([q, timeoutPromise]);
+        if (supaRes && !supaRes.error) {
           return supaRes;
         }
+        if (!supaRes || supaRes.error) {
+          supabaseQuotaBackoffUntil = Date.now() + 45000;
+        }
       } catch {
-        // ignore Supabase quota/network errors
+        // Jika Supabase penuh/error, aktifkan circuit-breaker 45 detik agar aplikasi tetap 0ms cepat via Internal Server
+        supabaseQuotaBackoffUntil = Date.now() + 45000;
       }
       return null;
     };
@@ -939,12 +952,24 @@ async function executeOccupancyUpsert(
       { onConflict: 'id' }
     );
 
+    if (!skipMetaPointer) {
+      await client.from('cinema_sales').upsert(
+        {
+          id: '__SYSTEM_SYNC_OCCUPANCY__',
+          outlet_id: '__SYSTEM_SYNC__',
+          date: '2026-01-01',
+          shows: [{ lastOutletId: outletId, lastDate: date, updatedAt: nowIso }] as any,
+          updated_at: nowIso,
+        },
+        { onConflict: 'id' }
+      );
+    }
+
     if (error) {
       console.warn('Sync occupancy to Supabase warning:', error);
       return false;
     }
 
-    // cinema_occupancy table sudah memiliki realtime channel terdedikasi, tidak perlu double write ke cinema_sales
     return true;
   } catch (e) {
     console.warn('Supabase occupancy sync error:', e);
