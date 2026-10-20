@@ -15,6 +15,10 @@ import {
   ExtractedCashierItemEntry,
 } from '../../lib/ocrService';
 import {
+  BEVERAGE_CATEGORIES,
+  resolveProductItemCategory,
+} from './CashierBeverageCategoryView';
+import {
   CalendarDays,
   Clock,
   Save,
@@ -148,8 +152,8 @@ export const CashierPerformanceInput: React.FC<CashierPerformanceInputProps> = (
   const [searchItemQuery, setSearchItemQuery] = useState<string>('');
   const [sortOrder, setSortOrder] = useState<'default' | 'asc' | 'desc'>('default');
   const [newItemName, setNewItemName] = useState<string>('');
-  const [newItemUnit, setNewItemUnit] = useState<string>('PCS');
-  const [newItemCategory, setNewItemCategory] = useState<string>('F&B Cafe');
+  const [newItemUnit, setNewItemUnit] = useState<string>('CUP');
+  const [newItemCategory, setNewItemCategory] = useState<string>('AUTO');
 
   // Mistral OCR Item Scanner Modal states
   const [isMistralItemModalOpen, setIsMistralItemModalOpen] = useState<boolean>(false);
@@ -247,11 +251,11 @@ export const CashierPerformanceInput: React.FC<CashierPerformanceInputProps> = (
   };
 
   const reloadMonthlyProducts = () => {
-    if (!selectedCashierId) return;
-    const emp = cashierList.find((c) => c.id === selectedCashierId);
+    const effectiveCashierId = selectedCashierId || cashierList[0]?.id || 'default';
+    const emp = cashierList.find((c) => c.id === effectiveCashierId);
     const prodRec = StorageService.getCashierMonthlyProducts(
       selectedOutletId,
-      selectedCashierId,
+      effectiveCashierId,
       selectedYear,
       selectedMonth,
       emp?.name || ''
@@ -826,69 +830,135 @@ export const CashierPerformanceInput: React.FC<CashierPerformanceInputProps> = (
       return 0;
     });
 
+  const lastAddedItemIdRef = useRef<string | null>(null);
+
+  const buildCanonicalMonthlyRecord = (
+    itemsList: CashierProductItem[],
+    dailySalesMap: CashierMonthlyProductRecord['dailySales']
+  ): CashierMonthlyProductRecord => {
+    const effectiveCashierId = selectedCashierId || cashierList[0]?.id || 'default';
+    const emp = cashierList.find((c) => c.id === effectiveCashierId);
+    return {
+      ...monthlyProductRecord,
+      id: `${selectedOutletId}_${effectiveCashierId}_${selectedYear}_${selectedMonth}`,
+      outletId: selectedOutletId,
+      cashierId: effectiveCashierId,
+      cashierName: emp?.name || selectedCashier?.name || monthlyProductRecord.cashierName || 'Kasir XXI',
+      year: selectedYear,
+      month: selectedMonth,
+      items: itemsList,
+      dailySales: dailySalesMap,
+    };
+  };
+
   const handleProductCellChange = (day: number, itemId: string, val: number) => {
-    const updatedDaily = { ...monthlyProductRecord.dailySales };
+    const updatedDaily = { ...(monthlyProductRecord.dailySales || {}) };
     if (!updatedDaily[day]) updatedDaily[day] = {};
     updatedDaily[day] = {
       ...updatedDaily[day],
       [itemId]: Math.max(0, val),
     };
-    const nextRec: CashierMonthlyProductRecord = {
-      ...monthlyProductRecord,
-      cashierName: selectedCashier?.name || monthlyProductRecord.cashierName,
-      dailySales: updatedDaily,
-    };
+    const nextRec = buildCanonicalMonthlyRecord(
+      monthlyProductRecord.items || [],
+      updatedDaily
+    );
     setMonthlyProductRecord(nextRec);
+    StorageService.saveCashierMonthlyProducts(nextRec);
+  };
+
+  const handleRenameItemRow = (itemId: string, nextName: string) => {
+    const currentItems = monthlyProductRecord.items || [];
+    const updatedItems = currentItems.map((it) => {
+      if (it.id !== itemId) return it;
+      const autoCat = resolveProductItemCategory(nextName, it.category);
+      return { ...it, name: nextName, category: autoCat };
+    });
+    const nextRec = buildCanonicalMonthlyRecord(
+      updatedItems,
+      monthlyProductRecord.dailySales || {}
+    );
+    setMonthlyProductRecord(nextRec);
+    StorageService.saveCashierMonthlyProducts(nextRec);
+  };
+
+  const handleCategoryItemRowChange = (itemId: string, nextCategory: string) => {
+    const currentItems = monthlyProductRecord.items || [];
+    const updatedItems = currentItems.map((it) =>
+      it.id === itemId ? { ...it, category: nextCategory } : it
+    );
+    const nextRec = buildCanonicalMonthlyRecord(
+      updatedItems,
+      monthlyProductRecord.dailySales || {}
+    );
+    setMonthlyProductRecord(nextRec);
+    StorageService.saveCashierMonthlyProducts(nextRec);
   };
 
   const handleSaveMonthlyProducts = () => {
-    if (!selectedCashierId) return;
-    const nextRec: CashierMonthlyProductRecord = {
-      ...monthlyProductRecord,
-      outletId: selectedOutletId,
-      cashierId: selectedCashierId,
-      cashierName: selectedCashier?.name || monthlyProductRecord.cashierName,
-      year: selectedYear,
-      month: selectedMonth,
-    };
+    const nextRec = buildCanonicalMonthlyRecord(
+      monthlyProductRecord.items || [],
+      monthlyProductRecord.dailySales || {}
+    );
     StorageService.saveCashierMonthlyProducts(nextRec);
     triggerToast(
-      `Tabel Excel Item Harian kasir ${selectedCashier?.name || ''} berhasil disimpan!`
+      `Tabel Excel Item Harian kasir ${nextRec.cashierName || ''} berhasil disimpan!`
     );
   };
 
   const handleAddManualItemRow = () => {
+    const currentItems = monthlyProductRecord.items || [];
     const trimmed = newItemName.trim();
-    if (!trimmed) return;
 
-    const existing = monthlyProductRecord.items.find(
-      (i) => i.name.toLowerCase() === trimmed.toLowerCase()
-    );
-    if (existing) {
-      triggerToast(`Item "${trimmed}" sudah ada di dalam tabel.`);
-      return;
+    if (trimmed) {
+      const existing = currentItems.find(
+        (i) => i.name.trim().toLowerCase() === trimmed.toLowerCase()
+      );
+      if (existing) {
+        triggerToast(`Item "${trimmed}" sudah ada di dalam tabel.`);
+        return;
+      }
     }
 
+    // Jika input nama kosong saat klik "+ Tambah Baris", tetap tambahkan baris baru yang bisa langsung diketik di dalam tabel
+    const finalName = trimmed || `Item Produk Baru #${currentItems.length + 1}`;
+    const newItemId = `item_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    const resolvedCategory =
+      newItemCategory && newItemCategory !== 'AUTO'
+        ? newItemCategory
+        : resolveProductItemCategory(finalName);
+
     const newItem: CashierProductItem = {
-      id: `item_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-      name: trimmed,
-      unit: newItemUnit.toUpperCase() || 'PCS',
-      category: newItemCategory || 'F&B Cafe',
+      id: newItemId,
+      name: finalName,
+      unit: newItemUnit.toUpperCase() || 'CUP',
+      category: resolvedCategory,
     };
 
-    const nextRec: CashierMonthlyProductRecord = {
-      ...monthlyProductRecord,
-      items: [...monthlyProductRecord.items, newItem],
-    };
+    if (searchItemQuery) {
+      setSearchItemQuery('');
+    }
+    if (sortOrder !== 'default') {
+      setSortOrder('default');
+    }
+
+    lastAddedItemIdRef.current = newItemId;
+    const nextRec = buildCanonicalMonthlyRecord(
+      [...currentItems, newItem],
+      monthlyProductRecord.dailySales || {}
+    );
     setMonthlyProductRecord(nextRec);
     StorageService.saveCashierMonthlyProducts(nextRec);
     setNewItemName('');
-    triggerToast(`Baris item baru "${trimmed}" berhasil ditambahkan ke tabel!`);
+    triggerToast(
+      trimmed
+        ? `Baris item "${finalName}" (${resolvedCategory}) berhasil ditambahkan ke tabel!`
+        : `Baris baru berhasil ditambahkan! Silakan ketik nama item produk pada kolom Nama Item Produk.`
+    );
   };
 
   const handleDeleteItemRow = (itemId: string, itemName: string) => {
-    const updatedItems = monthlyProductRecord.items.filter((i) => i.id !== itemId);
-    const updatedDaily = { ...monthlyProductRecord.dailySales };
+    const updatedItems = (monthlyProductRecord.items || []).filter((i) => i.id !== itemId);
+    const updatedDaily = { ...(monthlyProductRecord.dailySales || {}) };
     Object.keys(updatedDaily).forEach((dKey) => {
       const d = Number(dKey);
       if (updatedDaily[d] && updatedDaily[d][itemId] !== undefined) {
@@ -898,11 +968,7 @@ export const CashierPerformanceInput: React.FC<CashierPerformanceInputProps> = (
       }
     });
 
-    const nextRec: CashierMonthlyProductRecord = {
-      ...monthlyProductRecord,
-      items: updatedItems,
-      dailySales: updatedDaily,
-    };
+    const nextRec = buildCanonicalMonthlyRecord(updatedItems, updatedDaily);
     setMonthlyProductRecord(nextRec);
     StorageService.saveCashierMonthlyProducts(nextRec);
     triggerToast(`Baris item "${itemName}" telah dihapus dari tabel.`);
@@ -986,16 +1052,7 @@ export const CashierPerformanceInput: React.FC<CashierPerformanceInputProps> = (
         scanMergeMode === 'add' ? prevQty + scanned.qty : scanned.qty;
     });
 
-    const nextRec: CashierMonthlyProductRecord = {
-      ...monthlyProductRecord,
-      outletId: selectedOutletId,
-      cashierId: selectedCashierId,
-      cashierName: selectedCashier?.name || monthlyProductRecord.cashierName,
-      year: selectedYear,
-      month: selectedMonth,
-      items: updatedItems,
-      dailySales: updatedDaily,
-    };
+    const nextRec = buildCanonicalMonthlyRecord(updatedItems, updatedDaily);
 
     setMonthlyProductRecord(nextRec);
     StorageService.saveCashierMonthlyProducts(nextRec);
@@ -2271,8 +2328,21 @@ export const CashierPerformanceInput: React.FC<CashierPerformanceInputProps> = (
                     if (e.key === 'Enter') handleAddManualItemRow();
                   }}
                   placeholder="Tambah nama item produk baru..."
-                  className="px-3 py-2 rounded-xl border border-slate-300 bg-white text-xs font-semibold text-slate-800 min-w-[240px]"
+                  className="px-3 py-2 rounded-xl border border-slate-300 bg-white text-xs font-semibold text-slate-800 min-w-[210px]"
                 />
+                <select
+                  value={newItemCategory}
+                  onChange={(e) => setNewItemCategory(e.target.value)}
+                  className="px-2.5 py-2 rounded-xl border border-slate-300 bg-white text-xs font-bold text-slate-700"
+                  title="Pilih Kategori Minuman / Produk"
+                >
+                  <option value="AUTO">Kategori: Deteksi Otomatis</option>
+                  {BEVERAGE_CATEGORIES.map((cat) => (
+                    <option key={cat.id} value={cat.id}>
+                      {cat.shortLabel}
+                    </option>
+                  ))}
+                </select>
                 <button
                   type="button"
                   onClick={handleAddManualItemRow}
@@ -2361,18 +2431,31 @@ export const CashierPerformanceInput: React.FC<CashierPerformanceInputProps> = (
                     <tr>
                       <td
                         colSpan={daysInMonth + 4}
-                        className="py-10 px-4 text-center text-xs text-slate-400 italic"
+                        className="py-10 px-4 text-center text-xs text-slate-400"
                       >
-                        Belum ada item produk pada tabel ini. Silakan klik{' '}
-                        <strong className="text-purple-800 not-italic">
-                          SCAN ITEM BY MISTRAL OCR
-                        </strong>{' '}
-                        atau tambahkan nama item produk baru di atas.
+                        <div className="flex flex-col items-center justify-center space-y-3">
+                          <span className="italic">
+                            Belum ada item produk pada tabel ini. Silakan klik{' '}
+                            <strong className="text-purple-800 not-italic">
+                              SCAN ITEM BY MISTRAL OCR
+                            </strong>{' '}
+                            atau klik tombol di bawah untuk menambah baris baru.
+                          </span>
+                          <button
+                            type="button"
+                            onClick={handleAddManualItemRow}
+                            className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs flex items-center space-x-1.5 shadow-2xs transition cursor-pointer"
+                          >
+                            <Plus className="w-4 h-4" />
+                            <span>Tambah Baris Item Pertama</span>
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ) : (
                     filteredProductItems.map((item, idx) => {
                       let rowTotal = 0;
+                      const isNewlyAdded = lastAddedItemIdRef.current === item.id;
                       return (
                         <tr
                           key={item.id}
@@ -2383,8 +2466,37 @@ export const CashierPerformanceInput: React.FC<CashierPerformanceInputProps> = (
                           <td className="py-2 px-2 border-r border-slate-200 font-bold text-slate-500">
                             {idx + 1}
                           </td>
-                          <td className="py-2 px-3 border-r border-slate-200 text-left font-bold text-slate-900 sticky left-0 bg-inherit z-10">
-                            {item.name}
+                          <td className="py-1.5 px-2 border-r border-slate-200 text-left font-bold text-slate-900 sticky left-0 bg-inherit z-10 min-w-[245px]">
+                            <input
+                              type="text"
+                              value={item.name}
+                              autoFocus={isNewlyAdded}
+                              onFocus={(e) => {
+                                if (isNewlyAdded) {
+                                  e.target.select();
+                                  lastAddedItemIdRef.current = null;
+                                }
+                              }}
+                              onChange={(e) => handleRenameItemRow(item.id, e.target.value)}
+                              placeholder="Ketik nama item produk..."
+                              className="w-full px-2 py-1 rounded-lg border border-transparent hover:border-slate-300 focus:border-purple-500 focus:bg-white focus:ring-1 focus:ring-purple-500 text-xs font-bold text-slate-900 outline-hidden transition"
+                            />
+                            <div className="px-1.5 mt-0.5 flex items-center">
+                              <select
+                                value={resolveProductItemCategory(item.name, item.category)}
+                                onChange={(e) =>
+                                  handleCategoryItemRowChange(item.id, e.target.value)
+                                }
+                                className="text-[10px] font-semibold text-purple-800 bg-transparent hover:bg-purple-50 rounded px-1 py-0.5 outline-hidden cursor-pointer"
+                                title="Kategori untuk Submenu Minuman Perkategori"
+                              >
+                                {BEVERAGE_CATEGORIES.map((catOpt) => (
+                                  <option key={catOpt.id} value={catOpt.id}>
+                                    {catOpt.shortLabel}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
                           </td>
                           {Array.from({ length: daysInMonth }, (_, i) => i + 1).map(
                             (day) => {
@@ -2440,6 +2552,21 @@ export const CashierPerformanceInput: React.FC<CashierPerformanceInputProps> = (
                         </tr>
                       );
                     })
+                  )}
+                  {filteredProductItems.length > 0 && (
+                    <tr className="bg-amber-50/40 border-t border-slate-200">
+                      <td colSpan={2} className="py-2 px-3 text-left sticky left-0 bg-amber-50/90 z-10 border-r border-slate-200">
+                        <button
+                          type="button"
+                          onClick={handleAddManualItemRow}
+                          className="px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-[11px] flex items-center space-x-1.5 shadow-2xs transition cursor-pointer"
+                        >
+                          <Plus className="w-3.5 h-3.5" />
+                          <span>Tambah Baris Item Baru</span>
+                        </button>
+                      </td>
+                      <td colSpan={daysInMonth + 2} />
+                    </tr>
                   )}
                 </tbody>
                 <tfoot>

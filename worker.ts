@@ -122,20 +122,73 @@ function smartMergeSalesRow(existingRow: any, incomingRow: any): any {
   return incomingRow;
 }
 
-async function getHydratedStore(env: any): Promise<SyncStoreData> {
+function mergeStoreTables(target: SyncStoreData, incoming: any): void {
+  if (!incoming || typeof incoming !== 'object') return;
+
+  if (incoming.cinema_sales && typeof incoming.cinema_sales === 'object') {
+    for (const [id, incRow] of Object.entries<any>(incoming.cinema_sales)) {
+      if (!incRow || !id) continue;
+      const existing = target.cinema_sales[id];
+      if (!existing) {
+        target.cinema_sales[id] = incRow;
+      } else {
+        const exTs = existing.updated_at ? new Date(existing.updated_at).getTime() : 0;
+        const incTs = incRow.updated_at ? new Date(incRow.updated_at).getTime() : 0;
+        if (incTs >= exTs) {
+          target.cinema_sales[id] = smartMergeSalesRow(existing, incRow);
+        } else {
+          target.cinema_sales[id] = smartMergeSalesRow(incRow, existing);
+        }
+      }
+    }
+  }
+
+  if (incoming.cinema_occupancy && typeof incoming.cinema_occupancy === 'object') {
+    for (const [id, incRow] of Object.entries<any>(incoming.cinema_occupancy)) {
+      if (!incRow || !id) continue;
+      const existing = target.cinema_occupancy[id];
+      if (!existing) {
+        target.cinema_occupancy[id] = incRow;
+      } else {
+        const exTs = existing.updated_at ? new Date(existing.updated_at).getTime() : 0;
+        const incTs = incRow.updated_at ? new Date(incRow.updated_at).getTime() : 0;
+        if (incTs >= exTs) {
+          target.cinema_occupancy[id] = incRow;
+        }
+      }
+    }
+  }
+
+  if (incoming.cinema_config && typeof incoming.cinema_config === 'object') {
+    for (const [id, incRow] of Object.entries<any>(incoming.cinema_config)) {
+      if (!incRow || !id) continue;
+      const existing = target.cinema_config[id];
+      if (!existing) {
+        target.cinema_config[id] = incRow;
+      } else {
+        const exTs = existing.updated_at ? new Date(existing.updated_at).getTime() : 0;
+        const incTs = incRow.updated_at ? new Date(incRow.updated_at).getTime() : 0;
+        if (incTs >= exTs) {
+          target.cinema_config[id] = incRow;
+        }
+      }
+    }
+  }
+}
+
+async function getHydratedStore(env: any, forceRefresh = false): Promise<SyncStoreData> {
   const store = g.__CINEMA_XXI_EDGE_STORE__;
-  if (store.hydrated) return store;
+  const now = Date.now();
+  if (store.hydrated && !forceRefresh && now - (store.lastHydratedAt || 0) < 1500) {
+    return store;
+  }
 
   // 1. Optional Cloudflare KV Binding (SYNC_KV)
   if (env && env.SYNC_KV && typeof env.SYNC_KV.get === 'function') {
     try {
       const raw = await env.SYNC_KV.get('CINEMA_XXI_STORE', 'json');
       if (raw && typeof raw === 'object') {
-        if (raw.cinema_sales) store.cinema_sales = { ...raw.cinema_sales, ...store.cinema_sales };
-        if (raw.cinema_occupancy) store.cinema_occupancy = { ...raw.cinema_occupancy, ...store.cinema_occupancy };
-        if (raw.cinema_config) store.cinema_config = { ...raw.cinema_config, ...store.cinema_config };
-        store.hydrated = true;
-        return store;
+        mergeStoreTables(store, raw);
       }
     } catch {
       // ignore KV error
@@ -150,9 +203,7 @@ async function getHydratedStore(env: any): Promise<SyncStoreData> {
       if (cachedResp) {
         const raw = await cachedResp.json();
         if (raw && typeof raw === 'object') {
-          if (raw.cinema_sales) store.cinema_sales = { ...raw.cinema_sales, ...store.cinema_sales };
-          if (raw.cinema_occupancy) store.cinema_occupancy = { ...raw.cinema_occupancy, ...store.cinema_occupancy };
-          if (raw.cinema_config) store.cinema_config = { ...raw.cinema_config, ...store.cinema_config };
+          mergeStoreTables(store, raw);
         }
       }
     }
@@ -161,6 +212,7 @@ async function getHydratedStore(env: any): Promise<SyncStoreData> {
   }
 
   store.hydrated = true;
+  store.lastHydratedAt = Date.now();
   return store;
 }
 

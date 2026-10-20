@@ -186,9 +186,8 @@ function getWorkerSyncEndpoints(action: 'query' | 'upsert' | 'status'): string[]
 
 async function callInternalSyncQuery(payload: any): Promise<any> {
   const endpoints = getWorkerSyncEndpoints('query');
-  let bestResult: any = null;
 
-  for (const url of endpoints) {
+  const fetchOne = async (url: string) => {
     try {
       const resp = await fetch(url, {
         method: 'POST',
@@ -196,22 +195,66 @@ async function callInternalSyncQuery(payload: any): Promise<any> {
         body: JSON.stringify(payload),
       });
       if (resp.ok && (resp.headers.get('content-type') || '').includes('application/json')) {
-        const json = await resp.json();
-        const hasData = payload.headOnly
-          ? (json?.count ?? 0) > 0
-          : Array.isArray(json?.data)
-          ? json.data.length > 0
-          : Boolean(json?.data);
-        if (hasData) {
-          return json;
-        }
-        if (!bestResult) bestResult = json;
+        return await resp.json();
       }
     } catch {
-      // try next endpoint
+      // ignore network error
+    }
+    return null;
+  };
+
+  if (endpoints.length === 1) {
+    return fetchOne(endpoints[0]);
+  }
+
+  const results = (await Promise.all(endpoints.map(fetchOne))).filter(Boolean);
+  if (results.length === 0) return null;
+  if (results.length === 1) return results[0];
+
+  if (payload.headOnly) {
+    const maxCount = Math.max(...results.map((r: any) => Number(r?.count || 0)));
+    return { data: null, count: maxCount, error: null };
+  }
+
+  if (payload.singleMode === 'maybeSingle' || payload.singleMode === 'single') {
+    let bestRow: any = null;
+    for (const res of results) {
+      const candidate = res?.data;
+      if (!candidate) continue;
+      if (!bestRow) {
+        bestRow = candidate;
+      } else {
+        const bTs = bestRow.updated_at ? new Date(bestRow.updated_at).getTime() : 0;
+        const cTs = candidate.updated_at ? new Date(candidate.updated_at).getTime() : 0;
+        if (cTs > bTs) {
+          bestRow = candidate;
+        }
+      }
+    }
+    return { data: bestRow, error: null };
+  }
+
+  // Merge array results across endpoints by row.id picking newest updated_at
+  const mergedMap = new Map<string, any>();
+  for (const res of results) {
+    const list = Array.isArray(res?.data) ? res.data : [];
+    for (const row of list) {
+      if (!row || !row.id) continue;
+      const key = String(row.id);
+      const prev = mergedMap.get(key);
+      if (!prev) {
+        mergedMap.set(key, row);
+      } else {
+        const pTs = prev.updated_at ? new Date(prev.updated_at).getTime() : 0;
+        const rTs = row.updated_at ? new Date(row.updated_at).getTime() : 0;
+        if (rTs >= pTs) {
+          mergedMap.set(key, row);
+        }
+      }
     }
   }
-  return bestResult;
+
+  return { data: Array.from(mergedMap.values()), error: null };
 }
 
 async function callInternalSyncUpsert(payload: any): Promise<{ ok: boolean; data: any }> {
@@ -2720,17 +2763,30 @@ export async function pullAllRemoteToLocal(forceFull = false): Promise<void> {
 
     // Jika pada saat buka pertama kali ada modul yang belum pernah ada di localStorage sama sekali, pastikan di-fetch
     if (!hasCompletedInitialPull) {
-      if (!localStorage.getItem('cinema_xxi_user_sales_overrides')) {
+      const serverIds = new Set(metaRows.map((r: any) => String(r?.id || '')));
+      if (!localStorage.getItem('cinema_xxi_user_sales_overrides') && serverIds.has('__SYSTEM_SYNC_DAILY_SALES__')) {
         changedIds.add('__SYSTEM_SYNC_DAILY_SALES__');
       }
-      if (!localStorage.getItem('cinema_xxi_outlets')) {
+      if (!localStorage.getItem('cinema_xxi_outlets') && serverIds.has('__SYSTEM_SYNC_OUTLETS__')) {
         changedIds.add('__SYSTEM_SYNC_OUTLETS__');
       }
-      if (!localStorage.getItem('cinema_xxi_toilet_inspections')) {
+      if (!localStorage.getItem('cinema_xxi_toilet_inspections') && serverIds.has('__SYSTEM_SYNC_INSPECTIONS__')) {
         changedIds.add('__SYSTEM_SYNC_INSPECTIONS__');
       }
-      if (!localStorage.getItem('cinema_xxi_occupancy_manifest')) {
+      if (!localStorage.getItem('cinema_xxi_occupancy_manifest') && serverIds.has('__SYSTEM_SYNC_OCCUPANCY__')) {
         changedIds.add('__SYSTEM_SYNC_OCCUPANCY__');
+      }
+      if (!localStorage.getItem('cinema_xxi_cashier_performance_daily') && serverIds.has('__SYSTEM_SYNC_SDM_PERFORMANCE__')) {
+        changedIds.add('__SYSTEM_SYNC_SDM_PERFORMANCE__');
+      }
+      if (!localStorage.getItem('cinema_xxi_cashier_monthly_products') && serverIds.has('__SYSTEM_SYNC_SDM_PRODUCTS__')) {
+        changedIds.add('__SYSTEM_SYNC_SDM_PRODUCTS__');
+      }
+      if (!localStorage.getItem('cinema_xxi_baking_sales') && serverIds.has('__SYSTEM_SYNC_BAKING_SALES__')) {
+        changedIds.add('__SYSTEM_SYNC_BAKING_SALES__');
+      }
+      if (!localStorage.getItem('cinema_xxi_employees') && serverIds.has('__SYSTEM_SYNC_EMPLOYEES__')) {
+        changedIds.add('__SYSTEM_SYNC_EMPLOYEES__');
       }
       hasCompletedInitialPull = true;
     }

@@ -25,7 +25,7 @@ import { KpiKaryawanView } from './components/hc/KpiKaryawanView';
 import { LostAndFoundView } from './components/lost_found/LostAndFoundView';
 import { CashierPerformanceInput } from './components/sdm/CashierPerformanceInput';
 import { CashierLeaderboard } from './components/sdm/CashierLeaderboard';
-import { CashierSectionTable } from './components/sdm/CashierSectionTable';
+import { CashierBeverageCategoryView } from './components/sdm/CashierBeverageCategoryView';
 import { SettingsModal } from './components/settings/SettingsModal';
 
 function getTodayDateString(): string {
@@ -286,8 +286,8 @@ export default function App() {
                 />
               )}
 
-              {activeMenu === 'sdm_section' && (
-                <CashierSectionTable
+              {activeMenu === 'sdm_beverage_category' && (
+                <CashierBeverageCategoryView
                   currentUser={currentUser}
                   selectedDate={selectedDate}
                   onDateChange={setSelectedDate}
