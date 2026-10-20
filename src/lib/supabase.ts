@@ -173,42 +173,36 @@ function createInternalTableQueryBuilder(table: string, rawSupabase: SupabaseCli
   let singleMode: 'none' | 'maybeSingle' | 'single' = 'none';
 
   const executeSelect = async (): Promise<{ data: any; error: any; count?: number }> => {
-    // 1. Primary: Query Internal Server Sync Engine (/api/sync/query) -> 0 KB Supabase Egress & 0 Log Ingestion!
-    try {
-      const resp = await fetch('/api/sync/query', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          table,
-          columns: selectCols,
-          eqFilters,
-          inFilter,
-          likeFilter,
-          singleMode,
-          headOnly,
-        }),
-      });
-
-      if (resp.ok) {
-        const internalResult = await resp.json();
-        const hasInternalData = headOnly
-          ? (internalResult.count ?? 0) > 0
-          : Array.isArray(internalResult.data)
-          ? internalResult.data.length > 0
-          : Boolean(internalResult.data);
-
-        if (hasInternalData) {
-          return internalResult;
-        }
-      }
-    } catch {
-      // Internal server unreachable, fall through to Supabase
-    }
-
-    // 2. Fallback / Initial Hydration from Supabase Cloud (only if Internal Server did not have the requested row yet)
-    if (rawSupabase) {
+    const fetchInternal = async () => {
       try {
-        let q: any = rawSupabase.from(table).select(selectCols, headOnly ? { count: 'exact', head: true } : undefined);
+        const resp = await fetch('/api/sync/query', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            table,
+            columns: selectCols,
+            eqFilters,
+            inFilter,
+            likeFilter,
+            singleMode,
+            headOnly,
+          }),
+        });
+        if (resp.ok && (resp.headers.get('content-type') || '').includes('application/json')) {
+          return await resp.json();
+        }
+      } catch {
+        // ignore
+      }
+      return null;
+    };
+
+    const fetchSupa = async () => {
+      if (!rawSupabase) return null;
+      try {
+        let q: any = rawSupabase
+          .from(table)
+          .select(selectCols, headOnly ? { count: 'exact', head: true } : undefined);
         for (const f of eqFilters) {
           q = q.eq(f.col, f.val);
         }
@@ -224,44 +218,109 @@ function createInternalTableQueryBuilder(table: string, rawSupabase: SupabaseCli
           q = q.single();
         }
         const supaRes = await q;
-
-        // If Supabase returned full row data, cache it into Internal Server so other devices get it with 0 Egress
-        if (
-          !supaRes.error &&
-          supaRes.data &&
-          !headOnly &&
-          (selectCols === '*' ||
-            selectCols.includes('shows') ||
-            selectCols.includes('rows') ||
-            selectCols.includes('config'))
-        ) {
-          const rowsToCache = Array.isArray(supaRes.data) ? supaRes.data : [supaRes.data];
-          if (rowsToCache.length > 0 && rowsToCache[0]?.id) {
-            fetch('/api/sync/upsert', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                table,
-                records: rowsToCache,
-                clientId: DEVICE_CLIENT_ID,
-                seedMode: true,
-              }),
-            }).catch(() => {});
-          }
-        }
-
         if (!supaRes.error) {
           return supaRes;
         }
       } catch {
-        // Ignore Supabase quota/network errors and return safe empty result
+        // ignore Supabase quota/network errors
+      }
+      return null;
+    };
+
+    const internalRes = await fetchInternal();
+    const isLightweightMetaQuery =
+      !headOnly &&
+      !selectCols.includes('shows') &&
+      !selectCols.includes('rows') &&
+      !selectCols.includes('config') &&
+      selectCols !== '*';
+
+    const hasInternalData = headOnly
+      ? (internalRes?.count ?? 0) > 0
+      : Array.isArray(internalRes?.data)
+      ? internalRes.data.length > 0
+      : Boolean(internalRes?.data);
+
+    // If Internal Server already has the full data payload, return it immediately -> 0 KB Supabase Egress & 0 Log Ingestion!
+    if (hasInternalData && !isLightweightMetaQuery) {
+      return internalRes;
+    }
+
+    // Only query Supabase if Internal Server is unavailable/empty (e.g. on static workers.dev) or for ~400B metadata check
+    const supaRes = await fetchSupa();
+
+    if (headOnly) {
+      const count = Math.max(internalRes?.count ?? 0, supaRes?.count ?? 0);
+      return { data: null, error: null, count };
+    }
+
+    // Cache full rows from Supabase into Internal Server so Internal Server always stays warm
+    if (
+      supaRes?.data &&
+      (selectCols === '*' ||
+        selectCols.includes('shows') ||
+        selectCols.includes('rows') ||
+        selectCols.includes('config'))
+    ) {
+      const rowsToCache = Array.isArray(supaRes.data) ? supaRes.data : [supaRes.data];
+      if (rowsToCache.length > 0 && rowsToCache[0]?.id) {
+        fetch('/api/sync/upsert', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            table,
+            records: rowsToCache,
+            clientId: DEVICE_CLIENT_ID,
+            seedMode: true,
+          }),
+        }).catch(() => {});
       }
     }
 
+    if (singleMode === 'maybeSingle' || singleMode === 'single') {
+      const intRow = internalRes?.data || null;
+      const supRow = supaRes?.data || null;
+      if (intRow && supRow) {
+        const intTs = intRow.updated_at ? new Date(intRow.updated_at).getTime() : 0;
+        const supTs = supRow.updated_at ? new Date(supRow.updated_at).getTime() : 0;
+        return { data: intTs >= supTs ? intRow : supRow, error: null };
+      }
+      const chosen = intRow || supRow;
+      if (!chosen && singleMode === 'single') {
+        return { data: null, error: { code: 'PGRST116', message: 'No rows found' } };
+      }
+      return { data: chosen, error: null };
+    }
+
+    const intList = Array.isArray(internalRes?.data) ? internalRes.data : [];
+    const supList = Array.isArray(supaRes?.data) ? supaRes.data : [];
+
+    if (intList.length > 0 && supList.length > 0) {
+      const mergedMap = new Map<string, any>();
+      for (const r of supList) {
+        if (r && r.id) mergedMap.set(String(r.id), r);
+      }
+      for (const r of intList) {
+        if (r && r.id) {
+          const key = String(r.id);
+          const prev = mergedMap.get(key);
+          if (!prev) {
+            mergedMap.set(key, r);
+          } else {
+            const prevTs = prev.updated_at ? new Date(prev.updated_at).getTime() : 0;
+            const nextTs = r.updated_at ? new Date(r.updated_at).getTime() : 0;
+            if (nextTs >= prevTs) {
+              mergedMap.set(key, r);
+            }
+          }
+        }
+      }
+      return { data: Array.from(mergedMap.values()), error: null };
+    }
+
     return {
-      data: singleMode === 'none' ? [] : null,
+      data: intList.length > 0 ? intList : supList,
       error: null,
-      count: 0,
     };
   };
 
@@ -309,7 +368,7 @@ function createInternalTableQueryBuilder(table: string, rawSupabase: SupabaseCli
             clientId: DEVICE_CLIENT_ID,
           }),
         });
-        if (resp.ok) {
+        if (resp.ok && (resp.headers.get('content-type') || '').includes('application/json')) {
           const json = await resp.json();
           internalData = json.data;
           internalOk = true;
