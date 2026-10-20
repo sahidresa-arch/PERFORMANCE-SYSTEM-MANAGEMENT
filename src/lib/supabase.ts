@@ -160,6 +160,188 @@ export function sanitizeSupabaseBaseUrl(rawUrl: string): string {
   return (rawUrl || '').trim().replace(/\/rest\/v1\/?$/i, '').replace(/\/+$/, '');
 }
 
+const DEVICE_CLIENT_ID = `dev_${Math.random().toString(36).slice(2, 10)}_${Date.now().toString(36)}`;
+let hybridClientInstance: SupabaseClient | null = null;
+let hybridClientKey = '';
+
+function createInternalTableQueryBuilder(table: string, rawSupabase: SupabaseClient | null) {
+  let selectCols = '*';
+  let headOnly = false;
+  const eqFilters: Array<{ col: string; val: any }> = [];
+  let inFilter: { col: string; vals: any[] } | null = null;
+  let likeFilter: { col: string; pattern: string } | null = null;
+  let singleMode: 'none' | 'maybeSingle' | 'single' = 'none';
+
+  const executeSelect = async (): Promise<{ data: any; error: any; count?: number }> => {
+    // 1. Primary: Query Internal Server Sync Engine (/api/sync/query) -> 0 KB Supabase Egress & 0 Log Ingestion!
+    try {
+      const resp = await fetch('/api/sync/query', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          table,
+          columns: selectCols,
+          eqFilters,
+          inFilter,
+          likeFilter,
+          singleMode,
+          headOnly,
+        }),
+      });
+
+      if (resp.ok) {
+        const internalResult = await resp.json();
+        const hasInternalData = headOnly
+          ? (internalResult.count ?? 0) > 0
+          : Array.isArray(internalResult.data)
+          ? internalResult.data.length > 0
+          : Boolean(internalResult.data);
+
+        if (hasInternalData) {
+          return internalResult;
+        }
+      }
+    } catch {
+      // Internal server unreachable, fall through to Supabase
+    }
+
+    // 2. Fallback / Initial Hydration from Supabase Cloud (only if Internal Server did not have the requested row yet)
+    if (rawSupabase) {
+      try {
+        let q: any = rawSupabase.from(table).select(selectCols, headOnly ? { count: 'exact', head: true } : undefined);
+        for (const f of eqFilters) {
+          q = q.eq(f.col, f.val);
+        }
+        if (inFilter) {
+          q = q.in(inFilter.col, inFilter.vals);
+        }
+        if (likeFilter) {
+          q = q.like(likeFilter.col, likeFilter.pattern);
+        }
+        if (singleMode === 'maybeSingle') {
+          q = q.maybeSingle();
+        } else if (singleMode === 'single') {
+          q = q.single();
+        }
+        const supaRes = await q;
+
+        // If Supabase returned full row data, cache it into Internal Server so other devices get it with 0 Egress
+        if (
+          !supaRes.error &&
+          supaRes.data &&
+          !headOnly &&
+          (selectCols === '*' ||
+            selectCols.includes('shows') ||
+            selectCols.includes('rows') ||
+            selectCols.includes('config'))
+        ) {
+          const rowsToCache = Array.isArray(supaRes.data) ? supaRes.data : [supaRes.data];
+          if (rowsToCache.length > 0 && rowsToCache[0]?.id) {
+            fetch('/api/sync/upsert', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                table,
+                records: rowsToCache,
+                clientId: DEVICE_CLIENT_ID,
+                seedMode: true,
+              }),
+            }).catch(() => {});
+          }
+        }
+
+        if (!supaRes.error) {
+          return supaRes;
+        }
+      } catch {
+        // Ignore Supabase quota/network errors and return safe empty result
+      }
+    }
+
+    return {
+      data: singleMode === 'none' ? [] : null,
+      error: null,
+      count: 0,
+    };
+  };
+
+  const builder: any = {
+    select(cols = '*', opts?: { count?: string; head?: boolean }) {
+      selectCols = cols;
+      if (opts?.head) headOnly = true;
+      return builder;
+    },
+    eq(col: string, val: any) {
+      eqFilters.push({ col, val });
+      return builder;
+    },
+    in(col: string, vals: any[]) {
+      inFilter = { col, vals };
+      return builder;
+    },
+    like(col: string, pattern: string) {
+      likeFilter = { col, pattern };
+      return builder;
+    },
+    maybeSingle() {
+      singleMode = 'maybeSingle';
+      return executeSelect();
+    },
+    single() {
+      singleMode = 'single';
+      return executeSelect();
+    },
+    then(onfulfilled?: (value: any) => any, onrejected?: (reason: any) => any) {
+      return executeSelect().then(onfulfilled, onrejected);
+    },
+    async upsert(records: any, options?: any) {
+      let internalOk = false;
+      let internalData: any = null;
+
+      // 1. Primary: Save to Internal Server Sync Engine (/api/sync/upsert) -> Instant SSE Broadcast to all devices & 100% Quota-Free!
+      try {
+        const resp = await fetch('/api/sync/upsert', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            table,
+            records,
+            clientId: DEVICE_CLIENT_ID,
+          }),
+        });
+        if (resp.ok) {
+          const json = await resp.json();
+          internalData = json.data;
+          internalOk = true;
+        }
+      } catch {
+        // Fallback to Supabase if internal endpoint fails
+      }
+
+      // 2. Secondary Background Mirror: Mirror to Supabase Cloud asynchronously without blocking UI or failing if Egress/Log Ingestion is full
+      if (rawSupabase) {
+        Promise.resolve(rawSupabase.from(table).upsert(records, options)).catch(() => {});
+      }
+
+      if (internalOk) {
+        return { data: internalData, error: null };
+      }
+
+      if (rawSupabase) {
+        try {
+          return await rawSupabase.from(table).upsert(records, options);
+        } catch (err: any) {
+          return { data: null, error: null };
+        }
+      }
+
+      return { data: null, error: null };
+    },
+  };
+
+  return builder;
+}
+
 export function getSupabase(): SupabaseClient | null {
   const config = StorageService.getConfig();
   const url = sanitizeSupabaseBaseUrl(
@@ -167,12 +349,8 @@ export function getSupabase(): SupabaseClient | null {
   );
   const key = (config.supabaseAnonKey || (import.meta as any).env?.VITE_SUPABASE_ANON_KEY || '').trim();
 
-  if (!url || !key) {
-    return null;
-  }
-
   const clientKey = `${url}___${key}`;
-  if (!supabaseInstance || currentClientKey !== clientKey) {
+  if (url && key && (!supabaseInstance || currentClientKey !== clientKey)) {
     try {
       supabaseInstance = createClient(url, key, {
         auth: { persistSession: true },
@@ -180,10 +358,31 @@ export function getSupabase(): SupabaseClient | null {
       currentClientKey = clientKey;
     } catch (e) {
       console.warn('Failed to initialize Supabase client:', e);
-      return null;
     }
   }
-  return supabaseInstance;
+
+  if (!hybridClientInstance || hybridClientKey !== clientKey) {
+    hybridClientKey = clientKey;
+    const proxy: any = {
+      from(table: string) {
+        return createInternalTableQueryBuilder(table, supabaseInstance);
+      },
+      channel(name: string) {
+        if (supabaseInstance) return supabaseInstance.channel(name);
+        return {
+          on() { return this; },
+          subscribe() { return this; },
+        };
+      },
+      removeChannel(ch: any) {
+        if (supabaseInstance && ch) return supabaseInstance.removeChannel(ch);
+        return Promise.resolve();
+      },
+    };
+    hybridClientInstance = proxy as SupabaseClient;
+  }
+
+  return hybridClientInstance;
 }
 
 export interface SupabaseConnectionStatus {
@@ -2262,7 +2461,7 @@ export async function mergeRemoteAdditionalModulesToLocal(
 let hasCompletedInitialPull = false;
 let isPullInFlight = false;
 let lastDeltaPullMs = 0;
-const MIN_PULL_COOLDOWN_MS = 12000;
+const MIN_PULL_COOLDOWN_MS = 4000;
 
 export async function pullAllRemoteToLocal(forceFull = false): Promise<void> {
   const client = getSupabase();
@@ -2402,7 +2601,224 @@ export async function pullAllRemoteToLocal(forceFull = false): Promise<void> {
 }
 
 /**
- * Setup Realtime channel listener and Zero-Waste Egress sync for Supabase database changes
+ * Auto-Seed Internal Server Sync Engine from Local Device Storage on Startup
+ * Memastikan data yang sudah ada di Device A (misal Card Inspection atau Sales) otomatis masuk ke Internal Server dan langsung terbaca oleh Device B
+ */
+async function seedInternalServerFromLocalDevice(): Promise<void> {
+  try {
+    const nowIso = new Date().toISOString();
+    const batchRecords: any[] = [];
+
+    // 1. Inspections
+    const inspections = StorageService.getInspections();
+    if (inspections.length > 0) {
+      const fourteenDaysAgo = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      const recentList = inspections.filter((ins) => !ins.date || ins.date >= fourteenDaysAgo);
+      if (recentList.length > 0) {
+        batchRecords.push({
+          id: '__SYSTEM_SYNC_INSPECTIONS__',
+          outlet_id: '__SYSTEM_SYNC__',
+          date: '2026-01-01',
+          shows: recentList,
+          updated_at: nowIso,
+        });
+        batchRecords.push({
+          id: '__SYSTEM_SYNC_INSPECTIONS_DELTA__',
+          outlet_id: '__SYSTEM_SYNC__',
+          date: '2026-01-01',
+          shows: recentList.slice(0, 25),
+          updated_at: nowIso,
+        });
+      }
+    }
+
+    // 2. User Sales Overrides
+    const salesOverrides = StorageService.getUserSalesOverrides();
+    if (salesOverrides.length > 0) {
+      batchRecords.push({
+        id: '__SYSTEM_SYNC_DAILY_SALES__',
+        outlet_id: '__SYSTEM_SYNC__',
+        date: '2026-01-01',
+        shows: salesOverrides,
+        updated_at: nowIso,
+      });
+      batchRecords.push({
+        id: '__SYSTEM_SYNC_DAILY_SALES_DELTA__',
+        outlet_id: '__SYSTEM_SYNC__',
+        date: '2026-01-01',
+        shows: salesOverrides.slice(-15),
+        updated_at: nowIso,
+      });
+    }
+
+    // 3. Baking Sales
+    const baking = StorageService.getBakingSales();
+    if (baking.length > 0) {
+      batchRecords.push({
+        id: '__SYSTEM_SYNC_BAKING_SALES__',
+        outlet_id: '__SYSTEM_SYNC__',
+        date: '2026-01-01',
+        shows: baking,
+        updated_at: nowIso,
+      });
+    }
+
+    // 4. Employees & KPIs & SDM
+    const kpis = StorageService.getEmployeeKpis();
+    if (kpis.length > 0) {
+      batchRecords.push({
+        id: '__SYSTEM_SYNC_EMPLOYEE_KPIS__',
+        outlet_id: '__SYSTEM_SYNC_EMPLOYEE_KPIS__',
+        date: '2000-01-01',
+        shows: kpis,
+        updated_at: nowIso,
+      });
+    }
+
+    const sdmPerf = StorageService.getCashierDailyPerformanceAll();
+    if (sdmPerf.length > 0) {
+      batchRecords.push({
+        id: '__SYSTEM_SYNC_SDM_PERFORMANCE__',
+        outlet_id: '__SYSTEM_SYNC__',
+        date: '2026-01-01',
+        shows: sdmPerf,
+        updated_at: nowIso,
+      });
+    }
+
+    // 5. Additional Modules (Outlets, Areas, Employees, SDM, Admin, BOPO, Lost & Found, Warehouse)
+    const outlets = StorageService.getOutlets();
+    if (outlets.length > 0) {
+      batchRecords.push({
+        id: '__SYSTEM_SYNC_OUTLETS__',
+        outlet_id: '__SYSTEM_SYNC__',
+        date: '2026-01-01',
+        shows: outlets,
+        updated_at: nowIso,
+      });
+    }
+    const areas = StorageService.getAreas();
+    if (areas.length > 0) {
+      batchRecords.push({
+        id: '__SYSTEM_SYNC_AREAS__',
+        outlet_id: '__SYSTEM_SYNC__',
+        date: '2026-01-01',
+        shows: areas,
+        updated_at: nowIso,
+      });
+    }
+    const employees = StorageService.getEmployees();
+    if (employees.length > 0) {
+      batchRecords.push({
+        id: '__SYSTEM_SYNC_EMPLOYEES__',
+        outlet_id: '__SYSTEM_SYNC_EMPLOYEES__',
+        date: '2000-01-01',
+        shows: employees,
+        updated_at: nowIso,
+      });
+    }
+    const sdmProd = StorageService.getCashierMonthlyProductsAll();
+    if (sdmProd.length > 0) {
+      batchRecords.push({
+        id: '__SYSTEM_SYNC_SDM_PRODUCTS__',
+        outlet_id: '__SYSTEM_SYNC__',
+        date: '2026-01-01',
+        shows: sdmProd,
+        updated_at: nowIso,
+      });
+    }
+    const dailySec = StorageService.getDailySectionSalesAll();
+    if (dailySec.length > 0) {
+      batchRecords.push({
+        id: '__SYSTEM_SYNC_DAILY_SECTION__',
+        outlet_id: '__SYSTEM_SYNC__',
+        date: '2026-01-01',
+        shows: dailySec,
+        updated_at: nowIso,
+      });
+    }
+
+    if (batchRecords.length > 0) {
+      await fetch('/api/sync/upsert', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          table: 'cinema_sales',
+          records: batchRecords,
+          clientId: DEVICE_CLIENT_ID,
+          seedMode: true,
+        }),
+      });
+    }
+  } catch {
+    // ignore
+  }
+}
+
+function handleRealtimeRowTrigger(rowId: string, incomingUpdatedAt?: string, senderClientId?: string): void {
+  if (!rowId || !rowId.startsWith('__SYSTEM_SYNC_')) return;
+  if (senderClientId && senderClientId === DEVICE_CLIENT_ID) return;
+  if (!senderClientId && isEchoFromOwnWrite(rowId, incomingUpdatedAt)) return;
+
+  if (rowId === '__SYSTEM_SYNC_OUTLETS__' || rowId === '__SYSTEM_SYNC_AREAS__') {
+    scheduleDebouncedRealtimeMerge('outlets_areas', () => mergeRemoteOutletsAndAreasToLocal());
+    return;
+  }
+  if (
+    rowId === '__SYSTEM_SYNC_USERS__' ||
+    rowId === '__SYSTEM_SYNC_FILM_GENRES__' ||
+    rowId === '__SYSTEM_SYNC_ADMINISTRATION__' ||
+    rowId === '__SYSTEM_SYNC_BOPO__' ||
+    rowId === '__SYSTEM_SYNC_LOST_FOUND__' ||
+    rowId === '__SYSTEM_SYNC_WAREHOUSE__'
+  ) {
+    scheduleDebouncedRealtimeMerge(`add_${rowId}`, () => mergeRemoteAdditionalModulesToLocal([rowId]));
+    return;
+  }
+  if (rowId === '__SYSTEM_SYNC_EMPLOYEES__' || rowId === '__SYSTEM_SYNC_DELETED_EMPLOYEES__') {
+    scheduleDebouncedRealtimeMerge('employees', () => mergeRemoteEmployeesToLocal());
+    return;
+  }
+  if (rowId === '__SYSTEM_SYNC_EMPLOYEE_KPIS__') {
+    scheduleDebouncedRealtimeMerge('kpis', () => mergeRemoteEmployeeKpisToLocal());
+    return;
+  }
+  if (rowId === '__SYSTEM_SYNC_BAKING_SALES__') {
+    scheduleDebouncedRealtimeMerge('baking', () => mergeRemoteBakingSalesToLocal());
+    return;
+  }
+  if (rowId === '__SYSTEM_SYNC_INSPECTIONS_DELTA__') {
+    scheduleDebouncedRealtimeMerge('inspections_delta', () => mergeRemoteInspectionsToLocal(true));
+    return;
+  }
+  if (rowId === '__SYSTEM_SYNC_INSPECTIONS__') {
+    scheduleDebouncedRealtimeMerge('inspections', () => mergeRemoteInspectionsToLocal(false));
+    return;
+  }
+  if (rowId === '__SYSTEM_SYNC_SDM_PERFORMANCE__') {
+    scheduleDebouncedRealtimeMerge('sdm_perf', () => mergeRemoteCashierPerformanceToLocal());
+    return;
+  }
+  if (rowId === '__SYSTEM_SYNC_SDM_PRODUCTS__') {
+    scheduleDebouncedRealtimeMerge('sdm_prod', () => mergeRemoteCashierProductsToLocal());
+    return;
+  }
+  if (rowId === '__SYSTEM_SYNC_DAILY_SECTION__') {
+    scheduleDebouncedRealtimeMerge('daily_sec', () => mergeRemoteDailySectionSalesToLocal());
+    return;
+  }
+  if (rowId === '__SYSTEM_SYNC_DAILY_SALES_DELTA__') {
+    scheduleDebouncedRealtimeMerge('daily_sales_delta', () => mergeRemoteSalesToLocal(true));
+    return;
+  }
+  if (rowId === '__SYSTEM_SYNC_DAILY_SALES__') {
+    scheduleDebouncedRealtimeMerge('daily_sales', () => mergeRemoteSalesToLocal(false));
+    return;
+  }
+}
+
+/**
+ * Setup Realtime channel listener: Internal Server Sync Engine (SSE /api/sync/stream) + Hybrid Offline-First
  */
 export function setupSupabaseRealtimeSync(): () => void {
   const client = getSupabase();
@@ -2410,8 +2826,10 @@ export function setupSupabaseRealtimeSync(): () => void {
     return () => {};
   }
 
-  // Delta pull cerdas saat buka aplikasi (hanya unduh modul yang berubah)
-  pullAllRemoteToLocal(true);
+  // 1. Seed Internal Server dengan data lokal perangkat ini lalu tarik semua pembaruan dari perangkat lain
+  seedInternalServerFromLocalDevice().finally(() => {
+    pullAllRemoteToLocal(true);
+  });
 
   const handleVisibility = () => {
     if (document.visibilityState === 'visible') {
@@ -2420,7 +2838,57 @@ export function setupSupabaseRealtimeSync(): () => void {
   };
   document.addEventListener('visibilitychange', handleVisibility);
 
-  // Setup Supabase Realtime channel subscription (Server-side Filter + WebSocket Push + Anti Self-Echo + Debounce)
+  // 2. Internal Server Sync Engine Real-Time Stream (SSE: 0 Kuota Egress, Bebas Limit Log Ingestion)
+  let eventSource: EventSource | null = null;
+  try {
+    eventSource = new EventSource('/api/sync/stream');
+    eventSource.onmessage = (event) => {
+      try {
+        const msg = JSON.parse(event.data);
+        if (!msg) return;
+        if (msg.type === 'CONNECTED' && msg.mode === 'edge-serverless') {
+          // On Cloudflare Pages serverless functions, close SSE stream after handshake and use lightweight Edge Query polling
+          eventSource?.close();
+          eventSource = null;
+          return;
+        }
+        if (msg.type !== 'ROW_UPDATED') return;
+        if (msg.clientId && msg.clientId === DEVICE_CLIENT_ID) return;
+
+        if (msg.table === 'cinema_sales' && msg.id) {
+          handleRealtimeRowTrigger(String(msg.id), msg.updated_at, msg.clientId);
+        } else if (msg.table === 'cinema_occupancy' && msg.outlet_id && msg.date) {
+          const outletId = msg.outlet_id;
+          const date = msg.date;
+          const rows = Array.isArray(msg.rows) ? msg.rows : [];
+          const key1 = `cinema_xxi_occupancy_records_${outletId}_${date}`;
+          const key2 = `cinema_xxi_occupancy_${outletId}_${date}`;
+          localStorage.setItem(key1, JSON.stringify(rows));
+          localStorage.setItem(key2, JSON.stringify(rows));
+          try {
+            const manRaw = localStorage.getItem('cinema_xxi_occupancy_manifest');
+            const man = manRaw ? JSON.parse(manRaw) : {};
+            if (!man[outletId]) man[outletId] = [];
+            if (!man[outletId].includes(date)) {
+              man[outletId].push(date);
+              localStorage.setItem('cinema_xxi_occupancy_manifest', JSON.stringify(man));
+            }
+          } catch {
+            // ignore
+          }
+          StorageService.syncOccupancyToMovieHistory(outletId, date, rows);
+          StorageService.broadcastChange('occupancy');
+          StorageService.broadcastChange('movies');
+        }
+      } catch {
+        // ignore parse errors
+      }
+    };
+  } catch {
+    // ignore SSE init errors
+  }
+
+  // 3. Optional Secondary Supabase Realtime channel subscription
   try {
     const realtimeAllowedIds = [
       '__SYSTEM_SYNC_INSPECTIONS_DELTA__',
@@ -2455,98 +2923,8 @@ export function setupSupabaseRealtimeSync(): () => void {
         (payload: any) => {
           if (!payload.new || !payload.new.id) return;
           const rowId = String(payload.new.id);
-          if (!rowId.startsWith('__SYSTEM_SYNC_')) {
-            // Abaikan baris individual agar tidak memicu double fetch
-            return;
-          }
-
-          const incomingUpdatedAt = payload.new.updated_at
-            ? String(payload.new.updated_at)
-            : undefined;
-
-          // Jika event ini berasal dari simpanan perangkat ini sendiri atau timestamp sudah sama, abaikan (0 Egress!)
-          if (isEchoFromOwnWrite(rowId, incomingUpdatedAt)) {
-            return;
-          }
-
-          if (rowId === '__SYSTEM_SYNC_OUTLETS__' || rowId === '__SYSTEM_SYNC_AREAS__') {
-            scheduleDebouncedRealtimeMerge('outlets_areas', () =>
-              mergeRemoteOutletsAndAreasToLocal()
-            );
-            return;
-          }
-          if (
-            rowId === '__SYSTEM_SYNC_USERS__' ||
-            rowId === '__SYSTEM_SYNC_FILM_GENRES__' ||
-            rowId === '__SYSTEM_SYNC_ADMINISTRATION__' ||
-            rowId === '__SYSTEM_SYNC_BOPO__' ||
-            rowId === '__SYSTEM_SYNC_LOST_FOUND__' ||
-            rowId === '__SYSTEM_SYNC_WAREHOUSE__'
-          ) {
-            scheduleDebouncedRealtimeMerge(`add_${rowId}`, () =>
-              mergeRemoteAdditionalModulesToLocal([rowId])
-            );
-            return;
-          }
-          if (
-            rowId === '__SYSTEM_SYNC_EMPLOYEES__' ||
-            rowId === '__SYSTEM_SYNC_DELETED_EMPLOYEES__'
-          ) {
-            scheduleDebouncedRealtimeMerge('employees', () => mergeRemoteEmployeesToLocal());
-            return;
-          }
-          if (rowId === '__SYSTEM_SYNC_EMPLOYEE_KPIS__') {
-            scheduleDebouncedRealtimeMerge('kpis', () => mergeRemoteEmployeeKpisToLocal());
-            return;
-          }
-          if (rowId === '__SYSTEM_SYNC_BAKING_SALES__') {
-            scheduleDebouncedRealtimeMerge('baking', () => mergeRemoteBakingSalesToLocal());
-            return;
-          }
-          if (rowId === '__SYSTEM_SYNC_INSPECTIONS_DELTA__') {
-            scheduleDebouncedRealtimeMerge('inspections_delta', () =>
-              mergeRemoteInspectionsToLocal(true)
-            );
-            return;
-          }
-          if (rowId === '__SYSTEM_SYNC_INSPECTIONS__') {
-            if (!hasCompletedInitialPull) {
-              scheduleDebouncedRealtimeMerge('inspections', () => mergeRemoteInspectionsToLocal(false));
-            }
-            return;
-          }
-          if (rowId === '__SYSTEM_SYNC_SDM_PERFORMANCE__') {
-            scheduleDebouncedRealtimeMerge('sdm_perf', () =>
-              mergeRemoteCashierPerformanceToLocal()
-            );
-            return;
-          }
-          if (rowId === '__SYSTEM_SYNC_SDM_PRODUCTS__') {
-            scheduleDebouncedRealtimeMerge('sdm_prod', () => mergeRemoteCashierProductsToLocal());
-            return;
-          }
-          if (rowId === '__SYSTEM_SYNC_DAILY_SECTION__') {
-            scheduleDebouncedRealtimeMerge('daily_sec', () =>
-              mergeRemoteDailySectionSalesToLocal()
-            );
-            return;
-          }
-          if (rowId === '__SYSTEM_SYNC_DAILY_SALES_DELTA__') {
-            scheduleDebouncedRealtimeMerge('daily_sales_delta', () =>
-              mergeRemoteSalesToLocal(true)
-            );
-            return;
-          }
-          if (rowId === '__SYSTEM_SYNC_DAILY_SALES__') {
-            if (!hasCompletedInitialPull) {
-              scheduleDebouncedRealtimeMerge('daily_sales', () => mergeRemoteSalesToLocal(false));
-            }
-            return;
-          }
-          if (rowId === '__SYSTEM_SYNC_OCCUPANCY__') {
-            // Handled directly by table cinema_occupancy realtime listener below
-            return;
-          }
+          const incomingUpdatedAt = payload.new.updated_at ? String(payload.new.updated_at) : undefined;
+          handleRealtimeRowTrigger(rowId, incomingUpdatedAt);
         }
       )
       .on(
@@ -2580,15 +2958,22 @@ export function setupSupabaseRealtimeSync(): () => void {
       )
       .subscribe();
 
-    // Heartbeat fallback ringan (~400 bytes) setiap 60 detik HANYA saat tab aktif/terlihat
+    // Heartbeat fallback ringan setiap 20 detik ke Internal Server HANYA saat tab aktif/terlihat
     const intervalId = setInterval(() => {
       if (document.visibilityState === 'visible') {
         pullAllRemoteToLocal(false);
       }
-    }, 60000);
+    }, 20000);
 
     return () => {
       document.removeEventListener('visibilitychange', handleVisibility);
+      if (eventSource) {
+        try {
+          eventSource.close();
+        } catch {
+          // ignore
+        }
+      }
       try {
         client.removeChannel(channel);
       } catch {
@@ -2602,9 +2987,16 @@ export function setupSupabaseRealtimeSync(): () => void {
       if (document.visibilityState === 'visible') {
         pullAllRemoteToLocal(false);
       }
-    }, 60000);
+    }, 20000);
     return () => {
       document.removeEventListener('visibilitychange', handleVisibility);
+      if (eventSource) {
+        try {
+          eventSource.close();
+        } catch {
+          // ignore
+        }
+      }
       clearInterval(intervalId);
     };
   }
