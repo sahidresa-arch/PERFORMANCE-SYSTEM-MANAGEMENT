@@ -536,19 +536,21 @@ export const ToiletInspection: React.FC<ToiletInspectionProps> = ({
           </div>
         </div>
 
-        {/* View Switcher Tabs + Live Sync Button */}
+        {/* View Switcher Tabs + Live Sync Button (Admin Only on Dashboard Higienitas) */}
         <div className="flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            onClick={handleManualInspectionSync}
-            disabled={isSyncingLive}
-            title="Sinkronkan Card Inspection Antar-Device Sekarang"
-            className="px-3 py-2 rounded-xl bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 text-emerald-800 text-[11px] font-extrabold transition cursor-pointer flex items-center space-x-1.5 shadow-2xs"
-          >
-            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-            <RotateCcw className={`w-3.5 h-3.5 text-emerald-700 ${isSyncingLive ? 'animate-spin' : ''}`} />
-            <span>{isSyncingLive ? 'MENYINKRONKAN...' : 'LIVE SYNC AKTIF'}</span>
-          </button>
+          {currentUser?.role === 'admin' && viewMode === 'dashboard' && (
+            <button
+              type="button"
+              onClick={handleManualInspectionSync}
+              disabled={isSyncingLive}
+              title="Sinkronkan Card Inspection Antar-Device Sekarang"
+              className="px-3 py-2 rounded-xl bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 text-emerald-800 text-[11px] font-extrabold transition cursor-pointer flex items-center space-x-1.5 shadow-2xs"
+            >
+              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+              <RotateCcw className={`w-3.5 h-3.5 text-emerald-700 ${isSyncingLive ? 'animate-spin' : ''}`} />
+              <span>{isSyncingLive ? 'MENYINKRONKAN...' : 'LIVE SYNC AKTIF'}</span>
+            </button>
+          )}
 
           <div className="flex items-center p-1.5 rounded-2xl bg-slate-100/90 border border-slate-200 text-xs font-bold space-x-1">
             <button
