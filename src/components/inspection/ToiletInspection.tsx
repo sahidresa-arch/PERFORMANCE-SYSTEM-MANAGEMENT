@@ -158,7 +158,12 @@ export const ToiletInspection: React.FC<ToiletInspectionProps> = ({
   useEffect(() => {
     reloadInspections();
     import('../../lib/supabase')
-      .then((m) => m.pullAllRemoteToLocal(false))
+      .then((m) => {
+        m.mergeRemoteInspectionsToLocal(false).then((changed) => {
+          if (changed) reloadInspections();
+        });
+        m.pullAllRemoteToLocal(false);
+      })
       .catch(() => {});
 
     const handleStorageUpdate = (e: any) => {

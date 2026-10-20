@@ -1326,17 +1326,26 @@ export async function fetchInspectionsFromSupabase(
   }
 }
 
+let hasAutoHealedLocalInspections = false;
+
 /**
- * Merges remote inspection records from Supabase into local storage (Supports 3 KB Delta Mode)
+ * Merges remote inspection records from Supabase & Internal Server into local storage,
+ * and auto-pushes any local inspection (from Device A) that was not yet on the remote server.
  */
 export async function mergeRemoteInspectionsToLocal(deltaOnly = false): Promise<boolean> {
   const remoteInspections = await fetchInspectionsFromSupabase(undefined, undefined, deltaOnly);
-  if (!remoteInspections || remoteInspections.length === 0) return false;
-
   const currentLocal = StorageService.getInspections();
+
+  const remoteMap = new Map<string, ToiletInspectionRecord>();
+  if (Array.isArray(remoteInspections)) {
+    remoteInspections.forEach((r) => {
+      if (r && r.id) remoteMap.set(r.id, r);
+    });
+  }
+
   let updated = false;
 
-  remoteInspections.forEach((remote) => {
+  remoteMap.forEach((remote) => {
     const idx = currentLocal.findIndex((i) => i.id === remote.id);
     if (idx >= 0) {
       if (JSON.stringify(currentLocal[idx]) !== JSON.stringify(remote)) {
@@ -1352,6 +1361,51 @@ export async function mergeRemoteInspectionsToLocal(deltaOnly = false): Promise<
   if (updated) {
     localStorage.setItem('cinema_xxi_toilet_inspections', JSON.stringify(currentLocal));
     StorageService.broadcastChange('inspection');
+  }
+
+  // Auto-Heal: Jika Device A memiliki data Card Inspection lokal (14 hari terakhir) yang belum masuk ke Server/Device B,
+  // otomatis dorong (push) hasil gabungan ke Server sekali saat sinkronisasi penuh!
+  if (!deltaOnly && !hasAutoHealedLocalInspections && currentLocal.length > 0) {
+    const fourteenDaysAgo = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const localRecentMissingOnRemote = currentLocal.some(
+      (l) => l && l.id && (!l.date || l.date >= fourteenDaysAgo) && !remoteMap.has(l.id)
+    );
+
+    if (localRecentMissingOnRemote) {
+      hasAutoHealedLocalInspections = true;
+      const client = getSupabase();
+      if (client) {
+        const nowIso = new Date().toISOString();
+        const activeArchive = currentLocal.filter((ins) => !ins.date || ins.date >= fourteenDaysAgo);
+        recordSyncTimestamp('__SYSTEM_SYNC_INSPECTIONS__', nowIso, true);
+        recordSyncTimestamp('__SYSTEM_SYNC_INSPECTIONS_DELTA__', nowIso, true);
+        Promise.resolve(
+          client
+            .from('cinema_sales')
+            .upsert(
+              [
+                {
+                  id: '__SYSTEM_SYNC_INSPECTIONS__',
+                  outlet_id: '__SYSTEM_SYNC__',
+                  date: '2026-01-01',
+                  shows: activeArchive as any,
+                  updated_at: nowIso,
+                },
+                {
+                  id: '__SYSTEM_SYNC_INSPECTIONS_DELTA__',
+                  outlet_id: '__SYSTEM_SYNC__',
+                  date: '2026-01-01',
+                  shows: activeArchive.slice(0, 25) as any,
+                  updated_at: nowIso,
+                },
+              ],
+              { onConflict: 'id' }
+            )
+        ).catch(() => {});
+      }
+    } else if (remoteMap.size > 0) {
+      hasAutoHealedLocalInspections = true;
+    }
   }
 
   return updated;
