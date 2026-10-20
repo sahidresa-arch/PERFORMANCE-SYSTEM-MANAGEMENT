@@ -138,21 +138,27 @@ CREATE POLICY "Allow anon all on cinema_employees" ON public.cinema_employees FO
 DROP POLICY IF EXISTS "Allow anon all on cinema_employee_kpis" ON public.cinema_employee_kpis;
 CREATE POLICY "Allow anon all on cinema_employee_kpis" ON public.cinema_employee_kpis FOR ALL USING (true) WITH CHECK (true);
 
--- 9. Aktifkan Supabase Realtime untuk Tabel HC Area
+-- 9. Aktifkan Supabase Realtime untuk Seluruh Tabel Sinkronisasi Utama & HC Area
 DO $$
+DECLARE
+  tbl TEXT;
 BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_publication_tables
-    WHERE pubname = 'supabase_realtime' AND tablename = 'cinema_employees'
-  ) THEN
-    ALTER PUBLICATION supabase_realtime ADD TABLE public.cinema_employees;
-  END IF;
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_publication_tables
-    WHERE pubname = 'supabase_realtime' AND tablename = 'cinema_employee_kpis'
-  ) THEN
-    ALTER PUBLICATION supabase_realtime ADD TABLE public.cinema_employee_kpis;
-  END IF;
+  FOREACH tbl IN ARRAY ARRAY[
+    'cinema_sales',
+    'cinema_occupancy',
+    'cinema_baking',
+    'cinema_inspections',
+    'cinema_employees',
+    'cinema_employee_kpis'
+  ]
+  LOOP
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_publication_tables
+      WHERE pubname = 'supabase_realtime' AND tablename = tbl
+    ) THEN
+      EXECUTE format('ALTER PUBLICATION supabase_realtime ADD TABLE public.%I', tbl);
+    END IF;
+  END LOOP;
 END $$;
 `;
 
@@ -250,6 +256,56 @@ function createInternalTableQueryBuilder(table: string, rawSupabase: SupabaseCli
   let likeFilter: { col: string; pattern: string } | null = null;
   let singleMode: 'none' | 'maybeSingle' | 'single' = 'none';
 
+  const mergeSyncRowObjects = (rowA: any, rowB: any): any => {
+    if (!rowA) return rowB;
+    if (!rowB) return rowA;
+    const tsA = rowA.updated_at ? new Date(rowA.updated_at).getTime() : 0;
+    const tsB = rowB.updated_at ? new Date(rowB.updated_at).getTime() : 0;
+    const older = tsA <= tsB ? rowA : rowB;
+    const newer = tsA <= tsB ? rowB : rowA;
+
+    if (
+      Array.isArray(older.shows) &&
+      Array.isArray(newer.shows) &&
+      String(newer.id || '').startsWith('__SYSTEM_SYNC_')
+    ) {
+      const firstSample = newer.shows[0] || older.shows[0];
+      if (
+        firstSample &&
+        typeof firstSample === 'object' &&
+        !Array.isArray(firstSample) &&
+        (firstSample.id || (firstSample.outletId && (firstSample.date || firstSample.month)))
+      ) {
+        const itemMap = new Map<string, any>();
+        const getKey = (item: any, idx: number) => {
+          if (!item || typeof item !== 'object') return `idx_${idx}`;
+          if (item.id) return String(item.id);
+          if (item.outletId && item.date && item.showNumber !== undefined && item.type) {
+            return `${item.outletId}_${item.date}_${item.showNumber}_${item.type}`;
+          }
+          if (item.outletId && item.date && item.nik) {
+            return `${item.outletId}_${item.date}_${item.nik}`;
+          }
+          if (item.outletId && item.date) {
+            return `${item.outletId}_${item.date}`;
+          }
+          if (item.outletId && item.month) {
+            return `${item.outletId}_${item.month}`;
+          }
+          return `idx_${idx}`;
+        };
+        older.shows.forEach((it: any, i: number) => itemMap.set(getKey(it, i), it));
+        newer.shows.forEach((it: any, i: number) => itemMap.set(getKey(it, i), it));
+        return {
+          ...newer,
+          shows: Array.from(itemMap.values()),
+        };
+      }
+    }
+
+    return newer;
+  };
+
   const executeSelect = async (): Promise<{ data: any; error: any; count?: number }> => {
     const fetchInternal = () =>
       callInternalSyncQuery({
@@ -292,27 +348,8 @@ function createInternalTableQueryBuilder(table: string, rawSupabase: SupabaseCli
       return null;
     };
 
-    const internalRes = await fetchInternal();
-    const isLightweightMetaQuery =
-      !headOnly &&
-      !selectCols.includes('shows') &&
-      !selectCols.includes('rows') &&
-      !selectCols.includes('config') &&
-      selectCols !== '*';
-
-    const hasInternalData = headOnly
-      ? (internalRes?.count ?? 0) > 0
-      : Array.isArray(internalRes?.data)
-      ? internalRes.data.length > 0
-      : Boolean(internalRes?.data);
-
-    // If Internal Server already has the full data payload, return it immediately -> 0 KB Supabase Egress & 0 Log Ingestion!
-    if (hasInternalData && !isLightweightMetaQuery) {
-      return internalRes;
-    }
-
-    // Only query Supabase if Internal Server is unavailable/empty (e.g. on static workers.dev) or for ~400B metadata check
-    const supaRes = await fetchSupa();
+    // Fetch from both Internal Server Sync Engine and Supabase Cloud (delta-gated by pullAllRemoteToLocal so 0 wasted Egress)
+    const [internalRes, supaRes] = await Promise.all([fetchInternal(), fetchSupa()]);
 
     if (headOnly) {
       const count = Math.max(internalRes?.count ?? 0, supaRes?.count ?? 0);
@@ -341,12 +378,7 @@ function createInternalTableQueryBuilder(table: string, rawSupabase: SupabaseCli
     if (singleMode === 'maybeSingle' || singleMode === 'single') {
       const intRow = internalRes?.data || null;
       const supRow = supaRes?.data || null;
-      if (intRow && supRow) {
-        const intTs = intRow.updated_at ? new Date(intRow.updated_at).getTime() : 0;
-        const supTs = supRow.updated_at ? new Date(supRow.updated_at).getTime() : 0;
-        return { data: intTs >= supTs ? intRow : supRow, error: null };
-      }
-      const chosen = intRow || supRow;
+      const chosen = mergeSyncRowObjects(intRow, supRow);
       if (!chosen && singleMode === 'single') {
         return { data: null, error: { code: 'PGRST116', message: 'No rows found' } };
       }
@@ -368,11 +400,7 @@ function createInternalTableQueryBuilder(table: string, rawSupabase: SupabaseCli
           if (!prev) {
             mergedMap.set(key, r);
           } else {
-            const prevTs = prev.updated_at ? new Date(prev.updated_at).getTime() : 0;
-            const nextTs = r.updated_at ? new Date(r.updated_at).getTime() : 0;
-            if (nextTs >= prevTs) {
-              mergedMap.set(key, r);
-            }
+            mergedMap.set(key, mergeSyncRowObjects(prev, r));
           }
         }
       }
@@ -559,7 +587,7 @@ export async function testSupabaseConnection(
 // ============================================================================
 // ZERO-WASTE EGRESS & LOG INGESTION ENGINE (PERSISTENT TIMESTAMP REGISTRY)
 // ============================================================================
-const SYNC_TS_STORAGE_KEY = 'cinema_xxi_sync_timestamps_v4';
+const SYNC_TS_STORAGE_KEY = 'cinema_xxi_sync_timestamps_v5';
 const lastSeenSyncTimestamps: Record<string, string> = (() => {
   try {
     const raw = localStorage.getItem(SYNC_TS_STORAGE_KEY);
@@ -1181,7 +1209,7 @@ export async function syncInspectionToSupabase(record: ToiletInspectionRecord): 
         // Tarik dulu data yang sudah ada di server agar Device A tidak menimpa data outlet lain
         const { data: remoteRows } = await archiveClient
           .from('cinema_sales')
-          .select('id, shows')
+          .select('id, shows, updated_at')
           .in('id', ['__SYSTEM_SYNC_INSPECTIONS__', '__SYSTEM_SYNC_INSPECTIONS_DELTA__']);
 
         if (Array.isArray(remoteRows)) {
@@ -1230,7 +1258,7 @@ export async function syncInspectionToSupabase(record: ToiletInspectionRecord): 
       } catch (err) {
         console.warn('Debounced inspection archive sync error:', err);
       }
-    }, 1500); // 1.5 detik debounce (langsung tersimpan, tidak menunggu 5 menit)
+    }, 400); // 400ms debounce (langsung tersimpan instan & aman)
 
     return !deltaErr;
   } catch (e) {
@@ -2764,7 +2792,8 @@ export async function pullAllRemoteToLocal(forceFull = false): Promise<void> {
  */
 async function seedInternalServerFromLocalDevice(): Promise<void> {
   try {
-    const nowIso = new Date().toISOString();
+    // Gunakan timestamp historis yang sudah tercatat (atau fallback awal) agar tidak menimpa timestamp baru dari perangkat lain
+    const getSeedTs = (id: string) => lastSeenSyncTimestamps[id] || '2020-01-01T00:00:00.000Z';
     const batchRecords: any[] = [];
 
     // 1. Inspections
@@ -2778,14 +2807,14 @@ async function seedInternalServerFromLocalDevice(): Promise<void> {
           outlet_id: '__SYSTEM_SYNC__',
           date: '2026-01-01',
           shows: recentList,
-          updated_at: nowIso,
+          updated_at: getSeedTs('__SYSTEM_SYNC_INSPECTIONS__'),
         });
         batchRecords.push({
           id: '__SYSTEM_SYNC_INSPECTIONS_DELTA__',
           outlet_id: '__SYSTEM_SYNC__',
           date: '2026-01-01',
           shows: recentList.slice(0, 25),
-          updated_at: nowIso,
+          updated_at: getSeedTs('__SYSTEM_SYNC_INSPECTIONS_DELTA__'),
         });
       }
     }
@@ -2798,14 +2827,14 @@ async function seedInternalServerFromLocalDevice(): Promise<void> {
         outlet_id: '__SYSTEM_SYNC__',
         date: '2026-01-01',
         shows: salesOverrides,
-        updated_at: nowIso,
+        updated_at: getSeedTs('__SYSTEM_SYNC_DAILY_SALES__'),
       });
       batchRecords.push({
         id: '__SYSTEM_SYNC_DAILY_SALES_DELTA__',
         outlet_id: '__SYSTEM_SYNC__',
         date: '2026-01-01',
         shows: salesOverrides.slice(-15),
-        updated_at: nowIso,
+        updated_at: getSeedTs('__SYSTEM_SYNC_DAILY_SALES_DELTA__'),
       });
     }
 
@@ -2817,7 +2846,7 @@ async function seedInternalServerFromLocalDevice(): Promise<void> {
         outlet_id: '__SYSTEM_SYNC__',
         date: '2026-01-01',
         shows: baking,
-        updated_at: nowIso,
+        updated_at: getSeedTs('__SYSTEM_SYNC_BAKING_SALES__'),
       });
     }
 
@@ -2829,7 +2858,7 @@ async function seedInternalServerFromLocalDevice(): Promise<void> {
         outlet_id: '__SYSTEM_SYNC_EMPLOYEE_KPIS__',
         date: '2000-01-01',
         shows: kpis,
-        updated_at: nowIso,
+        updated_at: getSeedTs('__SYSTEM_SYNC_EMPLOYEE_KPIS__'),
       });
     }
 
@@ -2840,7 +2869,7 @@ async function seedInternalServerFromLocalDevice(): Promise<void> {
         outlet_id: '__SYSTEM_SYNC__',
         date: '2026-01-01',
         shows: sdmPerf,
-        updated_at: nowIso,
+        updated_at: getSeedTs('__SYSTEM_SYNC_SDM_PERFORMANCE__'),
       });
     }
 
@@ -2852,7 +2881,7 @@ async function seedInternalServerFromLocalDevice(): Promise<void> {
         outlet_id: '__SYSTEM_SYNC__',
         date: '2026-01-01',
         shows: outlets,
-        updated_at: nowIso,
+        updated_at: getSeedTs('__SYSTEM_SYNC_OUTLETS__'),
       });
     }
     const areas = StorageService.getAreas();
@@ -2862,7 +2891,7 @@ async function seedInternalServerFromLocalDevice(): Promise<void> {
         outlet_id: '__SYSTEM_SYNC__',
         date: '2026-01-01',
         shows: areas,
-        updated_at: nowIso,
+        updated_at: getSeedTs('__SYSTEM_SYNC_AREAS__'),
       });
     }
     const employees = StorageService.getEmployees();
@@ -2872,7 +2901,7 @@ async function seedInternalServerFromLocalDevice(): Promise<void> {
         outlet_id: '__SYSTEM_SYNC_EMPLOYEES__',
         date: '2000-01-01',
         shows: employees,
-        updated_at: nowIso,
+        updated_at: getSeedTs('__SYSTEM_SYNC_EMPLOYEES__'),
       });
     }
     const sdmProd = StorageService.getCashierMonthlyProductsAll();
@@ -2882,7 +2911,7 @@ async function seedInternalServerFromLocalDevice(): Promise<void> {
         outlet_id: '__SYSTEM_SYNC__',
         date: '2026-01-01',
         shows: sdmProd,
-        updated_at: nowIso,
+        updated_at: getSeedTs('__SYSTEM_SYNC_SDM_PRODUCTS__'),
       });
     }
     const dailySec = StorageService.getDailySectionSalesAll();
@@ -2892,7 +2921,7 @@ async function seedInternalServerFromLocalDevice(): Promise<void> {
         outlet_id: '__SYSTEM_SYNC__',
         date: '2026-01-01',
         shows: dailySec,
-        updated_at: nowIso,
+        updated_at: getSeedTs('__SYSTEM_SYNC_DAILY_SECTION__'),
       });
     }
 
@@ -2980,9 +3009,9 @@ export function setupSupabaseRealtimeSync(): () => void {
     return () => {};
   }
 
-  // 1. Seed Internal Server dengan data lokal perangkat ini lalu tarik semua pembaruan dari perangkat lain
-  seedInternalServerFromLocalDevice().finally(() => {
-    pullAllRemoteToLocal(true);
+  // 1. Tarik semua pembaruan terbaru dari server/cloud terlebih dahulu, lalu seed data lokal yang belum ada di server
+  pullAllRemoteToLocal(true).finally(() => {
+    seedInternalServerFromLocalDevice();
   });
 
   const handleVisibility = () => {
@@ -3042,28 +3071,8 @@ export function setupSupabaseRealtimeSync(): () => void {
     // ignore SSE init errors
   }
 
-  // 3. Optional Secondary Supabase Realtime channel subscription
+  // 3. Secondary Supabase Realtime channel subscription (Tanpa filter panjang > 400 karakter yang membuat PostgREST gagal)
   try {
-    const realtimeAllowedIds = [
-      '__SYSTEM_SYNC_INSPECTIONS_DELTA__',
-      '__SYSTEM_SYNC_DAILY_SALES_DELTA__',
-      '__SYSTEM_SYNC_BAKING_SALES__',
-      '__SYSTEM_SYNC_OUTLETS__',
-      '__SYSTEM_SYNC_AREAS__',
-      '__SYSTEM_SYNC_USERS__',
-      '__SYSTEM_SYNC_FILM_GENRES__',
-      '__SYSTEM_SYNC_ADMINISTRATION__',
-      '__SYSTEM_SYNC_BOPO__',
-      '__SYSTEM_SYNC_LOST_FOUND__',
-      '__SYSTEM_SYNC_WAREHOUSE__',
-      '__SYSTEM_SYNC_EMPLOYEE_KPIS__',
-      '__SYSTEM_SYNC_SDM_PERFORMANCE__',
-      '__SYSTEM_SYNC_SDM_PRODUCTS__',
-      '__SYSTEM_SYNC_DAILY_SECTION__',
-      '__SYSTEM_SYNC_EMPLOYEES__',
-      '__SYSTEM_SYNC_DELETED_EMPLOYEES__',
-    ];
-
     const channel = client
       .channel('cinema_xxi_realtime_changes')
       .on(
@@ -3072,7 +3081,6 @@ export function setupSupabaseRealtimeSync(): () => void {
           event: '*',
           schema: 'public',
           table: 'cinema_sales',
-          filter: `id=in.(${realtimeAllowedIds.join(',')})`,
         },
         (payload: any) => {
           if (!payload.new || !payload.new.id) return;
@@ -3112,12 +3120,12 @@ export function setupSupabaseRealtimeSync(): () => void {
       )
       .subscribe();
 
-    // Heartbeat fallback ringan setiap 20 detik ke Internal Server HANYA saat tab aktif/terlihat
+    // Heartbeat delta check ringan (~400B) setiap 6 detik HANYA saat tab aktif/terlihat
     const intervalId = setInterval(() => {
       if (document.visibilityState === 'visible') {
         pullAllRemoteToLocal(false);
       }
-    }, 20000);
+    }, 6000);
 
     return () => {
       document.removeEventListener('visibilitychange', handleVisibility);
@@ -3141,7 +3149,7 @@ export function setupSupabaseRealtimeSync(): () => void {
       if (document.visibilityState === 'visible') {
         pullAllRemoteToLocal(false);
       }
-    }, 20000);
+    }, 6000);
     return () => {
       document.removeEventListener('visibilitychange', handleVisibility);
       if (eventSource) {

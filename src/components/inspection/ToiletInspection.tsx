@@ -155,16 +155,38 @@ export const ToiletInspection: React.FC<ToiletInspectionProps> = ({
     setInspections(list);
   };
 
+  const [isSyncingLive, setIsSyncingLive] = useState(false);
+
+  const handleManualInspectionSync = async () => {
+    setIsSyncingLive(true);
+    try {
+      const m = await import('../../lib/supabase');
+      await m.mergeRemoteInspectionsToLocal(false);
+      await m.pullAllRemoteToLocal(true);
+      reloadInspections();
+    } catch {
+      // ignore
+    } finally {
+      setIsSyncingLive(false);
+    }
+  };
+
   useEffect(() => {
     reloadInspections();
-    import('../../lib/supabase')
-      .then((m) => {
-        m.mergeRemoteInspectionsToLocal(false).then((changed) => {
-          if (changed) reloadInspections();
-        });
-        m.pullAllRemoteToLocal(false);
-      })
-      .catch(() => {});
+    const runLiveInspectionSync = () => {
+      if (document.visibilityState !== 'visible') return;
+      import('../../lib/supabase')
+        .then((m) => {
+          m.mergeRemoteInspectionsToLocal(false).then((changed) => {
+            if (changed) reloadInspections();
+          });
+          m.pullAllRemoteToLocal(false);
+        })
+        .catch(() => {});
+    };
+
+    runLiveInspectionSync();
+    const liveInterval = setInterval(runLiveInspectionSync, 5000);
 
     const handleStorageUpdate = (e: any) => {
       const type = e?.detail?.type;
@@ -175,6 +197,7 @@ export const ToiletInspection: React.FC<ToiletInspectionProps> = ({
 
     window.addEventListener('cinema-xxi-storage-update', handleStorageUpdate);
     return () => {
+      clearInterval(liveInterval);
       window.removeEventListener('cinema-xxi-storage-update', handleStorageUpdate);
     };
   }, [selectedDate, viewMode]);
@@ -513,32 +536,46 @@ export const ToiletInspection: React.FC<ToiletInspectionProps> = ({
           </div>
         </div>
 
-        {/* View Switcher Tabs */}
-        <div className="flex items-center p-1.5 rounded-2xl bg-slate-100/90 border border-slate-200 text-xs font-bold space-x-1">
+        {/* View Switcher Tabs + Live Sync Button */}
+        <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
-            onClick={() => setViewMode('form')}
-            className={`px-4 py-2 rounded-xl transition cursor-pointer flex items-center space-x-1.5 ${
-              viewMode === 'form'
-                ? 'bg-gradient-to-r from-amber-500 to-amber-600 text-white shadow-sm'
-                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
-            }`}
+            onClick={handleManualInspectionSync}
+            disabled={isSyncingLive}
+            title="Sinkronkan Card Inspection Antar-Device Sekarang"
+            className="px-3 py-2 rounded-xl bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 text-emerald-800 text-[11px] font-extrabold transition cursor-pointer flex items-center space-x-1.5 shadow-2xs"
           >
-            <FileText className="w-3.5 h-3.5" />
-            <span>FORM INSPEKSI TOILET</span>
+            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+            <RotateCcw className={`w-3.5 h-3.5 text-emerald-700 ${isSyncingLive ? 'animate-spin' : ''}`} />
+            <span>{isSyncingLive ? 'MENYINKRONKAN...' : 'LIVE SYNC AKTIF'}</span>
           </button>
-          <button
-            type="button"
-            onClick={() => setViewMode('dashboard')}
-            className={`px-4 py-2 rounded-xl transition cursor-pointer flex items-center space-x-1.5 ${
-              viewMode === 'dashboard'
-                ? 'bg-gradient-to-r from-amber-500 to-amber-600 text-white shadow-sm'
-                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
-            }`}
-          >
-            <ClipboardCheck className="w-3.5 h-3.5" />
-            <span>HASIL LAPORAN TOILET</span>
-          </button>
+
+          <div className="flex items-center p-1.5 rounded-2xl bg-slate-100/90 border border-slate-200 text-xs font-bold space-x-1">
+            <button
+              type="button"
+              onClick={() => setViewMode('form')}
+              className={`px-4 py-2 rounded-xl transition cursor-pointer flex items-center space-x-1.5 ${
+                viewMode === 'form'
+                  ? 'bg-gradient-to-r from-amber-500 to-amber-600 text-white shadow-sm'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
+              }`}
+            >
+              <FileText className="w-3.5 h-3.5" />
+              <span>FORM INSPEKSI TOILET</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode('dashboard')}
+              className={`px-4 py-2 rounded-xl transition cursor-pointer flex items-center space-x-1.5 ${
+                viewMode === 'dashboard'
+                  ? 'bg-gradient-to-r from-amber-500 to-amber-600 text-white shadow-sm'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
+              }`}
+            >
+              <ClipboardCheck className="w-3.5 h-3.5" />
+              <span>HASIL LAPORAN TOILET</span>
+            </button>
+          </div>
         </div>
       </div>
 
