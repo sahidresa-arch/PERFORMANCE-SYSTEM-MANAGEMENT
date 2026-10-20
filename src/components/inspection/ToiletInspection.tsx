@@ -157,6 +157,9 @@ export const ToiletInspection: React.FC<ToiletInspectionProps> = ({
 
   useEffect(() => {
     reloadInspections();
+    import('../../lib/supabase')
+      .then((m) => m.pullAllRemoteToLocal(false))
+      .catch(() => {});
 
     const handleStorageUpdate = (e: any) => {
       const type = e?.detail?.type;
@@ -169,7 +172,7 @@ export const ToiletInspection: React.FC<ToiletInspectionProps> = ({
     return () => {
       window.removeEventListener('cinema-xxi-storage-update', handleStorageUpdate);
     };
-  }, [selectedDate]);
+  }, [selectedDate, viewMode]);
 
   // Sequential Show Helpers: Show N hanya bisa diceklis jika Show 1 s/d Show N-1 sudah selesai diceklis
   const getShowRecord = (

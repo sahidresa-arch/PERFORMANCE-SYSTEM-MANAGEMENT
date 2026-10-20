@@ -38,6 +38,19 @@ export interface SlideKPIData {
     bill: number;
     achievement: number;
   };
+  periodC?: {
+    label: string;
+    subLabel: string;
+    sph: number;
+    gbo: number;
+    dayaSerap: number;
+    at: number;
+    fnb: number;
+    cinema: number;
+    penonton: number;
+    bill: number;
+    achievement: number;
+  };
   targetSph: number;
   rankingData: Array<{
     rank: number;
@@ -56,13 +69,18 @@ export interface SlideKPIData {
     label: string;
     sphA: number;
     sphB: number;
+    sphC?: number;
     gboA: number;
     gboB: number;
+    gboC?: number;
     dsA: number;
     dsB: number;
+    dsC?: number;
     atA: number;
     atB: number;
+    atC?: number;
   }>;
+  isSinglePeriod?: boolean;
   displayOptions?: SlideDisplayOptions;
 }
 
@@ -307,7 +325,7 @@ export const exportKPIToPPTX = async (data: SlideKPIData) => {
       accentColor: string;
       accentBg: string;
       accentBorder: string;
-      items: Array<{ label: string; valA: number; valB: number }>;
+      items: Array<{ label: string; valA: number; valB: number; valC?: number }>;
       formatVal: (v: number) => string;
       targetLineVal?: number;
       targetLineLabel?: string;
@@ -335,7 +353,7 @@ export const exportKPIToPPTX = async (data: SlideKPIData) => {
     slide.addText(chartOpts.chartTitle.toUpperCase(), {
       x: boxX + 0.22,
       y: boxY + 0.14,
-      w: 7.4,
+      w: 6.4,
       h: 0.28,
       fontFace: FONT,
       fontSize: 9.5,
@@ -347,46 +365,130 @@ export const exportKPIToPPTX = async (data: SlideKPIData) => {
 
     // Legend on Right of Chart Header
     const legY = boxY + 0.16;
-    slide.addShape(pptx.ShapeType.rect, {
-      x: 8.3,
-      y: legY + 0.03,
-      w: 0.16,
-      h: 0.16,
-      fill: { color: 'CBD5E1' },
-      line: { color: '94A3B8', width: 0.5 },
-    });
-    slide.addText(data.periodA.label, {
-      x: 8.52,
-      y: legY,
-      w: 1.65,
-      h: 0.22,
-      fontFace: FONT,
-      fontSize: 8,
-      bold: true,
-      color: C_SUBTEXT,
-      valign: 'middle',
-      margin: 0,
-    });
+    if (data.isSinglePeriod) {
+      slide.addShape(pptx.ShapeType.rect, {
+        x: 9.8,
+        y: legY + 0.03,
+        w: 0.16,
+        h: 0.16,
+        fill: { color: chartOpts.accentColor },
+      });
+      slide.addText(data.periodA.label, {
+        x: 10.02,
+        y: legY,
+        w: 2.5,
+        h: 0.22,
+        fontFace: FONT,
+        fontSize: 8,
+        bold: true,
+        color: C_TEXT,
+        valign: 'middle',
+        margin: 0,
+      });
+    } else if (data.periodC) {
+      // 3 legends
+      slide.addShape(pptx.ShapeType.rect, {
+        x: 6.9,
+        y: legY + 0.03,
+        w: 0.15,
+        h: 0.15,
+        fill: { color: 'CBD5E1' },
+        line: { color: '94A3B8', width: 0.5 },
+      });
+      slide.addText(data.periodA.label, {
+        x: 7.1,
+        y: legY,
+        w: 1.6,
+        h: 0.22,
+        fontFace: FONT,
+        fontSize: 7.5,
+        bold: true,
+        color: C_SUBTEXT,
+        valign: 'middle',
+        margin: 0,
+      });
 
-    slide.addShape(pptx.ShapeType.rect, {
-      x: 10.25,
-      y: legY + 0.03,
-      w: 0.16,
-      h: 0.16,
-      fill: { color: chartOpts.accentColor },
-    });
-    slide.addText(data.periodB.label, {
-      x: 10.47,
-      y: legY,
-      w: 2.1,
-      h: 0.22,
-      fontFace: FONT,
-      fontSize: 8,
-      bold: true,
-      color: C_TEXT,
-      valign: 'middle',
-      margin: 0,
-    });
+      slide.addShape(pptx.ShapeType.rect, {
+        x: 8.8,
+        y: legY + 0.03,
+        w: 0.15,
+        h: 0.15,
+        fill: { color: 'F59E0B' },
+      });
+      slide.addText(data.periodB.label, {
+        x: 9.0,
+        y: legY,
+        w: 1.6,
+        h: 0.22,
+        fontFace: FONT,
+        fontSize: 7.5,
+        bold: true,
+        color: C_SUBTEXT,
+        valign: 'middle',
+        margin: 0,
+      });
+
+      slide.addShape(pptx.ShapeType.rect, {
+        x: 10.7,
+        y: legY + 0.03,
+        w: 0.15,
+        h: 0.15,
+        fill: { color: chartOpts.accentColor },
+      });
+      slide.addText(data.periodC.label, {
+        x: 10.9,
+        y: legY,
+        w: 1.7,
+        h: 0.22,
+        fontFace: FONT,
+        fontSize: 7.5,
+        bold: true,
+        color: C_TEXT,
+        valign: 'middle',
+        margin: 0,
+      });
+    } else {
+      slide.addShape(pptx.ShapeType.rect, {
+        x: 8.3,
+        y: legY + 0.03,
+        w: 0.16,
+        h: 0.16,
+        fill: { color: 'CBD5E1' },
+        line: { color: '94A3B8', width: 0.5 },
+      });
+      slide.addText(data.periodA.label, {
+        x: 8.52,
+        y: legY,
+        w: 1.65,
+        h: 0.22,
+        fontFace: FONT,
+        fontSize: 8,
+        bold: true,
+        color: C_SUBTEXT,
+        valign: 'middle',
+        margin: 0,
+      });
+
+      slide.addShape(pptx.ShapeType.rect, {
+        x: 10.25,
+        y: legY + 0.03,
+        w: 0.16,
+        h: 0.16,
+        fill: { color: chartOpts.accentColor },
+      });
+      slide.addText(data.periodB.label, {
+        x: 10.47,
+        y: legY,
+        w: 2.1,
+        h: 0.22,
+        fontFace: FONT,
+        fontSize: 8,
+        bold: true,
+        color: C_TEXT,
+        valign: 'middle',
+        margin: 0,
+      });
+    }
 
     // Inner Plot Box
     const plotX = boxX + 0.22;
@@ -407,7 +509,7 @@ export const exportKPIToPPTX = async (data: SlideKPIData) => {
     const items = chartOpts.items.length > 0 ? chartOpts.items : [{ label: '-', valA: 0, valB: 0 }];
     const count = items.length;
     const rawMax = Math.max(
-      ...items.map((it) => Math.max(it.valA, it.valB)),
+      ...items.map((it) => Math.max(it.valA, it.valB, it.valC ?? 0)),
       chartOpts.targetLineVal || 0,
       1
     );
@@ -440,90 +542,195 @@ export const exportKPIToPPTX = async (data: SlideKPIData) => {
       if (opts.showChartGrowthPills) {
         const badgeW = Math.min(groupW - 0.08, 0.78);
         const badgeX = gx + (groupW - badgeW) / 2;
-        addGrowthBadge(
-          slide,
-          badgeX,
-          plotY + 0.08,
-          badgeW,
-          0.2,
-          item.valA,
-          item.valB,
-          count > 8 ? 6.5 : 7.5
-        );
-      }
-
-      // Bars A & B
-      const singleBarW = Math.min((groupW - 0.14) / 2, 0.42);
-      const pairGap = 0.04;
-      const pairTotalW = singleBarW * 2 + pairGap;
-      const barAX = gx + (groupW - pairTotalW) / 2;
-      const barBX = barAX + singleBarW + pairGap;
-
-      const ratioA = maxVal > 0 ? Math.min(1, Math.max(0.03, item.valA / maxVal)) : 0.03;
-      const ratioB = maxVal > 0 ? Math.min(1, Math.max(0.03, item.valB / maxVal)) : 0.03;
-
-      const hA = maxBarH * ratioA;
-      const hB = maxBarH * ratioB;
-
-      const yA = barsBotY - hA;
-      const yB = barsBotY - hB;
-
-      // Bar A shape
-      slide.addShape(pptx.ShapeType.rect, {
-        x: barAX,
-        y: yA,
-        w: singleBarW,
-        h: hA,
-        fill: { color: 'CBD5E1' },
-        line: { color: '94A3B8', width: 0.5 },
-      });
-
-      // Bar B shape
-      const barBColor =
-        chartOpts.targetLineVal && item.valB >= chartOpts.targetLineVal
-          ? C_GREEN
-          : chartOpts.accentColor;
-      slide.addShape(pptx.ShapeType.rect, {
-        x: barBX,
-        y: yB,
-        w: singleBarW,
-        h: hB,
-        fill: { color: barBColor },
-      });
-
-      // Clean Value Labels above Bars (if enabled)
-      if (opts.showBarValueLabels) {
-        const lblFontSize = count > 8 ? 6.5 : 7.5;
-        if (item.valA > 0) {
-          slide.addText(chartOpts.formatVal(item.valA), {
-            x: barAX - 0.05,
-            y: Math.max(plotY + 0.06, yA - 0.18),
-            w: singleBarW + 0.1,
-            h: 0.16,
+        if (!data.isSinglePeriod) {
+          addGrowthBadge(
+            slide,
+            badgeX,
+            plotY + 0.08,
+            badgeW,
+            0.2,
+            item.valA,
+            item.valB,
+            count > 8 ? 6.5 : 7.5
+          );
+        } else if (chartOpts.targetLineVal && item.valA > 0) {
+          const ach = Math.round((item.valA / chartOpts.targetLineVal) * 100);
+          const isCapai = ach >= 100;
+          slide.addShape(pptx.ShapeType.roundRect, {
+            x: badgeX,
+            y: plotY + 0.08,
+            w: badgeW,
+            h: 0.2,
+            rectRadius: 0.04,
+            fill: { color: isCapai ? C_GREEN_BG : C_RED_BG },
+            line: { color: isCapai ? C_GREEN_BORDER : C_RED_BORDER, width: 0.5 },
+          });
+          slide.addText(`${ach}%`, {
+            x: badgeX,
+            y: plotY + 0.08,
+            w: badgeW,
+            h: 0.2,
             fontFace: FONT,
-            fontSize: lblFontSize,
+            fontSize: count > 8 ? 6.5 : 7.5,
             bold: true,
-            color: C_MUTED,
+            color: isCapai ? C_GREEN : C_RED,
             align: 'center',
-            valign: 'bottom',
+            valign: 'middle',
             margin: 0,
           });
         }
+      }
 
-        if (item.valB > 0) {
-          slide.addText(chartOpts.formatVal(item.valB), {
-            x: barBX - 0.05,
-            y: Math.max(plotY + 0.06, yB - 0.18),
-            w: singleBarW + 0.1,
+      if (data.isSinglePeriod) {
+        // Single bar per group
+        const singleBarW = Math.min((groupW - 0.06) * 0.72, 0.44);
+        const barX = gx + (groupW - singleBarW) / 2;
+        const ratio = maxVal > 0 ? Math.min(1, Math.max(0.03, item.valA / maxVal)) : 0.03;
+        const h = maxBarH * ratio;
+        const y = barsBotY - h;
+
+        const isTargetMet = chartOpts.targetLineVal && item.valA >= chartOpts.targetLineVal;
+        const barColor = chartOpts.targetLineVal
+          ? (isTargetMet ? C_GREEN : chartOpts.accentColor)
+          : chartOpts.accentColor;
+
+        slide.addShape(pptx.ShapeType.rect, {
+          x: barX,
+          y,
+          w: singleBarW,
+          h,
+          fill: { color: barColor },
+        });
+
+        if (opts.showBarValueLabels && item.valA > 0) {
+          slide.addText(chartOpts.formatVal(item.valA), {
+            x: barX - 0.1,
+            y: Math.max(plotY + 0.06, y - 0.18),
+            w: singleBarW + 0.2,
             h: 0.16,
             fontFace: FONT,
-            fontSize: lblFontSize,
+            fontSize: count > 20 ? 5.5 : count > 12 ? 6.5 : 7.5,
             bold: true,
             color: C_TEXT,
             align: 'center',
-            valign: 'bottom',
+            valign: 'middle',
             margin: 0,
           });
+        }
+      } else {
+        const isThreeBars = item.valC !== undefined;
+        const singleBarW = isThreeBars
+          ? Math.min((groupW - 0.18) / 3, 0.26)
+          : Math.min((groupW - 0.14) / 2, 0.42);
+        const pairGap = isThreeBars ? 0.03 : 0.04;
+        const pairTotalW = isThreeBars
+          ? singleBarW * 3 + pairGap * 2
+          : singleBarW * 2 + pairGap;
+        const barAX = gx + (groupW - pairTotalW) / 2;
+        const barBX = barAX + singleBarW + pairGap;
+        const barCX = barBX + singleBarW + pairGap;
+
+        const ratioA = maxVal > 0 ? Math.min(1, Math.max(0.03, item.valA / maxVal)) : 0.03;
+        const ratioB = maxVal > 0 ? Math.min(1, Math.max(0.03, item.valB / maxVal)) : 0.03;
+        const ratioC = maxVal > 0 && item.valC !== undefined ? Math.min(1, Math.max(0.03, item.valC / maxVal)) : 0.03;
+
+        const hA = maxBarH * ratioA;
+        const hB = maxBarH * ratioB;
+        const hC = maxBarH * ratioC;
+
+        const yA = barsBotY - hA;
+        const yB = barsBotY - hB;
+        const yC = barsBotY - hC;
+
+        // Bar A shape (2024 / Period A)
+        slide.addShape(pptx.ShapeType.rect, {
+          x: barAX,
+          y: yA,
+          w: singleBarW,
+          h: hA,
+          fill: { color: 'CBD5E1' },
+          line: { color: '94A3B8', width: 0.5 },
+        });
+
+        // Bar B shape (2025 / Period B)
+        const barBColor = isThreeBars
+          ? 'F59E0B'
+          : chartOpts.targetLineVal && item.valB >= chartOpts.targetLineVal
+          ? C_GREEN
+          : chartOpts.accentColor;
+        slide.addShape(pptx.ShapeType.rect, {
+          x: barBX,
+          y: yB,
+          w: singleBarW,
+          h: hB,
+          fill: { color: barBColor },
+        });
+
+        // Bar C shape (2026 / Period C)
+        if (isThreeBars && item.valC !== undefined) {
+          const barCColor =
+            chartOpts.targetLineVal && item.valC >= chartOpts.targetLineVal
+              ? C_GREEN
+              : chartOpts.accentColor;
+          slide.addShape(pptx.ShapeType.rect, {
+            x: barCX,
+            y: yC,
+            w: singleBarW,
+            h: hC,
+            fill: { color: barCColor },
+          });
+        }
+
+        // Clean Value Labels above Bars (if enabled)
+        if (opts.showBarValueLabels) {
+          const lblFontSize = isThreeBars ? 6 : count > 8 ? 6.5 : 7.5;
+          if (item.valA > 0) {
+            slide.addText(chartOpts.formatVal(item.valA), {
+              x: barAX - 0.05,
+              y: Math.max(plotY + 0.06, yA - 0.18),
+              w: singleBarW + 0.1,
+              h: 0.16,
+              fontFace: FONT,
+              fontSize: lblFontSize,
+              bold: true,
+              color: C_MUTED,
+              align: 'center',
+              valign: 'bottom',
+              margin: 0,
+            });
+          }
+
+          if (item.valB > 0) {
+            slide.addText(chartOpts.formatVal(item.valB), {
+              x: barBX - 0.05,
+              y: Math.max(plotY + 0.06, yB - 0.18),
+              w: singleBarW + 0.1,
+              h: 0.16,
+              fontFace: FONT,
+              fontSize: lblFontSize,
+              bold: true,
+              color: isThreeBars ? 'B45309' : C_TEXT,
+              align: 'center',
+              valign: 'bottom',
+              margin: 0,
+            });
+          }
+
+          if (isThreeBars && item.valC !== undefined && item.valC > 0) {
+            slide.addText(chartOpts.formatVal(item.valC), {
+              x: barCX - 0.05,
+              y: Math.max(plotY + 0.06, yC - 0.18),
+              w: singleBarW + 0.1,
+              h: 0.16,
+              fontFace: FONT,
+              fontSize: lblFontSize,
+              bold: true,
+              color: C_TEXT,
+              align: 'center',
+              valign: 'bottom',
+              margin: 0,
+            });
+          }
         }
       }
 
@@ -534,7 +741,7 @@ export const exportKPIToPPTX = async (data: SlideKPIData) => {
         w: groupW,
         h: 0.26,
         fontFace: FONT,
-        fontSize: count > 8 ? 8 : 9,
+        fontSize: count > 20 ? 6 : count > 12 ? 7 : count > 8 ? 8 : 9,
         bold: true,
         color: C_TEXT,
         align: 'center',
@@ -632,67 +839,132 @@ export const exportKPIToPPTX = async (data: SlideKPIData) => {
       slide,
       1,
       totalBaseSlides,
-      'Executive KPI Comparison & Growth Overview',
-      `Komparasi otomatis 5 indikator utama: ${data.comparisonTitle}`
+      data.isSinglePeriod ? 'Executive KPI & Performance Overview' : 'Executive KPI Comparison & Growth Overview',
+      data.isSinglePeriod
+        ? `Ringkasan performa 5 indikator utama: ${data.comparisonTitle}`
+        : `Komparasi otomatis 5 indikator utama: ${data.comparisonTitle}`
     );
 
-    const kpiCards = [
-      {
-        title: '1. PENONTON (PAX)',
-        valB: `${data.periodB.penonton.toLocaleString('id-ID')} Pax`,
-        valA: `${data.periodA.label}: ${data.periodA.penonton.toLocaleString('id-ID')} Pax`,
-        rawA: data.periodA.penonton,
-        rawB: data.periodB.penonton,
-        foot: 'Total Tiket Penonton Cinema XXI',
-        color: C_BLUE,
-        bg: C_BLUE_BG,
-        border: C_BLUE_BORDER,
-      },
-      {
-        title: '2. HEAD (SPH)',
-        valB: `Rp ${data.periodB.sph.toLocaleString('id-ID')}`,
-        valA: `${data.periodA.label}: Rp ${data.periodA.sph.toLocaleString('id-ID')}`,
-        rawA: data.periodA.sph,
-        rawB: data.periodB.sph,
-        foot: `Target: Rp ${data.targetSph.toLocaleString('id-ID')} • Ach: ${data.periodB.achievement}%`,
-        color: C_AMBER,
-        bg: C_AMBER_BG,
-        border: C_AMBER_BORDER,
-      },
-      {
-        title: '3. % GBO (RATIO)',
-        valB: `${data.periodB.gbo}%`,
-        valA: `${data.periodA.label}: ${data.periodA.gbo}%`,
-        rawA: data.periodA.gbo,
-        rawB: data.periodB.gbo,
-        foot: 'Rasio Omset F&B thdp Box Office',
-        color: C_PURPLE,
-        bg: C_PURPLE_BG,
-        border: C_PURPLE_BORDER,
-      },
-      {
-        title: '4. DAYA SERAP (%)',
-        valB: `${data.periodB.dayaSerap}%`,
-        valA: `${data.periodA.label}: ${data.periodA.dayaSerap}%`,
-        rawA: data.periodA.dayaSerap,
-        rawB: data.periodB.dayaSerap,
-        foot: `Total Struk: ${data.periodB.bill.toLocaleString('id-ID')} Bill`,
-        color: C_GREEN,
-        bg: C_GREEN_BG,
-        border: C_GREEN_BORDER,
-      },
-      {
-        title: '5. AVG TRANSAKSI',
-        valB: `Rp ${data.periodB.at.toLocaleString('id-ID')}`,
-        valA: `${data.periodA.label}: Rp ${data.periodA.at.toLocaleString('id-ID')}`,
-        rawA: data.periodA.at,
-        rawB: data.periodB.at,
-        foot: `Omset F&B: Rp ${(data.periodB.fnb / 1000000).toFixed(1)} Jt`,
-        color: C_CYAN,
-        bg: C_CYAN_BG,
-        border: C_CYAN_BORDER,
-      },
-    ];
+    const kpiCards = data.isSinglePeriod
+      ? [
+          {
+            title: '1. PENONTON (PAX)',
+            valB: `${data.periodA.penonton.toLocaleString('id-ID')} Pax`,
+            valA: `Periode: ${data.periodA.label}`,
+            badgeText: 'VOLUME',
+            foot: 'Total Tiket Penonton Cinema XXI',
+            color: C_BLUE,
+            bg: C_BLUE_BG,
+            border: C_BLUE_BORDER,
+          },
+          {
+            title: '2. HEAD (SPH)',
+            valB: `Rp ${data.periodA.sph.toLocaleString('id-ID')}`,
+            valA: `Target: Rp ${data.targetSph.toLocaleString('id-ID')}`,
+            badgeText: `${data.periodA.achievement}%`,
+            foot: `Pencapaian Target: ${data.periodA.achievement}%`,
+            color: C_AMBER,
+            bg: C_AMBER_BG,
+            border: C_AMBER_BORDER,
+          },
+          {
+            title: '3. % GBO (RATIO)',
+            valB: `${data.periodA.gbo}%`,
+            valA: `Benchmark: 40% - 60%`,
+            badgeText: 'RATIO',
+            foot: `Omset F&B: Rp ${(data.periodA.fnb / 1000000).toFixed(1)} Jt`,
+            color: C_PURPLE,
+            bg: C_PURPLE_BG,
+            border: C_PURPLE_BORDER,
+          },
+          {
+            title: '4. DAYA SERAP (%)',
+            valB: `${data.periodA.dayaSerap}%`,
+            valA: `Penetrasi Pembeli Kasir`,
+            badgeText: 'SERAP',
+            foot: `Total Struk: ${data.periodA.bill.toLocaleString('id-ID')} Bill`,
+            color: C_GREEN,
+            bg: C_GREEN_BG,
+            border: C_GREEN_BORDER,
+          },
+          {
+            title: '5. AVG TRANSAKSI',
+            valB: `Rp ${data.periodA.at.toLocaleString('id-ID')}`,
+            valA: `Basket Size per Struk`,
+            badgeText: 'BASKET',
+            foot: `Rata-rata Belanja per Struk`,
+            color: C_CYAN,
+            bg: C_CYAN_BG,
+            border: C_CYAN_BORDER,
+          },
+        ]
+      : [
+          {
+            title: '1. PENONTON (PAX)',
+            valB: `${(data.periodC || data.periodB).penonton.toLocaleString('id-ID')} Pax`,
+            valA: data.periodC
+              ? `${data.periodA.label}: ${data.periodA.penonton.toLocaleString('id-ID')} • ${data.periodB.label}: ${data.periodB.penonton.toLocaleString('id-ID')}`
+              : `${data.periodA.label}: ${data.periodA.penonton.toLocaleString('id-ID')} Pax`,
+            rawA: (data.periodC ? data.periodB : data.periodA).penonton,
+            rawB: (data.periodC || data.periodB).penonton,
+            foot: 'Total Tiket Penonton Cinema XXI',
+            color: C_BLUE,
+            bg: C_BLUE_BG,
+            border: C_BLUE_BORDER,
+          },
+          {
+            title: '2. HEAD (SPH)',
+            valB: `Rp ${(data.periodC || data.periodB).sph.toLocaleString('id-ID')}`,
+            valA: data.periodC
+              ? `${data.periodA.label}: Rp ${data.periodA.sph.toLocaleString('id-ID')} • ${data.periodB.label}: Rp ${data.periodB.sph.toLocaleString('id-ID')}`
+              : `${data.periodA.label}: Rp ${data.periodA.sph.toLocaleString('id-ID')}`,
+            rawA: (data.periodC ? data.periodB : data.periodA).sph,
+            rawB: (data.periodC || data.periodB).sph,
+            foot: `Target: Rp ${data.targetSph.toLocaleString('id-ID')} • Ach: ${(data.periodC || data.periodB).achievement}%`,
+            color: C_AMBER,
+            bg: C_AMBER_BG,
+            border: C_AMBER_BORDER,
+          },
+          {
+            title: '3. % GBO (RATIO)',
+            valB: `${(data.periodC || data.periodB).gbo}%`,
+            valA: data.periodC
+              ? `${data.periodA.label}: ${data.periodA.gbo}% • ${data.periodB.label}: ${data.periodB.gbo}%`
+              : `${data.periodA.label}: ${data.periodA.gbo}%`,
+            rawA: (data.periodC ? data.periodB : data.periodA).gbo,
+            rawB: (data.periodC || data.periodB).gbo,
+            foot: 'Rasio Omset F&B thdp Box Office',
+            color: C_PURPLE,
+            bg: C_PURPLE_BG,
+            border: C_PURPLE_BORDER,
+          },
+          {
+            title: '4. DAYA SERAP (%)',
+            valB: `${(data.periodC || data.periodB).dayaSerap}%`,
+            valA: data.periodC
+              ? `${data.periodA.label}: ${data.periodA.dayaSerap}% • ${data.periodB.label}: ${data.periodB.dayaSerap}%`
+              : `${data.periodA.label}: ${data.periodA.dayaSerap}%`,
+            rawA: (data.periodC ? data.periodB : data.periodA).dayaSerap,
+            rawB: (data.periodC || data.periodB).dayaSerap,
+            foot: `Total Struk: ${(data.periodC || data.periodB).bill.toLocaleString('id-ID')} Bill`,
+            color: C_GREEN,
+            bg: C_GREEN_BG,
+            border: C_GREEN_BORDER,
+          },
+          {
+            title: '5. AVG TRANSAKSI',
+            valB: `Rp ${(data.periodC || data.periodB).at.toLocaleString('id-ID')}`,
+            valA: data.periodC
+              ? `${data.periodA.label}: Rp ${data.periodA.at.toLocaleString('id-ID')} • ${data.periodB.label}: Rp ${data.periodB.at.toLocaleString('id-ID')}`
+              : `${data.periodA.label}: Rp ${data.periodA.at.toLocaleString('id-ID')}`,
+            rawA: (data.periodC ? data.periodB : data.periodA).at,
+            rawB: (data.periodC || data.periodB).at,
+            foot: `Omset F&B: Rp ${((data.periodC || data.periodB).fnb / 1000000).toFixed(1)} Jt`,
+            color: C_CYAN,
+            bg: C_CYAN_BG,
+            border: C_CYAN_BORDER,
+          },
+        ];
 
     const cardW = 2.35;
     const cardGap = 0.145;
@@ -726,7 +998,32 @@ export const exportKPIToPPTX = async (data: SlideKPIData) => {
         margin: 0,
       });
 
-      addGrowthBadge(slide, cx + cardW - 0.76, cardY + 0.11, 0.64, 0.24, kpi.rawA, kpi.rawB, 7.5);
+      if (data.isSinglePeriod && 'badgeText' in kpi) {
+        slide.addShape(pptx.ShapeType.roundRect, {
+          x: cx + cardW - 0.76,
+          y: cardY + 0.11,
+          w: 0.64,
+          h: 0.24,
+          rectRadius: 0.05,
+          fill: { color: kpi.bg },
+          line: { color: kpi.border, width: 0.5 },
+        });
+        slide.addText(String(kpi.badgeText), {
+          x: cx + cardW - 0.76,
+          y: cardY + 0.11,
+          w: 0.64,
+          h: 0.24,
+          fontFace: FONT,
+          fontSize: 7.5,
+          bold: true,
+          color: kpi.color,
+          align: 'center',
+          valign: 'middle',
+          margin: 0,
+        });
+      } else if ('rawA' in kpi && 'rawB' in kpi) {
+        addGrowthBadge(slide, cx + cardW - 0.76, cardY + 0.11, 0.64, 0.24, kpi.rawA, kpi.rawB, 7.5);
+      }
 
       slide.addText(kpi.valB, {
         x: cx + 0.12,
@@ -789,43 +1086,24 @@ export const exportKPIToPPTX = async (data: SlideKPIData) => {
       line: { color: C_BORDER_LIGHT, width: 1 },
     });
 
-    slide.addText(
-      `MATRIKS KOMPARASI PARAMETER UTAMA: ${data.periodA.label.toUpperCase()} VS ${data.periodB.label.toUpperCase()}`,
-      {
-        x: 0.7,
-        y: 3.34,
-        w: 11.9,
-        h: 0.28,
-        fontFace: FONT,
-        fontSize: 9.5,
-        bold: true,
-        color: C_TEXT,
-        valign: 'middle',
-        margin: 0,
-      }
-    );
+    const matrixTitle = data.isSinglePeriod
+      ? `RINGKASAN PERFORMA & EVALUASI TARGET: ${data.periodA.label.toUpperCase()}`
+      : data.periodC
+      ? `MATRIKS KOMPARASI 3 PERIODE: ${data.periodA.label.toUpperCase()} VS ${data.periodB.label.toUpperCase()} VS ${data.periodC.label.toUpperCase()}`
+      : `MATRIKS KOMPARASI PARAMETER UTAMA: ${data.periodA.label.toUpperCase()} VS ${data.periodB.label.toUpperCase()}`;
 
-    const makeGrowthCell = (valA: number, valB: number): pptxgen.TableCell => {
-      const isPos = valB >= valA;
-      return {
-        text: calcGrowthStr(valA, valB),
-        options: {
-          align: 'center',
-          valign: 'middle',
-          bold: true,
-          fontFace: FONT,
-          fontSize: 9.5,
-          color: isPos ? C_GREEN : C_RED,
-          fill: { color: isPos ? C_GREEN_BG : C_RED_BG },
-        },
-      };
-    };
-
-    const deltaPax = data.periodB.penonton - data.periodA.penonton;
-    const deltaSph = data.periodB.sph - data.periodA.sph;
-    const deltaGbo = data.periodB.gbo - data.periodA.gbo;
-    const deltaDs = data.periodB.dayaSerap - data.periodA.dayaSerap;
-    const deltaAt = data.periodB.at - data.periodA.at;
+    slide.addText(matrixTitle, {
+      x: 0.7,
+      y: 3.34,
+      w: 11.9,
+      h: 0.28,
+      fontFace: FONT,
+      fontSize: 9.5,
+      bold: true,
+      color: C_TEXT,
+      valign: 'middle',
+      margin: 0,
+    });
 
     const hdrOpts = (align: 'left' | 'right' | 'center'): pptxgen.TableCellProps => ({
       bold: true,
@@ -837,119 +1115,327 @@ export const exportKPIToPPTX = async (data: SlideKPIData) => {
       fontSize: 9.5,
     });
 
-    const tableData: pptxgen.TableRow[] = [
-      [
-        { text: 'INDIKATOR KPI UTAMA', options: hdrOpts('left') },
-        { text: data.periodA.label.toUpperCase(), options: hdrOpts('right') },
-        { text: data.periodB.label.toUpperCase(), options: hdrOpts('right') },
-        { text: 'SELISIH (DELTA)', options: hdrOpts('right') },
-        { text: 'PERTUMBUHAN (%)', options: hdrOpts('center') },
-      ],
-      [
-        {
-          text: '1. Penonton (Pax Tiket)',
-          options: { bold: true, color: C_BLUE, fontFace: FONT, fontSize: 9.5, valign: 'middle', fill: { color: 'FFFFFF' } },
-        },
-        {
-          text: `${data.periodA.penonton.toLocaleString('id-ID')} Pax`,
-          options: { align: 'right', color: C_SUBTEXT, fontFace: FONT, fontSize: 9.5, valign: 'middle', fill: { color: 'FFFFFF' } },
-        },
-        {
-          text: `${data.periodB.penonton.toLocaleString('id-ID')} Pax`,
-          options: { align: 'right', bold: true, color: C_BLUE, fontFace: FONT, fontSize: 9.5, valign: 'middle', fill: { color: 'FFFFFF' } },
-        },
-        {
-          text: `${deltaPax >= 0 ? '+' : ''}${deltaPax.toLocaleString('id-ID')} Pax`,
-          options: { align: 'right', bold: true, color: C_TEXT, fontFace: FONT, fontSize: 9.5, valign: 'middle', fill: { color: 'FFFFFF' } },
-        },
-        makeGrowthCell(data.periodA.penonton, data.periodB.penonton),
-      ],
-      [
-        {
-          text: '2. Spending Per Head (SPH)',
-          options: { bold: true, color: C_AMBER, fontFace: FONT, fontSize: 9.5, valign: 'middle', fill: { color: C_BG } },
-        },
-        {
-          text: `Rp ${data.periodA.sph.toLocaleString('id-ID')}`,
-          options: { align: 'right', color: C_SUBTEXT, fontFace: FONT, fontSize: 9.5, valign: 'middle', fill: { color: C_BG } },
-        },
-        {
-          text: `Rp ${data.periodB.sph.toLocaleString('id-ID')}`,
-          options: { align: 'right', bold: true, color: C_AMBER, fontFace: FONT, fontSize: 9.5, valign: 'middle', fill: { color: C_BG } },
-        },
-        {
-          text: `${deltaSph >= 0 ? '+' : ''}Rp ${deltaSph.toLocaleString('id-ID')}`,
-          options: { align: 'right', bold: true, color: C_TEXT, fontFace: FONT, fontSize: 9.5, valign: 'middle', fill: { color: C_BG } },
-        },
-        makeGrowthCell(data.periodA.sph, data.periodB.sph),
-      ],
-      [
-        {
-          text: '3. Rasio % GBO (F&B vs Cinema)',
-          options: { bold: true, color: C_PURPLE, fontFace: FONT, fontSize: 9.5, valign: 'middle', fill: { color: 'FFFFFF' } },
-        },
-        {
-          text: `${data.periodA.gbo}%`,
-          options: { align: 'right', color: C_SUBTEXT, fontFace: FONT, fontSize: 9.5, valign: 'middle', fill: { color: 'FFFFFF' } },
-        },
-        {
-          text: `${data.periodB.gbo}%`,
-          options: { align: 'right', bold: true, color: C_PURPLE, fontFace: FONT, fontSize: 9.5, valign: 'middle', fill: { color: 'FFFFFF' } },
-        },
-        {
-          text: `${deltaGbo >= 0 ? '+' : ''}${deltaGbo.toFixed(1)}%`,
-          options: { align: 'right', bold: true, color: C_TEXT, fontFace: FONT, fontSize: 9.5, valign: 'middle', fill: { color: 'FFFFFF' } },
-        },
-        makeGrowthCell(data.periodA.gbo, data.periodB.gbo),
-      ],
-      [
-        {
-          text: '4. Daya Serap (Bill / Penonton)',
-          options: { bold: true, color: C_GREEN, fontFace: FONT, fontSize: 9.5, valign: 'middle', fill: { color: C_BG } },
-        },
-        {
-          text: `${data.periodA.dayaSerap}%`,
-          options: { align: 'right', color: C_SUBTEXT, fontFace: FONT, fontSize: 9.5, valign: 'middle', fill: { color: C_BG } },
-        },
-        {
-          text: `${data.periodB.dayaSerap}%`,
-          options: { align: 'right', bold: true, color: C_GREEN, fontFace: FONT, fontSize: 9.5, valign: 'middle', fill: { color: C_BG } },
-        },
-        {
-          text: `${deltaDs >= 0 ? '+' : ''}${deltaDs.toFixed(1)}%`,
-          options: { align: 'right', bold: true, color: C_TEXT, fontFace: FONT, fontSize: 9.5, valign: 'middle', fill: { color: C_BG } },
-        },
-        makeGrowthCell(data.periodA.dayaSerap, data.periodB.dayaSerap),
-      ],
-      [
-        {
-          text: '5. Average Transaksi (AT / Basket Size)',
-          options: { bold: true, color: C_CYAN, fontFace: FONT, fontSize: 9.5, valign: 'middle', fill: { color: 'FFFFFF' } },
-        },
-        {
-          text: `Rp ${data.periodA.at.toLocaleString('id-ID')}`,
-          options: { align: 'right', color: C_SUBTEXT, fontFace: FONT, fontSize: 9.5, valign: 'middle', fill: { color: 'FFFFFF' } },
-        },
-        {
-          text: `Rp ${data.periodB.at.toLocaleString('id-ID')}`,
-          options: { align: 'right', bold: true, color: C_CYAN, fontFace: FONT, fontSize: 9.5, valign: 'middle', fill: { color: 'FFFFFF' } },
-        },
-        {
-          text: `${deltaAt >= 0 ? '+' : ''}Rp ${deltaAt.toLocaleString('id-ID')}`,
-          options: { align: 'right', bold: true, color: C_TEXT, fontFace: FONT, fontSize: 9.5, valign: 'middle', fill: { color: 'FFFFFF' } },
-        },
-        makeGrowthCell(data.periodA.at, data.periodB.at),
-      ],
-    ];
+    if (data.isSinglePeriod) {
+      const isCapaiSph = data.periodA.achievement >= 100;
+      const isCapaiGbo = data.periodA.gbo >= 40;
+      const isCapaiDs = data.periodA.dayaSerap >= 25;
 
-    slide.addTable(tableData, {
-      x: 0.7,
-      y: 3.72,
-      w: 11.93,
-      colW: [3.53, 2.1, 2.1, 2.1, 2.1],
-      rowH: 0.5,
-      border: { type: 'solid', color: C_BORDER, pt: 0.75 },
-    });
+      const singleTableData: pptxgen.TableRow[] = [
+        [
+          { text: 'INDIKATOR KPI UTAMA', options: hdrOpts('left') },
+          { text: 'TARGET / BENCHMARK', options: hdrOpts('right') },
+          { text: 'REALISASI PERIODE', options: hdrOpts('right') },
+          { text: 'STATUS PENCAPAIAN', options: hdrOpts('center') },
+          { text: 'EVALUASI BISNIS', options: hdrOpts('left') },
+        ],
+        [
+          {
+            text: '1. Penonton (Pax Tiket)',
+            options: { bold: true, color: C_BLUE, fontFace: FONT, fontSize: 9.5, valign: 'middle', fill: { color: 'FFFFFF' } },
+          },
+          {
+            text: 'Volume Basis',
+            options: { align: 'right', color: C_SUBTEXT, fontFace: FONT, fontSize: 9.5, valign: 'middle', fill: { color: 'FFFFFF' } },
+          },
+          {
+            text: `${data.periodA.penonton.toLocaleString('id-ID')} Pax`,
+            options: { align: 'right', bold: true, color: C_BLUE, fontFace: FONT, fontSize: 9.5, valign: 'middle', fill: { color: 'FFFFFF' } },
+          },
+          {
+            text: 'OPTIMAL',
+            options: { align: 'center', bold: true, color: C_GREEN, fontFace: FONT, fontSize: 9.5, valign: 'middle', fill: { color: C_GREEN_BG } },
+          },
+          {
+            text: 'Basis pengunjung aktif Cinema XXI penopang omset F&B.',
+            options: { align: 'left', color: C_TEXT, fontFace: FONT, fontSize: 9.0, valign: 'middle', fill: { color: 'FFFFFF' } },
+          },
+        ],
+        [
+          {
+            text: '2. Spending Per Head (SPH)',
+            options: { bold: true, color: C_AMBER, fontFace: FONT, fontSize: 9.5, valign: 'middle', fill: { color: C_BG } },
+          },
+          {
+            text: `Rp ${data.targetSph.toLocaleString('id-ID')}`,
+            options: { align: 'right', color: C_SUBTEXT, fontFace: FONT, fontSize: 9.5, valign: 'middle', fill: { color: C_BG } },
+          },
+          {
+            text: `Rp ${data.periodA.sph.toLocaleString('id-ID')}`,
+            options: { align: 'right', bold: true, color: C_AMBER, fontFace: FONT, fontSize: 9.5, valign: 'middle', fill: { color: C_BG } },
+          },
+          {
+            text: `${data.periodA.achievement}% (${isCapaiSph ? 'TERCAPAI' : 'BAWAH TARGET'})`,
+            options: { align: 'center', bold: true, color: isCapaiSph ? C_GREEN : C_RED, fontFace: FONT, fontSize: 9.5, valign: 'middle', fill: { color: isCapaiSph ? C_GREEN_BG : C_RED_BG } },
+          },
+          {
+            text: isCapaiSph ? 'Performa pengeluaran penonton di atas target head bioskop.' : 'Perlu program upselling promo combo snack dan minuman.',
+            options: { align: 'left', color: C_TEXT, fontFace: FONT, fontSize: 9.0, valign: 'middle', fill: { color: C_BG } },
+          },
+        ],
+        [
+          {
+            text: '3. Rasio % GBO (F&B vs Cinema)',
+            options: { bold: true, color: C_PURPLE, fontFace: FONT, fontSize: 9.5, valign: 'middle', fill: { color: 'FFFFFF' } },
+          },
+          {
+            text: '40% - 60% Benchmark',
+            options: { align: 'right', color: C_SUBTEXT, fontFace: FONT, fontSize: 9.5, valign: 'middle', fill: { color: 'FFFFFF' } },
+          },
+          {
+            text: `${data.periodA.gbo}%`,
+            options: { align: 'right', bold: true, color: C_PURPLE, fontFace: FONT, fontSize: 9.5, valign: 'middle', fill: { color: 'FFFFFF' } },
+          },
+          {
+            text: isCapaiGbo ? 'SANGAT KUAT' : 'STANDAR',
+            options: { align: 'center', bold: true, color: isCapaiGbo ? C_PURPLE : C_TEXT, fontFace: FONT, fontSize: 9.5, valign: 'middle', fill: { color: C_PURPLE_BG } },
+          },
+          {
+            text: `Omset F&B Rp ${(data.periodA.fnb / 1000000).toFixed(1)} Jt thdp Box Office Rp ${(data.periodA.cinema / 1000000).toFixed(1)} Jt.`,
+            options: { align: 'left', color: C_TEXT, fontFace: FONT, fontSize: 9.0, valign: 'middle', fill: { color: 'FFFFFF' } },
+          },
+        ],
+        [
+          {
+            text: '4. Daya Serap (Bill / Penonton)',
+            options: { bold: true, color: C_GREEN, fontFace: FONT, fontSize: 9.5, valign: 'middle', fill: { color: C_BG } },
+          },
+          {
+            text: '25% - 30% Benchmark',
+            options: { align: 'right', color: C_SUBTEXT, fontFace: FONT, fontSize: 9.5, valign: 'middle', fill: { color: C_BG } },
+          },
+          {
+            text: `${data.periodA.dayaSerap}%`,
+            options: { align: 'right', bold: true, color: C_GREEN, fontFace: FONT, fontSize: 9.5, valign: 'middle', fill: { color: C_BG } },
+          },
+          {
+            text: isCapaiDs ? 'TINGGI' : 'STANDAR',
+            options: { align: 'center', bold: true, color: isCapaiDs ? C_GREEN : C_TEXT, fontFace: FONT, fontSize: 9.5, valign: 'middle', fill: { color: isCapaiDs ? C_GREEN_BG : C_BG } },
+          },
+          {
+            text: `Tercatat ${data.periodA.bill.toLocaleString('id-ID')} struk transaksi kasir Cafe.`,
+            options: { align: 'left', color: C_TEXT, fontFace: FONT, fontSize: 9.0, valign: 'middle', fill: { color: C_BG } },
+          },
+        ],
+        [
+          {
+            text: '5. Average Transaksi (AT / Basket Size)',
+            options: { bold: true, color: C_CYAN, fontFace: FONT, fontSize: 9.5, valign: 'middle', fill: { color: 'FFFFFF' } },
+          },
+          {
+            text: 'Optimal Basket Size',
+            options: { align: 'right', color: C_SUBTEXT, fontFace: FONT, fontSize: 9.5, valign: 'middle', fill: { color: 'FFFFFF' } },
+          },
+          {
+            text: `Rp ${data.periodA.at.toLocaleString('id-ID')}`,
+            options: { align: 'right', bold: true, color: C_CYAN, fontFace: FONT, fontSize: 9.5, valign: 'middle', fill: { color: 'FFFFFF' } },
+          },
+          {
+            text: 'STABIL',
+            options: { align: 'center', bold: true, color: C_CYAN, fontFace: FONT, fontSize: 9.5, valign: 'middle', fill: { color: C_CYAN_BG } },
+          },
+          {
+            text: 'Rata-rata nominal pengeluaran kasir per satu transaksi struk.',
+            options: { align: 'left', color: C_TEXT, fontFace: FONT, fontSize: 9.0, valign: 'middle', fill: { color: 'FFFFFF' } },
+          },
+        ],
+      ];
+
+      slide.addTable(singleTableData, {
+        x: 0.7,
+        y: 3.72,
+        w: 11.93,
+        colW: [3.33, 2.1, 2.1, 2.0, 2.4],
+        rowH: 0.5,
+        border: { type: 'solid', color: C_BORDER, pt: 0.75 },
+      });
+    } else {
+      const makeGrowthCell = (valA: number, valB: number): pptxgen.TableCell => {
+        const isPos = valB >= valA;
+        return {
+          text: calcGrowthStr(valA, valB),
+          options: {
+            align: 'center',
+            valign: 'middle',
+            bold: true,
+            fontFace: FONT,
+            fontSize: 9.5,
+            color: isPos ? C_GREEN : C_RED,
+            fill: { color: isPos ? C_GREEN_BG : C_RED_BG },
+          },
+        };
+      };
+
+      const deltaPax = data.periodB.penonton - data.periodA.penonton;
+      const deltaSph = data.periodB.sph - data.periodA.sph;
+      const deltaGbo = data.periodB.gbo - data.periodA.gbo;
+      const deltaDs = data.periodB.dayaSerap - data.periodA.dayaSerap;
+      const deltaAt = data.periodB.at - data.periodA.at;
+
+      const tableData: pptxgen.TableRow[] = data.periodC
+        ? [
+            [
+              { text: 'INDIKATOR KPI UTAMA', options: hdrOpts('left') },
+              { text: data.periodA.label.toUpperCase(), options: hdrOpts('right') },
+              { text: data.periodB.label.toUpperCase(), options: hdrOpts('right') },
+              { text: data.periodC.label.toUpperCase(), options: hdrOpts('right') },
+              { text: 'GROWTH A→B', options: hdrOpts('center') },
+              { text: 'GROWTH B→C', options: hdrOpts('center') },
+            ],
+            [
+              { text: '1. Penonton (Pax Tiket)', options: { bold: true, color: C_BLUE, fontFace: FONT, fontSize: 9, valign: 'middle', fill: { color: 'FFFFFF' } } },
+              { text: `${data.periodA.penonton.toLocaleString('id-ID')} Pax`, options: { align: 'right', color: C_SUBTEXT, fontFace: FONT, fontSize: 9, valign: 'middle', fill: { color: 'FFFFFF' } } },
+              { text: `${data.periodB.penonton.toLocaleString('id-ID')} Pax`, options: { align: 'right', bold: true, color: C_BLUE, fontFace: FONT, fontSize: 9, valign: 'middle', fill: { color: 'FFFFFF' } } },
+              { text: `${data.periodC.penonton.toLocaleString('id-ID')} Pax`, options: { align: 'right', bold: true, color: C_TEXT, fontFace: FONT, fontSize: 9, valign: 'middle', fill: { color: 'FFFFFF' } } },
+              makeGrowthCell(data.periodA.penonton, data.periodB.penonton),
+              makeGrowthCell(data.periodB.penonton, data.periodC.penonton),
+            ],
+            [
+              { text: '2. Spending Per Head (SPH)', options: { bold: true, color: C_AMBER, fontFace: FONT, fontSize: 9, valign: 'middle', fill: { color: C_BG } } },
+              { text: `Rp ${data.periodA.sph.toLocaleString('id-ID')}`, options: { align: 'right', color: C_SUBTEXT, fontFace: FONT, fontSize: 9, valign: 'middle', fill: { color: C_BG } } },
+              { text: `Rp ${data.periodB.sph.toLocaleString('id-ID')}`, options: { align: 'right', bold: true, color: C_AMBER, fontFace: FONT, fontSize: 9, valign: 'middle', fill: { color: C_BG } } },
+              { text: `Rp ${data.periodC.sph.toLocaleString('id-ID')}`, options: { align: 'right', bold: true, color: C_TEXT, fontFace: FONT, fontSize: 9, valign: 'middle', fill: { color: C_BG } } },
+              makeGrowthCell(data.periodA.sph, data.periodB.sph),
+              makeGrowthCell(data.periodB.sph, data.periodC.sph),
+            ],
+            [
+              { text: '3. Rasio % GBO (F&B vs Cinema)', options: { bold: true, color: C_PURPLE, fontFace: FONT, fontSize: 9, valign: 'middle', fill: { color: 'FFFFFF' } } },
+              { text: `${data.periodA.gbo}%`, options: { align: 'right', color: C_SUBTEXT, fontFace: FONT, fontSize: 9, valign: 'middle', fill: { color: 'FFFFFF' } } },
+              { text: `${data.periodB.gbo}%`, options: { align: 'right', bold: true, color: C_PURPLE, fontFace: FONT, fontSize: 9, valign: 'middle', fill: { color: 'FFFFFF' } } },
+              { text: `${data.periodC.gbo}%`, options: { align: 'right', bold: true, color: C_TEXT, fontFace: FONT, fontSize: 9, valign: 'middle', fill: { color: 'FFFFFF' } } },
+              makeGrowthCell(data.periodA.gbo, data.periodB.gbo),
+              makeGrowthCell(data.periodB.gbo, data.periodC.gbo),
+            ],
+            [
+              { text: '4. Daya Serap (Bill / Penonton)', options: { bold: true, color: C_GREEN, fontFace: FONT, fontSize: 9, valign: 'middle', fill: { color: C_BG } } },
+              { text: `${data.periodA.dayaSerap}%`, options: { align: 'right', color: C_SUBTEXT, fontFace: FONT, fontSize: 9, valign: 'middle', fill: { color: C_BG } } },
+              { text: `${data.periodB.dayaSerap}%`, options: { align: 'right', bold: true, color: C_GREEN, fontFace: FONT, fontSize: 9, valign: 'middle', fill: { color: C_BG } } },
+              { text: `${data.periodC.dayaSerap}%`, options: { align: 'right', bold: true, color: C_TEXT, fontFace: FONT, fontSize: 9, valign: 'middle', fill: { color: C_BG } } },
+              makeGrowthCell(data.periodA.dayaSerap, data.periodB.dayaSerap),
+              makeGrowthCell(data.periodB.dayaSerap, data.periodC.dayaSerap),
+            ],
+            [
+              { text: '5. Average Transaksi (AT)', options: { bold: true, color: C_CYAN, fontFace: FONT, fontSize: 9, valign: 'middle', fill: { color: 'FFFFFF' } } },
+              { text: `Rp ${data.periodA.at.toLocaleString('id-ID')}`, options: { align: 'right', color: C_SUBTEXT, fontFace: FONT, fontSize: 9, valign: 'middle', fill: { color: 'FFFFFF' } } },
+              { text: `Rp ${data.periodB.at.toLocaleString('id-ID')}`, options: { align: 'right', bold: true, color: C_CYAN, fontFace: FONT, fontSize: 9, valign: 'middle', fill: { color: 'FFFFFF' } } },
+              { text: `Rp ${data.periodC.at.toLocaleString('id-ID')}`, options: { align: 'right', bold: true, color: C_TEXT, fontFace: FONT, fontSize: 9, valign: 'middle', fill: { color: 'FFFFFF' } } },
+              makeGrowthCell(data.periodA.at, data.periodB.at),
+              makeGrowthCell(data.periodB.at, data.periodC.at),
+            ],
+          ]
+        : [
+            [
+              { text: 'INDIKATOR KPI UTAMA', options: hdrOpts('left') },
+              { text: data.periodA.label.toUpperCase(), options: hdrOpts('right') },
+              { text: data.periodB.label.toUpperCase(), options: hdrOpts('right') },
+              { text: 'SELISIH (DELTA)', options: hdrOpts('right') },
+              { text: 'PERTUMBUHAN (%)', options: hdrOpts('center') },
+            ],
+            [
+              {
+                text: '1. Penonton (Pax Tiket)',
+                options: { bold: true, color: C_BLUE, fontFace: FONT, fontSize: 9.5, valign: 'middle', fill: { color: 'FFFFFF' } },
+              },
+              {
+                text: `${data.periodA.penonton.toLocaleString('id-ID')} Pax`,
+                options: { align: 'right', color: C_SUBTEXT, fontFace: FONT, fontSize: 9.5, valign: 'middle', fill: { color: 'FFFFFF' } },
+              },
+              {
+                text: `${data.periodB.penonton.toLocaleString('id-ID')} Pax`,
+                options: { align: 'right', bold: true, color: C_BLUE, fontFace: FONT, fontSize: 9.5, valign: 'middle', fill: { color: 'FFFFFF' } },
+              },
+              {
+                text: `${deltaPax >= 0 ? '+' : ''}${deltaPax.toLocaleString('id-ID')} Pax`,
+                options: { align: 'right', bold: true, color: C_TEXT, fontFace: FONT, fontSize: 9.5, valign: 'middle', fill: { color: 'FFFFFF' } },
+              },
+              makeGrowthCell(data.periodA.penonton, data.periodB.penonton),
+            ],
+            [
+              {
+                text: '2. Spending Per Head (SPH)',
+                options: { bold: true, color: C_AMBER, fontFace: FONT, fontSize: 9.5, valign: 'middle', fill: { color: C_BG } },
+              },
+              {
+                text: `Rp ${data.periodA.sph.toLocaleString('id-ID')}`,
+                options: { align: 'right', color: C_SUBTEXT, fontFace: FONT, fontSize: 9.5, valign: 'middle', fill: { color: C_BG } },
+              },
+              {
+                text: `Rp ${data.periodB.sph.toLocaleString('id-ID')}`,
+                options: { align: 'right', bold: true, color: C_AMBER, fontFace: FONT, fontSize: 9.5, valign: 'middle', fill: { color: C_BG } },
+              },
+              {
+                text: `${deltaSph >= 0 ? '+' : ''}Rp ${deltaSph.toLocaleString('id-ID')}`,
+                options: { align: 'right', bold: true, color: C_TEXT, fontFace: FONT, fontSize: 9.5, valign: 'middle', fill: { color: C_BG } },
+              },
+              makeGrowthCell(data.periodA.sph, data.periodB.sph),
+            ],
+            [
+              {
+                text: '3. Rasio % GBO (F&B vs Cinema)',
+                options: { bold: true, color: C_PURPLE, fontFace: FONT, fontSize: 9.5, valign: 'middle', fill: { color: 'FFFFFF' } },
+              },
+              {
+                text: `${data.periodA.gbo}%`,
+                options: { align: 'right', color: C_SUBTEXT, fontFace: FONT, fontSize: 9.5, valign: 'middle', fill: { color: 'FFFFFF' } },
+              },
+              {
+                text: `${data.periodB.gbo}%`,
+                options: { align: 'right', bold: true, color: C_PURPLE, fontFace: FONT, fontSize: 9.5, valign: 'middle', fill: { color: 'FFFFFF' } },
+              },
+              {
+                text: `${deltaGbo >= 0 ? '+' : ''}${deltaGbo.toFixed(1)}%`,
+                options: { align: 'right', bold: true, color: C_TEXT, fontFace: FONT, fontSize: 9.5, valign: 'middle', fill: { color: 'FFFFFF' } },
+              },
+              makeGrowthCell(data.periodA.gbo, data.periodB.gbo),
+            ],
+            [
+              {
+                text: '4. Daya Serap (Bill / Penonton)',
+                options: { bold: true, color: C_GREEN, fontFace: FONT, fontSize: 9.5, valign: 'middle', fill: { color: C_BG } },
+              },
+              {
+                text: `${data.periodA.dayaSerap}%`,
+                options: { align: 'right', color: C_SUBTEXT, fontFace: FONT, fontSize: 9.5, valign: 'middle', fill: { color: C_BG } },
+              },
+              {
+                text: `${data.periodB.dayaSerap}%`,
+                options: { align: 'right', bold: true, color: C_GREEN, fontFace: FONT, fontSize: 9.5, valign: 'middle', fill: { color: C_BG } },
+              },
+              {
+                text: `${deltaDs >= 0 ? '+' : ''}${deltaDs.toFixed(1)}%`,
+                options: { align: 'right', bold: true, color: C_TEXT, fontFace: FONT, fontSize: 9.5, valign: 'middle', fill: { color: C_BG } },
+              },
+              makeGrowthCell(data.periodA.dayaSerap, data.periodB.dayaSerap),
+            ],
+            [
+              {
+                text: '5. Average Transaksi (AT / Basket Size)',
+                options: { bold: true, color: C_CYAN, fontFace: FONT, fontSize: 9.5, valign: 'middle', fill: { color: 'FFFFFF' } },
+              },
+              {
+                text: `Rp ${data.periodA.at.toLocaleString('id-ID')}`,
+                options: { align: 'right', color: C_SUBTEXT, fontFace: FONT, fontSize: 9.5, valign: 'middle', fill: { color: 'FFFFFF' } },
+              },
+              {
+                text: `Rp ${data.periodB.at.toLocaleString('id-ID')}`,
+                options: { align: 'right', bold: true, color: C_CYAN, fontFace: FONT, fontSize: 9.5, valign: 'middle', fill: { color: 'FFFFFF' } },
+              },
+              {
+                text: `${deltaAt >= 0 ? '+' : ''}Rp ${deltaAt.toLocaleString('id-ID')}`,
+                options: { align: 'right', bold: true, color: C_TEXT, fontFace: FONT, fontSize: 9.5, valign: 'middle', fill: { color: C_BG } },
+              },
+              makeGrowthCell(data.periodA.at, data.periodB.at),
+            ],
+          ];
+
+      slide.addTable(tableData, {
+        x: 0.7,
+        y: 3.72,
+        w: 11.93,
+        colW: data.periodC ? [3.13, 1.9, 1.9, 1.9, 1.55, 1.55] : [3.53, 2.1, 2.1, 2.1, 2.1],
+        rowH: 0.5,
+        border: { type: 'solid', color: C_BORDER, pt: 0.75 },
+      });
+    }
   }
 
   // Dynamic chart layout geometry for Slides 2-5 based on display options
@@ -977,168 +1463,326 @@ export const exportKPIToPPTX = async (data: SlideKPIData) => {
       const stripY = 1.04;
       const stripH = 0.84;
 
-      // Card 1: Realisasi B
-      slide.addShape(pptx.ShapeType.roundRect, {
-        x: 0.5,
-        y: stripY,
-        w: stripW,
-        h: stripH,
-        rectRadius: 0.08,
-        fill: { color: C_AMBER_BG },
-        line: { color: C_AMBER_BORDER, width: 1.2 },
-      });
-      slide.addText(`${data.periodB.label.toUpperCase()} (REALISASI)`, {
-        x: 0.65,
-        y: stripY + 0.1,
-        w: stripW - 0.3,
-        h: 0.2,
-        fontFace: FONT,
-        fontSize: 7.5,
-        bold: true,
-        color: C_MUTED,
-        margin: 0,
-      });
-      slide.addText(`Rp ${data.periodB.sph.toLocaleString('id-ID')}`, {
-        x: 0.65,
-        y: stripY + 0.34,
-        w: stripW - 0.3,
-        h: 0.4,
-        fontFace: FONT,
-        fontSize: 15,
-        bold: true,
-        color: C_AMBER,
-        valign: 'middle',
-        margin: 0,
-      });
+      if (data.isSinglePeriod) {
+        // Card 1: Realisasi A
+        slide.addShape(pptx.ShapeType.roundRect, {
+          x: 0.5,
+          y: stripY,
+          w: stripW,
+          h: stripH,
+          rectRadius: 0.08,
+          fill: { color: C_AMBER_BG },
+          line: { color: C_AMBER_BORDER, width: 1.2 },
+        });
+        slide.addText(`REALISASI SPH (${data.periodA.label.toUpperCase()})`, {
+          x: 0.65,
+          y: stripY + 0.1,
+          w: stripW - 0.3,
+          h: 0.2,
+          fontFace: FONT,
+          fontSize: 7.5,
+          bold: true,
+          color: C_MUTED,
+          margin: 0,
+        });
+        slide.addText(`Rp ${data.periodA.sph.toLocaleString('id-ID')}`, {
+          x: 0.65,
+          y: stripY + 0.34,
+          w: stripW - 0.3,
+          h: 0.4,
+          fontFace: FONT,
+          fontSize: 15,
+          bold: true,
+          color: C_AMBER,
+          valign: 'middle',
+          margin: 0,
+        });
 
-      // Card 2: Pembanding A + Growth
-      const c2x = 0.5 + (stripW + stripGap);
-      slide.addShape(pptx.ShapeType.roundRect, {
-        x: c2x,
-        y: stripY,
-        w: stripW,
-        h: stripH,
-        rectRadius: 0.08,
-        fill: { color: C_CARD },
-        line: { color: C_BORDER, width: 1 },
-      });
-      slide.addText(`${data.periodA.label.toUpperCase()} (PEMBANDING)`, {
-        x: c2x + 0.15,
-        y: stripY + 0.1,
-        w: stripW - 0.3,
-        h: 0.2,
-        fontFace: FONT,
-        fontSize: 7.5,
-        bold: true,
-        color: C_MUTED,
-        margin: 0,
-      });
-      slide.addText(`Rp ${data.periodA.sph.toLocaleString('id-ID')}`, {
-        x: c2x + 0.15,
-        y: stripY + 0.34,
-        w: stripW - 1.05,
-        h: 0.4,
-        fontFace: FONT,
-        fontSize: 14,
-        bold: true,
-        color: C_TEXT,
-        valign: 'middle',
-        margin: 0,
-      });
-      addGrowthBadge(slide, c2x + stripW - 0.85, stripY + 0.4, 0.7, 0.26, data.periodA.sph, data.periodB.sph, 8);
+        // Card 2: Target Head
+        const c2x = 0.5 + (stripW + stripGap);
+        slide.addShape(pptx.ShapeType.roundRect, {
+          x: c2x,
+          y: stripY,
+          w: stripW,
+          h: stripH,
+          rectRadius: 0.08,
+          fill: { color: C_CARD },
+          line: { color: C_BORDER, width: 1 },
+        });
+        slide.addText('TARGET SPH HEAD', {
+          x: c2x + 0.15,
+          y: stripY + 0.1,
+          w: stripW - 0.3,
+          h: 0.2,
+          fontFace: FONT,
+          fontSize: 7.5,
+          bold: true,
+          color: C_MUTED,
+          margin: 0,
+        });
+        slide.addText(`Rp ${data.targetSph.toLocaleString('id-ID')}`, {
+          x: c2x + 0.15,
+          y: stripY + 0.34,
+          w: stripW - 0.3,
+          h: 0.4,
+          fontFace: FONT,
+          fontSize: 14,
+          bold: true,
+          color: C_TEXT,
+          valign: 'middle',
+          margin: 0,
+        });
 
-      // Card 3: Pencapaian Target Head
-      const c3x = 0.5 + 2 * (stripW + stripGap);
-      const isSphCapai = data.periodB.sph >= data.targetSph;
-      slide.addShape(pptx.ShapeType.roundRect, {
-        x: c3x,
-        y: stripY,
-        w: stripW,
-        h: stripH,
-        rectRadius: 0.08,
-        fill: { color: isSphCapai ? C_GREEN_BG : C_RED_BG },
-        line: { color: isSphCapai ? C_GREEN_BORDER : C_RED_BORDER, width: 1 },
-      });
-      slide.addText('PENCAPAIAN TARGET HEAD', {
-        x: c3x + 0.15,
-        y: stripY + 0.1,
-        w: stripW - 0.3,
-        h: 0.2,
-        fontFace: FONT,
-        fontSize: 7.5,
-        bold: true,
-        color: isSphCapai ? C_GREEN : C_RED,
-        margin: 0,
-      });
-      slide.addText(`${data.periodB.achievement}%`, {
-        x: c3x + 0.15,
-        y: stripY + 0.34,
-        w: 1.5,
-        h: 0.4,
-        fontFace: FONT,
-        fontSize: 15,
-        bold: true,
-        color: isSphCapai ? C_GREEN : C_RED,
-        valign: 'middle',
-        margin: 0,
-      });
-      slide.addText(isSphCapai ? 'TERCAPAI' : 'BAWAH TARGET', {
-        x: c3x + stripW - 1.25,
-        y: stripY + 0.4,
-        w: 1.1,
-        h: 0.26,
-        fontFace: FONT,
-        fontSize: 7.5,
-        bold: true,
-        color: isSphCapai ? C_GREEN : C_RED,
-        align: 'right',
-        valign: 'middle',
-        margin: 0,
-      });
+        // Card 3: Pencapaian Target Head
+        const c3x = 0.5 + 2 * (stripW + stripGap);
+        const isSphCapai = data.periodA.achievement >= 100;
+        slide.addShape(pptx.ShapeType.roundRect, {
+          x: c3x,
+          y: stripY,
+          w: stripW,
+          h: stripH,
+          rectRadius: 0.08,
+          fill: { color: isSphCapai ? C_GREEN_BG : C_RED_BG },
+          line: { color: isSphCapai ? C_GREEN_BORDER : C_RED_BORDER, width: 1 },
+        });
+        slide.addText('PENCAPAIAN TARGET', {
+          x: c3x + 0.15,
+          y: stripY + 0.1,
+          w: stripW - 0.3,
+          h: 0.2,
+          fontFace: FONT,
+          fontSize: 7.5,
+          bold: true,
+          color: isSphCapai ? C_GREEN : C_RED,
+          margin: 0,
+        });
+        slide.addText(`${data.periodA.achievement}%`, {
+          x: c3x + 0.15,
+          y: stripY + 0.34,
+          w: 1.5,
+          h: 0.4,
+          fontFace: FONT,
+          fontSize: 15,
+          bold: true,
+          color: isSphCapai ? C_GREEN : C_RED,
+          valign: 'middle',
+          margin: 0,
+        });
+        slide.addText(isSphCapai ? 'TERCAPAI' : 'BAWAH TARGET', {
+          x: c3x + stripW - 1.25,
+          y: stripY + 0.4,
+          w: 1.1,
+          h: 0.26,
+          fontFace: FONT,
+          fontSize: 7.5,
+          bold: true,
+          color: isSphCapai ? C_GREEN : C_RED,
+          align: 'right',
+          valign: 'middle',
+          margin: 0,
+        });
 
-      // Card 4: Selisih vs Target
-      const c4x = 0.5 + 3 * (stripW + stripGap);
-      const diffTarget = data.periodB.sph - data.targetSph;
-      slide.addShape(pptx.ShapeType.roundRect, {
-        x: c4x,
-        y: stripY,
-        w: stripW,
-        h: stripH,
-        rectRadius: 0.08,
-        fill: { color: C_AMBER_BG },
-        line: { color: C_AMBER_BORDER, width: 1 },
-      });
-      slide.addText('SELISIH VS TARGET HEAD', {
-        x: c4x + 0.15,
-        y: stripY + 0.1,
-        w: stripW - 0.3,
-        h: 0.2,
-        fontFace: FONT,
-        fontSize: 7.5,
-        bold: true,
-        color: C_AMBER,
-        margin: 0,
-      });
-      slide.addText(`${diffTarget >= 0 ? '+' : ''}Rp ${diffTarget.toLocaleString('id-ID')}`, {
-        x: c4x + 0.15,
-        y: stripY + 0.34,
-        w: stripW - 0.3,
-        h: 0.4,
-        fontFace: FONT,
-        fontSize: 14,
-        bold: true,
-        color: diffTarget >= 0 ? C_GREEN : C_RED,
-        valign: 'middle',
-        margin: 0,
-      });
+        // Card 4: Selisih vs Target
+        const c4x = 0.5 + 3 * (stripW + stripGap);
+        const diffTarget = data.periodA.sph - data.targetSph;
+        slide.addShape(pptx.ShapeType.roundRect, {
+          x: c4x,
+          y: stripY,
+          w: stripW,
+          h: stripH,
+          rectRadius: 0.08,
+          fill: { color: C_AMBER_BG },
+          line: { color: C_AMBER_BORDER, width: 1 },
+        });
+        slide.addText('SELISIH VS TARGET', {
+          x: c4x + 0.15,
+          y: stripY + 0.1,
+          w: stripW - 0.3,
+          h: 0.2,
+          fontFace: FONT,
+          fontSize: 7.5,
+          bold: true,
+          color: C_AMBER,
+          margin: 0,
+        });
+        slide.addText(`${diffTarget >= 0 ? '+' : ''}Rp ${diffTarget.toLocaleString('id-ID')}`, {
+          x: c4x + 0.15,
+          y: stripY + 0.34,
+          w: stripW - 0.3,
+          h: 0.4,
+          fontFace: FONT,
+          fontSize: 14,
+          bold: true,
+          color: diffTarget >= 0 ? C_GREEN : C_RED,
+          valign: 'middle',
+          margin: 0,
+        });
+      } else {
+        // Card 1: Realisasi B
+        slide.addShape(pptx.ShapeType.roundRect, {
+          x: 0.5,
+          y: stripY,
+          w: stripW,
+          h: stripH,
+          rectRadius: 0.08,
+          fill: { color: C_AMBER_BG },
+          line: { color: C_AMBER_BORDER, width: 1.2 },
+        });
+        slide.addText(`${data.periodB.label.toUpperCase()} (REALISASI)`, {
+          x: 0.65,
+          y: stripY + 0.1,
+          w: stripW - 0.3,
+          h: 0.2,
+          fontFace: FONT,
+          fontSize: 7.5,
+          bold: true,
+          color: C_MUTED,
+          margin: 0,
+        });
+        slide.addText(`Rp ${data.periodB.sph.toLocaleString('id-ID')}`, {
+          x: 0.65,
+          y: stripY + 0.34,
+          w: stripW - 0.3,
+          h: 0.4,
+          fontFace: FONT,
+          fontSize: 15,
+          bold: true,
+          color: C_AMBER,
+          valign: 'middle',
+          margin: 0,
+        });
+
+        // Card 2: Pembanding A + Growth
+        const c2x = 0.5 + (stripW + stripGap);
+        slide.addShape(pptx.ShapeType.roundRect, {
+          x: c2x,
+          y: stripY,
+          w: stripW,
+          h: stripH,
+          rectRadius: 0.08,
+          fill: { color: C_CARD },
+          line: { color: C_BORDER, width: 1 },
+        });
+        slide.addText(`${data.periodA.label.toUpperCase()} (PEMBANDING)`, {
+          x: c2x + 0.15,
+          y: stripY + 0.1,
+          w: stripW - 0.3,
+          h: 0.2,
+          fontFace: FONT,
+          fontSize: 7.5,
+          bold: true,
+          color: C_MUTED,
+          margin: 0,
+        });
+        slide.addText(`Rp ${data.periodA.sph.toLocaleString('id-ID')}`, {
+          x: c2x + 0.15,
+          y: stripY + 0.34,
+          w: stripW - 1.05,
+          h: 0.4,
+          fontFace: FONT,
+          fontSize: 14,
+          bold: true,
+          color: C_TEXT,
+          valign: 'middle',
+          margin: 0,
+        });
+        addGrowthBadge(slide, c2x + stripW - 0.85, stripY + 0.4, 0.7, 0.26, data.periodA.sph, data.periodB.sph, 8);
+
+        // Card 3: Pencapaian Target Head
+        const c3x = 0.5 + 2 * (stripW + stripGap);
+        const isSphCapai = data.periodB.sph >= data.targetSph;
+        slide.addShape(pptx.ShapeType.roundRect, {
+          x: c3x,
+          y: stripY,
+          w: stripW,
+          h: stripH,
+          rectRadius: 0.08,
+          fill: { color: isSphCapai ? C_GREEN_BG : C_RED_BG },
+          line: { color: isSphCapai ? C_GREEN_BORDER : C_RED_BORDER, width: 1 },
+        });
+        slide.addText('PENCAPAIAN TARGET HEAD', {
+          x: c3x + 0.15,
+          y: stripY + 0.1,
+          w: stripW - 0.3,
+          h: 0.2,
+          fontFace: FONT,
+          fontSize: 7.5,
+          bold: true,
+          color: isSphCapai ? C_GREEN : C_RED,
+          margin: 0,
+        });
+        slide.addText(`${data.periodB.achievement}%`, {
+          x: c3x + 0.15,
+          y: stripY + 0.34,
+          w: 1.5,
+          h: 0.4,
+          fontFace: FONT,
+          fontSize: 15,
+          bold: true,
+          color: isSphCapai ? C_GREEN : C_RED,
+          valign: 'middle',
+          margin: 0,
+        });
+        slide.addText(isSphCapai ? 'TERCAPAI' : 'BAWAH TARGET', {
+          x: c3x + stripW - 1.25,
+          y: stripY + 0.4,
+          w: 1.1,
+          h: 0.26,
+          fontFace: FONT,
+          fontSize: 7.5,
+          bold: true,
+          color: isSphCapai ? C_GREEN : C_RED,
+          align: 'right',
+          valign: 'middle',
+          margin: 0,
+        });
+
+        // Card 4: Selisih vs Target
+        const c4x = 0.5 + 3 * (stripW + stripGap);
+        const diffTarget = data.periodB.sph - data.targetSph;
+        slide.addShape(pptx.ShapeType.roundRect, {
+          x: c4x,
+          y: stripY,
+          w: stripW,
+          h: stripH,
+          rectRadius: 0.08,
+          fill: { color: C_AMBER_BG },
+          line: { color: C_AMBER_BORDER, width: 1 },
+        });
+        slide.addText('SELISIH VS TARGET HEAD', {
+          x: c4x + 0.15,
+          y: stripY + 0.1,
+          w: stripW - 0.3,
+          h: 0.2,
+          fontFace: FONT,
+          fontSize: 7.5,
+          bold: true,
+          color: C_AMBER,
+          margin: 0,
+        });
+        slide.addText(`${diffTarget >= 0 ? '+' : ''}Rp ${diffTarget.toLocaleString('id-ID')}`, {
+          x: c4x + 0.15,
+          y: stripY + 0.34,
+          w: stripW - 0.3,
+          h: 0.4,
+          fontFace: FONT,
+          fontSize: 14,
+          bold: true,
+          color: diffTarget >= 0 ? C_GREEN : C_RED,
+          valign: 'middle',
+          margin: 0,
+        });
+      }
     }
 
     drawVectorBarChart(slide, {
-      chartTitle: `Grafik Batang Komparasi SPH (Rp / Head): ${data.periodA.label} vs ${data.periodB.label}`,
+      chartTitle: data.isSinglePeriod
+        ? `Grafik Batang Performa SPH (Rp / Head): ${data.comparisonTitle}`
+        : `Grafik Batang Komparasi SPH (Rp / Head): ${data.comparisonTitle}`,
       accentColor: C_GOLD,
       accentBg: C_AMBER_BG,
       accentBorder: C_AMBER_BORDER,
-      items: data.trendData.map((t) => ({ label: t.label, valA: t.sphA, valB: t.sphB })),
+      items: data.trendData.map((t) => ({ label: t.label, valA: t.sphA, valB: t.sphB, valC: t.sphC })),
       formatVal: (v) => `${(v / 1000).toFixed(1)}k`,
       targetLineVal: data.targetSph,
       targetLineLabel: `Garis Target Head: Rp ${data.targetSph.toLocaleString('id-ID')}`,
@@ -1148,8 +1792,10 @@ export const exportKPIToPPTX = async (data: SlideKPIData) => {
 
     addInsightBanner(
       slide,
-      'INSIGHT PEMBANDING SPH',
-      `Grafik komparatif menegaskan tren SPH antara ${data.periodA.label} dan ${data.periodB.label}. Outlet yang konsisten berada di atas garis target Rp ${data.targetSph.toLocaleString('id-ID')} terbukti aktif menawarkan upselling paket combo promo snack dan minuman.`,
+      data.isSinglePeriod ? 'INSIGHT PERFORMA SPH' : 'INSIGHT PEMBANDING SPH',
+      data.isSinglePeriod
+        ? `Grafik tren menegaskan performa pengeluaran penonton (SPH) periode ${data.periodA.label}. Outlet yang konsisten berada di atas target Rp ${data.targetSph.toLocaleString('id-ID')} terbukti aktif melakukan upselling promo combo snack dan minuman.`
+        : `Grafik komparatif menegaskan tren SPH antara ${data.periodA.label} dan ${data.periodB.label}. Outlet yang konsisten berada di atas garis target Rp ${data.targetSph.toLocaleString('id-ID')} terbukti aktif menawarkan upselling paket combo promo snack dan minuman.`,
       C_AMBER_BG,
       C_AMBER_BORDER,
       C_AMBER
@@ -1176,118 +1822,230 @@ export const exportKPIToPPTX = async (data: SlideKPIData) => {
       const stripW = 3.98;
       const stripGap = 0.195;
 
-      slide.addShape(pptx.ShapeType.roundRect, {
-        x: 0.5,
-        y: stripY,
-        w: stripW,
-        h: stripH,
-        rectRadius: 0.08,
-        fill: { color: C_PURPLE_BG },
-        line: { color: C_PURPLE_BORDER, width: 1.2 },
-      });
-      slide.addText(`${data.periodB.label.toUpperCase()} (RASIO % GBO)`, {
-        x: 0.68,
-        y: stripY + 0.1,
-        w: stripW - 0.36,
-        h: 0.2,
-        fontFace: FONT,
-        fontSize: 7.5,
-        bold: true,
-        color: C_PURPLE,
-        margin: 0,
-      });
-      slide.addText(`${data.periodB.gbo}%`, {
-        x: 0.68,
-        y: stripY + 0.34,
-        w: stripW - 0.36,
-        h: 0.4,
-        fontFace: FONT,
-        fontSize: 16,
-        bold: true,
-        color: C_PURPLE,
-        valign: 'middle',
-        margin: 0,
-      });
-
-      const c2x = 0.5 + (stripW + stripGap);
-      slide.addShape(pptx.ShapeType.roundRect, {
-        x: c2x,
-        y: stripY,
-        w: stripW,
-        h: stripH,
-        rectRadius: 0.08,
-        fill: { color: C_CARD },
-        line: { color: C_BORDER, width: 1 },
-      });
-      slide.addText(`${data.periodA.label.toUpperCase()} (PEMBANDING)`, {
-        x: c2x + 0.18,
-        y: stripY + 0.1,
-        w: stripW - 0.36,
-        h: 0.2,
-        fontFace: FONT,
-        fontSize: 7.5,
-        bold: true,
-        color: C_MUTED,
-        margin: 0,
-      });
-      slide.addText(`${data.periodA.gbo}%`, {
-        x: c2x + 0.18,
-        y: stripY + 0.34,
-        w: stripW - 1.2,
-        h: 0.4,
-        fontFace: FONT,
-        fontSize: 15,
-        bold: true,
-        color: C_TEXT,
-        valign: 'middle',
-        margin: 0,
-      });
-      addGrowthBadge(slide, c2x + stripW - 0.92, stripY + 0.38, 0.74, 0.28, data.periodA.gbo, data.periodB.gbo, 8);
-
-      const c3x = 0.5 + 2 * (stripW + stripGap);
-      slide.addShape(pptx.ShapeType.roundRect, {
-        x: c3x,
-        y: stripY,
-        w: stripW,
-        h: stripH,
-        rectRadius: 0.08,
-        fill: { color: C_PURPLE_BG },
-        line: { color: C_PURPLE_BORDER, width: 1 },
-      });
-      slide.addText('KOMPOSISI OMSET F&B VS CINEMA', {
-        x: c3x + 0.18,
-        y: stripY + 0.1,
-        w: stripW - 0.36,
-        h: 0.2,
-        fontFace: FONT,
-        fontSize: 7.5,
-        bold: true,
-        color: C_PURPLE,
-        margin: 0,
-      });
-      slide.addText(
-        `F&B: Rp ${(data.periodB.fnb / 1000000).toFixed(1)} Jt  |  Cinema: Rp ${(data.periodB.cinema / 1000000).toFixed(1)} Jt`,
-        {
-          x: c3x + 0.18,
-          y: stripY + 0.36,
+      if (data.isSinglePeriod) {
+        // Card 1: Rasio GBO
+        slide.addShape(pptx.ShapeType.roundRect, {
+          x: 0.5,
+          y: stripY,
+          w: stripW,
+          h: stripH,
+          rectRadius: 0.08,
+          fill: { color: C_PURPLE_BG },
+          line: { color: C_PURPLE_BORDER, width: 1.2 },
+        });
+        slide.addText(`RASIO % GBO (${data.periodA.label.toUpperCase()})`, {
+          x: 0.68,
+          y: stripY + 0.1,
           w: stripW - 0.36,
-          h: 0.36,
+          h: 0.2,
           fontFace: FONT,
-          fontSize: 10.5,
+          fontSize: 7.5,
+          bold: true,
+          color: C_PURPLE,
+          margin: 0,
+        });
+        slide.addText(`${data.periodA.gbo}%`, {
+          x: 0.68,
+          y: stripY + 0.34,
+          w: stripW - 0.36,
+          h: 0.4,
+          fontFace: FONT,
+          fontSize: 16,
+          bold: true,
+          color: C_PURPLE,
+          valign: 'middle',
+          margin: 0,
+        });
+
+        // Card 2: Benchmark Industri
+        const c2x = 0.5 + (stripW + stripGap);
+        const isGboStrong = data.periodA.gbo >= 40;
+        slide.addShape(pptx.ShapeType.roundRect, {
+          x: c2x,
+          y: stripY,
+          w: stripW,
+          h: stripH,
+          rectRadius: 0.08,
+          fill: { color: C_CARD },
+          line: { color: C_BORDER, width: 1 },
+        });
+        slide.addText('BENCHMARK INDUSTRI (40% - 60%)', {
+          x: c2x + 0.18,
+          y: stripY + 0.1,
+          w: stripW - 0.36,
+          h: 0.2,
+          fontFace: FONT,
+          fontSize: 7.5,
+          bold: true,
+          color: C_MUTED,
+          margin: 0,
+        });
+        slide.addText(isGboStrong ? 'SANGAT KUAT' : 'STANDAR', {
+          x: c2x + 0.18,
+          y: stripY + 0.34,
+          w: stripW - 0.36,
+          h: 0.4,
+          fontFace: FONT,
+          fontSize: 15,
+          bold: true,
+          color: isGboStrong ? C_PURPLE : C_TEXT,
+          valign: 'middle',
+          margin: 0,
+        });
+
+        // Card 3: Komposisi Omset
+        const c3x = 0.5 + 2 * (stripW + stripGap);
+        slide.addShape(pptx.ShapeType.roundRect, {
+          x: c3x,
+          y: stripY,
+          w: stripW,
+          h: stripH,
+          rectRadius: 0.08,
+          fill: { color: C_PURPLE_BG },
+          line: { color: C_PURPLE_BORDER, width: 1 },
+        });
+        slide.addText('KOMPOSISI OMSET FINANSIAL', {
+          x: c3x + 0.18,
+          y: stripY + 0.1,
+          w: stripW - 0.36,
+          h: 0.2,
+          fontFace: FONT,
+          fontSize: 7.5,
+          bold: true,
+          color: C_PURPLE,
+          margin: 0,
+        });
+        slide.addText(
+          `F&B: Rp ${(data.periodA.fnb / 1000000).toFixed(1)} Jt  |  Cinema: Rp ${(data.periodA.cinema / 1000000).toFixed(1)} Jt`,
+          {
+            x: c3x + 0.18,
+            y: stripY + 0.36,
+            w: stripW - 0.36,
+            h: 0.36,
+            fontFace: FONT,
+            fontSize: 10.5,
+            bold: true,
+            color: C_TEXT,
+            valign: 'middle',
+            margin: 0,
+          }
+        );
+      } else {
+        slide.addShape(pptx.ShapeType.roundRect, {
+          x: 0.5,
+          y: stripY,
+          w: stripW,
+          h: stripH,
+          rectRadius: 0.08,
+          fill: { color: C_PURPLE_BG },
+          line: { color: C_PURPLE_BORDER, width: 1.2 },
+        });
+        slide.addText(`${data.periodB.label.toUpperCase()} (RASIO % GBO)`, {
+          x: 0.68,
+          y: stripY + 0.1,
+          w: stripW - 0.36,
+          h: 0.2,
+          fontFace: FONT,
+          fontSize: 7.5,
+          bold: true,
+          color: C_PURPLE,
+          margin: 0,
+        });
+        slide.addText(`${data.periodB.gbo}%`, {
+          x: 0.68,
+          y: stripY + 0.34,
+          w: stripW - 0.36,
+          h: 0.4,
+          fontFace: FONT,
+          fontSize: 16,
+          bold: true,
+          color: C_PURPLE,
+          valign: 'middle',
+          margin: 0,
+        });
+
+        const c2x = 0.5 + (stripW + stripGap);
+        slide.addShape(pptx.ShapeType.roundRect, {
+          x: c2x,
+          y: stripY,
+          w: stripW,
+          h: stripH,
+          rectRadius: 0.08,
+          fill: { color: C_CARD },
+          line: { color: C_BORDER, width: 1 },
+        });
+        slide.addText(`${data.periodA.label.toUpperCase()} (PEMBANDING)`, {
+          x: c2x + 0.18,
+          y: stripY + 0.1,
+          w: stripW - 0.36,
+          h: 0.2,
+          fontFace: FONT,
+          fontSize: 7.5,
+          bold: true,
+          color: C_MUTED,
+          margin: 0,
+        });
+        slide.addText(`${data.periodA.gbo}%`, {
+          x: c2x + 0.18,
+          y: stripY + 0.34,
+          w: stripW - 1.2,
+          h: 0.4,
+          fontFace: FONT,
+          fontSize: 15,
           bold: true,
           color: C_TEXT,
           valign: 'middle',
           margin: 0,
-        }
-      );
+        });
+        addGrowthBadge(slide, c2x + stripW - 0.92, stripY + 0.38, 0.74, 0.28, data.periodA.gbo, data.periodB.gbo, 8);
+
+        const c3x = 0.5 + 2 * (stripW + stripGap);
+        slide.addShape(pptx.ShapeType.roundRect, {
+          x: c3x,
+          y: stripY,
+          w: stripW,
+          h: stripH,
+          rectRadius: 0.08,
+          fill: { color: C_PURPLE_BG },
+          line: { color: C_PURPLE_BORDER, width: 1 },
+        });
+        slide.addText('KOMPOSISI OMSET F&B VS CINEMA', {
+          x: c3x + 0.18,
+          y: stripY + 0.1,
+          w: stripW - 0.36,
+          h: 0.2,
+          fontFace: FONT,
+          fontSize: 7.5,
+          bold: true,
+          color: C_PURPLE,
+          margin: 0,
+        });
+        slide.addText(
+          `F&B: Rp ${(data.periodB.fnb / 1000000).toFixed(1)} Jt  |  Cinema: Rp ${(data.periodB.cinema / 1000000).toFixed(1)} Jt`,
+          {
+            x: c3x + 0.18,
+            y: stripY + 0.36,
+            w: stripW - 0.36,
+            h: 0.36,
+            fontFace: FONT,
+            fontSize: 10.5,
+            bold: true,
+            color: C_TEXT,
+            valign: 'middle',
+            margin: 0,
+          }
+        );
+      }
     }
 
     drawVectorBarChart(slide, {
-      chartTitle: `Grafik Batang Komparasi Rasio GBO (%): ${data.periodA.label} vs ${data.periodB.label}`,
+      chartTitle: data.isSinglePeriod
+        ? `Grafik Batang Rasio GBO (%): ${data.comparisonTitle}`
+        : `Grafik Batang Komparasi Rasio GBO (%): ${data.comparisonTitle}`,
       accentColor: C_PURPLE,
       accentBg: C_PURPLE_BG,
       accentBorder: C_PURPLE_BORDER,
-      items: data.trendData.map((t) => ({ label: t.label, valA: t.gboA, valB: t.gboB })),
+      items: data.trendData.map((t) => ({ label: t.label, valA: t.gboA, valB: t.gboB, valC: t.gboC })),
       formatVal: (v) => `${v}%`,
       yTop: chartYTop,
       chartH: chartDynamicH,
@@ -1295,8 +2053,10 @@ export const exportKPIToPPTX = async (data: SlideKPIData) => {
 
     addInsightBanner(
       slide,
-      'INSIGHT PEMBANDING GBO',
-      'Kenaikan % GBO menandakan porsi kontribusi F&B semakin besar terhadap tiket cinema. Rasio yang stabil di atas 40% menegaskan daya tarik ragam menu F&B bioskop XXI.',
+      data.isSinglePeriod ? 'INSIGHT RASIO GBO' : 'INSIGHT PEMBANDING GBO',
+      data.isSinglePeriod
+        ? `Kontribusi omset F&B mencapai ${data.periodA.gbo}% terhadap box office bioskop periode ${data.periodA.label}. Keterikatan pengunjung terhadap F&B bioskop XXI berjalan optimal.`
+        : 'Kenaikan % GBO menandakan porsi kontribusi F&B semakin besar terhadap tiket cinema. Rasio yang stabil di atas 40% menegaskan daya tarik ragam menu F&B bioskop XXI.',
       C_PURPLE_BG,
       C_PURPLE_BORDER,
       C_PURPLE
@@ -1314,7 +2074,7 @@ export const exportKPIToPPTX = async (data: SlideKPIData) => {
       totalBaseSlides,
       'Analisis Daya Serap (Penetrasi Pembeli Struk Kasir)',
       'Rasio jumlah struk transaksi Cafe dibandingkan total penonton bioskop (Bill / Total Penonton × 100%).',
-      `Total Bill: ${data.periodB.bill.toLocaleString('id-ID')} Struk`
+      `Total Bill: ${(data.isSinglePeriod ? data.periodA : data.periodB).bill.toLocaleString('id-ID')} Struk`
     );
 
     if (opts.showSummaryStrip) {
@@ -1323,127 +2083,239 @@ export const exportKPIToPPTX = async (data: SlideKPIData) => {
       const stripW = 3.98;
       const stripGap = 0.195;
 
-      slide.addShape(pptx.ShapeType.roundRect, {
-        x: 0.5,
-        y: stripY,
-        w: stripW,
-        h: stripH,
-        rectRadius: 0.08,
-        fill: { color: C_GREEN_BG },
-        line: { color: C_GREEN_BORDER, width: 1.2 },
-      });
-      slide.addText(`${data.periodB.label.toUpperCase()} (DAYA SERAP)`, {
-        x: 0.68,
-        y: stripY + 0.1,
-        w: stripW - 0.36,
-        h: 0.2,
-        fontFace: FONT,
-        fontSize: 7.5,
-        bold: true,
-        color: C_GREEN,
-        margin: 0,
-      });
-      slide.addText(`${data.periodB.dayaSerap}%`, {
-        x: 0.68,
-        y: stripY + 0.34,
-        w: stripW - 0.36,
-        h: 0.4,
-        fontFace: FONT,
-        fontSize: 16,
-        bold: true,
-        color: C_GREEN,
-        valign: 'middle',
-        margin: 0,
-      });
-
-      const c2x = 0.5 + (stripW + stripGap);
-      slide.addShape(pptx.ShapeType.roundRect, {
-        x: c2x,
-        y: stripY,
-        w: stripW,
-        h: stripH,
-        rectRadius: 0.08,
-        fill: { color: C_CARD },
-        line: { color: C_BORDER, width: 1 },
-      });
-      slide.addText(`${data.periodA.label.toUpperCase()} (PEMBANDING)`, {
-        x: c2x + 0.18,
-        y: stripY + 0.1,
-        w: stripW - 0.36,
-        h: 0.2,
-        fontFace: FONT,
-        fontSize: 7.5,
-        bold: true,
-        color: C_MUTED,
-        margin: 0,
-      });
-      slide.addText(`${data.periodA.dayaSerap}%`, {
-        x: c2x + 0.18,
-        y: stripY + 0.34,
-        w: stripW - 1.2,
-        h: 0.4,
-        fontFace: FONT,
-        fontSize: 15,
-        bold: true,
-        color: C_TEXT,
-        valign: 'middle',
-        margin: 0,
-      });
-      addGrowthBadge(
-        slide,
-        c2x + stripW - 0.92,
-        stripY + 0.38,
-        0.74,
-        0.28,
-        data.periodA.dayaSerap,
-        data.periodB.dayaSerap,
-        8
-      );
-
-      const c3x = 0.5 + 2 * (stripW + stripGap);
-      slide.addShape(pptx.ShapeType.roundRect, {
-        x: c3x,
-        y: stripY,
-        w: stripW,
-        h: stripH,
-        rectRadius: 0.08,
-        fill: { color: C_GREEN_BG },
-        line: { color: C_GREEN_BORDER, width: 1 },
-      });
-      slide.addText('KONVERSI STRUK KASIR VS PENONTON', {
-        x: c3x + 0.18,
-        y: stripY + 0.1,
-        w: stripW - 0.36,
-        h: 0.2,
-        fontFace: FONT,
-        fontSize: 7.5,
-        bold: true,
-        color: C_GREEN,
-        margin: 0,
-      });
-      slide.addText(
-        `${data.periodB.bill.toLocaleString('id-ID')} Bill  /  ${data.periodB.penonton.toLocaleString('id-ID')} Pax`,
-        {
-          x: c3x + 0.18,
-          y: stripY + 0.36,
+      if (data.isSinglePeriod) {
+        // Card 1: Daya Serap
+        slide.addShape(pptx.ShapeType.roundRect, {
+          x: 0.5,
+          y: stripY,
+          w: stripW,
+          h: stripH,
+          rectRadius: 0.08,
+          fill: { color: C_GREEN_BG },
+          line: { color: C_GREEN_BORDER, width: 1.2 },
+        });
+        slide.addText(`DAYA SERAP (${data.periodA.label.toUpperCase()})`, {
+          x: 0.68,
+          y: stripY + 0.1,
           w: stripW - 0.36,
-          h: 0.36,
+          h: 0.2,
           fontFace: FONT,
-          fontSize: 11,
+          fontSize: 7.5,
+          bold: true,
+          color: C_GREEN,
+          margin: 0,
+        });
+        slide.addText(`${data.periodA.dayaSerap}%`, {
+          x: 0.68,
+          y: stripY + 0.34,
+          w: stripW - 0.36,
+          h: 0.4,
+          fontFace: FONT,
+          fontSize: 16,
+          bold: true,
+          color: C_GREEN,
+          valign: 'middle',
+          margin: 0,
+        });
+
+        // Card 2: Benchmark
+        const c2x = 0.5 + (stripW + stripGap);
+        const isDsHigh = data.periodA.dayaSerap >= 25;
+        slide.addShape(pptx.ShapeType.roundRect, {
+          x: c2x,
+          y: stripY,
+          w: stripW,
+          h: stripH,
+          rectRadius: 0.08,
+          fill: { color: C_CARD },
+          line: { color: C_BORDER, width: 1 },
+        });
+        slide.addText('BENCHMARK PENETRASI (25% - 30%)', {
+          x: c2x + 0.18,
+          y: stripY + 0.1,
+          w: stripW - 0.36,
+          h: 0.2,
+          fontFace: FONT,
+          fontSize: 7.5,
+          bold: true,
+          color: C_MUTED,
+          margin: 0,
+        });
+        slide.addText(isDsHigh ? 'TINGGI' : 'STANDAR', {
+          x: c2x + 0.18,
+          y: stripY + 0.34,
+          w: stripW - 0.36,
+          h: 0.4,
+          fontFace: FONT,
+          fontSize: 15,
+          bold: true,
+          color: isDsHigh ? C_GREEN : C_TEXT,
+          valign: 'middle',
+          margin: 0,
+        });
+
+        // Card 3: Konversi
+        const c3x = 0.5 + 2 * (stripW + stripGap);
+        slide.addShape(pptx.ShapeType.roundRect, {
+          x: c3x,
+          y: stripY,
+          w: stripW,
+          h: stripH,
+          rectRadius: 0.08,
+          fill: { color: C_GREEN_BG },
+          line: { color: C_GREEN_BORDER, width: 1 },
+        });
+        slide.addText('KONVERSI STRUK KASIR VS PENONTON', {
+          x: c3x + 0.18,
+          y: stripY + 0.1,
+          w: stripW - 0.36,
+          h: 0.2,
+          fontFace: FONT,
+          fontSize: 7.5,
+          bold: true,
+          color: C_GREEN,
+          margin: 0,
+        });
+        slide.addText(
+          `${data.periodA.bill.toLocaleString('id-ID')} Bill  /  ${data.periodA.penonton.toLocaleString('id-ID')} Pax`,
+          {
+            x: c3x + 0.18,
+            y: stripY + 0.36,
+            w: stripW - 0.36,
+            h: 0.36,
+            fontFace: FONT,
+            fontSize: 11,
+            bold: true,
+            color: C_TEXT,
+            valign: 'middle',
+            margin: 0,
+          }
+        );
+      } else {
+        slide.addShape(pptx.ShapeType.roundRect, {
+          x: 0.5,
+          y: stripY,
+          w: stripW,
+          h: stripH,
+          rectRadius: 0.08,
+          fill: { color: C_GREEN_BG },
+          line: { color: C_GREEN_BORDER, width: 1.2 },
+        });
+        slide.addText(`${data.periodB.label.toUpperCase()} (DAYA SERAP)`, {
+          x: 0.68,
+          y: stripY + 0.1,
+          w: stripW - 0.36,
+          h: 0.2,
+          fontFace: FONT,
+          fontSize: 7.5,
+          bold: true,
+          color: C_GREEN,
+          margin: 0,
+        });
+        slide.addText(`${data.periodB.dayaSerap}%`, {
+          x: 0.68,
+          y: stripY + 0.34,
+          w: stripW - 0.36,
+          h: 0.4,
+          fontFace: FONT,
+          fontSize: 16,
+          bold: true,
+          color: C_GREEN,
+          valign: 'middle',
+          margin: 0,
+        });
+
+        const c2x = 0.5 + (stripW + stripGap);
+        slide.addShape(pptx.ShapeType.roundRect, {
+          x: c2x,
+          y: stripY,
+          w: stripW,
+          h: stripH,
+          rectRadius: 0.08,
+          fill: { color: C_CARD },
+          line: { color: C_BORDER, width: 1 },
+        });
+        slide.addText(`${data.periodA.label.toUpperCase()} (PEMBANDING)`, {
+          x: c2x + 0.18,
+          y: stripY + 0.1,
+          w: stripW - 0.36,
+          h: 0.2,
+          fontFace: FONT,
+          fontSize: 7.5,
+          bold: true,
+          color: C_MUTED,
+          margin: 0,
+        });
+        slide.addText(`${data.periodA.dayaSerap}%`, {
+          x: c2x + 0.18,
+          y: stripY + 0.34,
+          w: stripW - 1.2,
+          h: 0.4,
+          fontFace: FONT,
+          fontSize: 15,
           bold: true,
           color: C_TEXT,
           valign: 'middle',
           margin: 0,
-        }
-      );
+        });
+        addGrowthBadge(
+          slide,
+          c2x + stripW - 0.92,
+          stripY + 0.38,
+          0.74,
+          0.28,
+          data.periodA.dayaSerap,
+          data.periodB.dayaSerap,
+          8
+        );
+
+        const c3x = 0.5 + 2 * (stripW + stripGap);
+        slide.addShape(pptx.ShapeType.roundRect, {
+          x: c3x,
+          y: stripY,
+          w: stripW,
+          h: stripH,
+          rectRadius: 0.08,
+          fill: { color: C_GREEN_BG },
+          line: { color: C_GREEN_BORDER, width: 1 },
+        });
+        slide.addText('KONVERSI STRUK KASIR VS PENONTON', {
+          x: c3x + 0.18,
+          y: stripY + 0.1,
+          w: stripW - 0.36,
+          h: 0.2,
+          fontFace: FONT,
+          fontSize: 7.5,
+          bold: true,
+          color: C_GREEN,
+          margin: 0,
+        });
+        slide.addText(
+          `${data.periodB.bill.toLocaleString('id-ID')} Bill  /  ${data.periodB.penonton.toLocaleString('id-ID')} Pax`,
+          {
+            x: c3x + 0.18,
+            y: stripY + 0.36,
+            w: stripW - 0.36,
+            h: 0.36,
+            fontFace: FONT,
+            fontSize: 11,
+            bold: true,
+            color: C_TEXT,
+            valign: 'middle',
+            margin: 0,
+          }
+        );
+      }
     }
 
     drawVectorBarChart(slide, {
-      chartTitle: `Grafik Batang Komparasi Daya Serap (%): ${data.periodA.label} vs ${data.periodB.label}`,
+      chartTitle: data.isSinglePeriod
+        ? `Grafik Batang Daya Serap (%): ${data.comparisonTitle}`
+        : `Grafik Batang Komparasi Daya Serap (%): ${data.comparisonTitle}`,
       accentColor: C_GREEN,
       accentBg: C_GREEN_BG,
       accentBorder: C_GREEN_BORDER,
-      items: data.trendData.map((t) => ({ label: t.label, valA: t.dsA, valB: t.dsB })),
+      items: data.trendData.map((t) => ({ label: t.label, valA: t.dsA, valB: t.dsB, valC: t.dsC })),
       formatVal: (v) => `${v}%`,
       yTop: chartYTop,
       chartH: chartDynamicH,
@@ -1451,8 +2323,10 @@ export const exportKPIToPPTX = async (data: SlideKPIData) => {
 
     addInsightBanner(
       slide,
-      'INSIGHT PEMBANDING DAYA SERAP',
-      'Peningkatan indikator Daya Serap merefleksikan keberhasilan mendorong penonton bioskop singgah dan bertransaksi di kasir Cafe XXI, terutama sebelum jam tayang show film dimulai.',
+      data.isSinglePeriod ? 'INSIGHT DAYA SERAP' : 'INSIGHT PEMBANDING DAYA SERAP',
+      data.isSinglePeriod
+        ? `Sebanyak ${data.periodA.dayaSerap}% dari penonton aktif bertransaksi di Cafe XXI periode ${data.periodA.label} (${data.periodA.bill.toLocaleString('id-ID')} struk kasir).`
+        : 'Peningkatan indikator Daya Serap merefleksikan keberhasilan mendorong penonton bioskop singgah dan bertransaksi di kasir Cafe XXI, terutama sebelum jam tayang show film dimulai.',
       C_GREEN_BG,
       C_GREEN_BORDER,
       C_GREEN
@@ -1479,116 +2353,224 @@ export const exportKPIToPPTX = async (data: SlideKPIData) => {
       const stripW = 3.98;
       const stripGap = 0.195;
 
-      slide.addShape(pptx.ShapeType.roundRect, {
-        x: 0.5,
-        y: stripY,
-        w: stripW,
-        h: stripH,
-        rectRadius: 0.08,
-        fill: { color: C_CYAN_BG },
-        line: { color: C_CYAN_BORDER, width: 1.2 },
-      });
-      slide.addText(`${data.periodB.label.toUpperCase()} (NILAI AT)`, {
-        x: 0.68,
-        y: stripY + 0.1,
-        w: stripW - 0.36,
-        h: 0.2,
-        fontFace: FONT,
-        fontSize: 7.5,
-        bold: true,
-        color: C_CYAN,
-        margin: 0,
-      });
-      slide.addText(`Rp ${data.periodB.at.toLocaleString('id-ID')}`, {
-        x: 0.68,
-        y: stripY + 0.34,
-        w: stripW - 0.36,
-        h: 0.4,
-        fontFace: FONT,
-        fontSize: 16,
-        bold: true,
-        color: C_CYAN,
-        valign: 'middle',
-        margin: 0,
-      });
+      if (data.isSinglePeriod) {
+        // Card 1: Nilai AT
+        slide.addShape(pptx.ShapeType.roundRect, {
+          x: 0.5,
+          y: stripY,
+          w: stripW,
+          h: stripH,
+          rectRadius: 0.08,
+          fill: { color: C_CYAN_BG },
+          line: { color: C_CYAN_BORDER, width: 1.2 },
+        });
+        slide.addText(`NILAI AT (${data.periodA.label.toUpperCase()})`, {
+          x: 0.68,
+          y: stripY + 0.1,
+          w: stripW - 0.36,
+          h: 0.2,
+          fontFace: FONT,
+          fontSize: 7.5,
+          bold: true,
+          color: C_CYAN,
+          margin: 0,
+        });
+        slide.addText(`Rp ${data.periodA.at.toLocaleString('id-ID')}`, {
+          x: 0.68,
+          y: stripY + 0.34,
+          w: stripW - 0.36,
+          h: 0.4,
+          fontFace: FONT,
+          fontSize: 16,
+          bold: true,
+          color: C_CYAN,
+          valign: 'middle',
+          margin: 0,
+        });
 
-      const c2x = 0.5 + (stripW + stripGap);
-      slide.addShape(pptx.ShapeType.roundRect, {
-        x: c2x,
-        y: stripY,
-        w: stripW,
-        h: stripH,
-        rectRadius: 0.08,
-        fill: { color: C_CARD },
-        line: { color: C_BORDER, width: 1 },
-      });
-      slide.addText(`${data.periodA.label.toUpperCase()} (PEMBANDING)`, {
-        x: c2x + 0.18,
-        y: stripY + 0.1,
-        w: stripW - 0.36,
-        h: 0.2,
-        fontFace: FONT,
-        fontSize: 7.5,
-        bold: true,
-        color: C_MUTED,
-        margin: 0,
-      });
-      slide.addText(`Rp ${data.periodA.at.toLocaleString('id-ID')}`, {
-        x: c2x + 0.18,
-        y: stripY + 0.34,
-        w: stripW - 1.2,
-        h: 0.4,
-        fontFace: FONT,
-        fontSize: 15,
-        bold: true,
-        color: C_TEXT,
-        valign: 'middle',
-        margin: 0,
-      });
-      addGrowthBadge(slide, c2x + stripW - 0.92, stripY + 0.38, 0.74, 0.28, data.periodA.at, data.periodB.at, 8);
+        // Card 2: Total Omset F&B
+        const c2x = 0.5 + (stripW + stripGap);
+        slide.addShape(pptx.ShapeType.roundRect, {
+          x: c2x,
+          y: stripY,
+          w: stripW,
+          h: stripH,
+          rectRadius: 0.08,
+          fill: { color: C_CARD },
+          line: { color: C_BORDER, width: 1 },
+        });
+        slide.addText('TOTAL OMSET F&B', {
+          x: c2x + 0.18,
+          y: stripY + 0.1,
+          w: stripW - 0.36,
+          h: 0.2,
+          fontFace: FONT,
+          fontSize: 7.5,
+          bold: true,
+          color: C_MUTED,
+          margin: 0,
+        });
+        slide.addText(`Rp ${(data.periodA.fnb / 1000000).toFixed(1)} Jt`, {
+          x: c2x + 0.18,
+          y: stripY + 0.34,
+          w: stripW - 0.36,
+          h: 0.4,
+          fontFace: FONT,
+          fontSize: 15,
+          bold: true,
+          color: C_TEXT,
+          valign: 'middle',
+          margin: 0,
+        });
 
-      const c3x = 0.5 + 2 * (stripW + stripGap);
-      const diffAt = data.periodB.at - data.periodA.at;
-      slide.addShape(pptx.ShapeType.roundRect, {
-        x: c3x,
-        y: stripY,
-        w: stripW,
-        h: stripH,
-        rectRadius: 0.08,
-        fill: { color: C_CYAN_BG },
-        line: { color: C_CYAN_BORDER, width: 1 },
-      });
-      slide.addText('SELISIH RUPIAH PER STRUK', {
-        x: c3x + 0.18,
-        y: stripY + 0.1,
-        w: stripW - 0.36,
-        h: 0.2,
-        fontFace: FONT,
-        fontSize: 7.5,
-        bold: true,
-        color: C_CYAN,
-        margin: 0,
-      });
-      slide.addText(`${diffAt >= 0 ? '+' : ''}Rp ${diffAt.toLocaleString('id-ID')}`, {
-        x: c3x + 0.18,
-        y: stripY + 0.34,
-        w: stripW - 0.36,
-        h: 0.4,
-        fontFace: FONT,
-        fontSize: 15,
-        bold: true,
-        color: diffAt >= 0 ? C_CYAN : C_RED,
-        valign: 'middle',
-        margin: 0,
-      });
+        // Card 3: Total Transaksi
+        const c3x = 0.5 + 2 * (stripW + stripGap);
+        slide.addShape(pptx.ShapeType.roundRect, {
+          x: c3x,
+          y: stripY,
+          w: stripW,
+          h: stripH,
+          rectRadius: 0.08,
+          fill: { color: C_CYAN_BG },
+          line: { color: C_CYAN_BORDER, width: 1 },
+        });
+        slide.addText('TOTAL TRANSAKSI KASIR', {
+          x: c3x + 0.18,
+          y: stripY + 0.1,
+          w: stripW - 0.36,
+          h: 0.2,
+          fontFace: FONT,
+          fontSize: 7.5,
+          bold: true,
+          color: C_CYAN,
+          margin: 0,
+        });
+        slide.addText(`${data.periodA.bill.toLocaleString('id-ID')} Total Struk Bill`, {
+          x: c3x + 0.18,
+          y: stripY + 0.36,
+          w: stripW - 0.36,
+          h: 0.36,
+          fontFace: FONT,
+          fontSize: 12,
+          bold: true,
+          color: C_TEXT,
+          valign: 'middle',
+          margin: 0,
+        });
+      } else {
+        slide.addShape(pptx.ShapeType.roundRect, {
+          x: 0.5,
+          y: stripY,
+          w: stripW,
+          h: stripH,
+          rectRadius: 0.08,
+          fill: { color: C_CYAN_BG },
+          line: { color: C_CYAN_BORDER, width: 1.2 },
+        });
+        slide.addText(`${data.periodB.label.toUpperCase()} (NILAI AT)`, {
+          x: 0.68,
+          y: stripY + 0.1,
+          w: stripW - 0.36,
+          h: 0.2,
+          fontFace: FONT,
+          fontSize: 7.5,
+          bold: true,
+          color: C_CYAN,
+          margin: 0,
+        });
+        slide.addText(`Rp ${data.periodB.at.toLocaleString('id-ID')}`, {
+          x: 0.68,
+          y: stripY + 0.34,
+          w: stripW - 0.36,
+          h: 0.4,
+          fontFace: FONT,
+          fontSize: 16,
+          bold: true,
+          color: C_CYAN,
+          valign: 'middle',
+          margin: 0,
+        });
+
+        const c2x = 0.5 + (stripW + stripGap);
+        slide.addShape(pptx.ShapeType.roundRect, {
+          x: c2x,
+          y: stripY,
+          w: stripW,
+          h: stripH,
+          rectRadius: 0.08,
+          fill: { color: C_CARD },
+          line: { color: C_BORDER, width: 1 },
+        });
+        slide.addText(`${data.periodA.label.toUpperCase()} (PEMBANDING)`, {
+          x: c2x + 0.18,
+          y: stripY + 0.1,
+          w: stripW - 0.36,
+          h: 0.2,
+          fontFace: FONT,
+          fontSize: 7.5,
+          bold: true,
+          color: C_MUTED,
+          margin: 0,
+        });
+        slide.addText(`Rp ${data.periodA.at.toLocaleString('id-ID')}`, {
+          x: c2x + 0.18,
+          y: stripY + 0.34,
+          w: stripW - 1.2,
+          h: 0.4,
+          fontFace: FONT,
+          fontSize: 15,
+          bold: true,
+          color: C_TEXT,
+          valign: 'middle',
+          margin: 0,
+        });
+        addGrowthBadge(slide, c2x + stripW - 0.92, stripY + 0.38, 0.74, 0.28, data.periodA.at, data.periodB.at, 8);
+
+        const c3x = 0.5 + 2 * (stripW + stripGap);
+        const diffAt = data.periodB.at - data.periodA.at;
+        slide.addShape(pptx.ShapeType.roundRect, {
+          x: c3x,
+          y: stripY,
+          w: stripW,
+          h: stripH,
+          rectRadius: 0.08,
+          fill: { color: C_CYAN_BG },
+          line: { color: C_CYAN_BORDER, width: 1 },
+        });
+        slide.addText('SELISIH RUPIAH PER STRUK', {
+          x: c3x + 0.18,
+          y: stripY + 0.1,
+          w: stripW - 0.36,
+          h: 0.2,
+          fontFace: FONT,
+          fontSize: 7.5,
+          bold: true,
+          color: C_CYAN,
+          margin: 0,
+        });
+        slide.addText(`${diffAt >= 0 ? '+' : ''}Rp ${diffAt.toLocaleString('id-ID')}`, {
+          x: c3x + 0.18,
+          y: stripY + 0.34,
+          w: stripW - 0.36,
+          h: 0.4,
+          fontFace: FONT,
+          fontSize: 15,
+          bold: true,
+          color: diffAt >= 0 ? C_CYAN : C_RED,
+          valign: 'middle',
+          margin: 0,
+        });
+      }
     }
 
     drawVectorBarChart(slide, {
-      chartTitle: `Grafik Batang Komparasi Nilai AT (Rp / Struk): ${data.periodA.label} vs ${data.periodB.label}`,
+      chartTitle: data.isSinglePeriod
+        ? `Grafik Batang Nilai AT (Rp / Struk): ${data.comparisonTitle}`
+        : `Grafik Batang Komparasi Nilai AT (Rp / Struk): ${data.comparisonTitle}`,
       accentColor: C_CYAN,
       accentBg: C_CYAN_BG,
       accentBorder: C_CYAN_BORDER,
-      items: data.trendData.map((t) => ({ label: t.label, valA: t.atA, valB: t.atB })),
+      items: data.trendData.map((t) => ({ label: t.label, valA: t.atA, valB: t.atB, valC: t.atC })),
       formatVal: (v) => `${(v / 1000).toFixed(0)}k`,
       yTop: chartYTop,
       chartH: chartDynamicH,
@@ -1596,8 +2578,10 @@ export const exportKPIToPPTX = async (data: SlideKPIData) => {
 
     addInsightBanner(
       slide,
-      'INSIGHT PEMBANDING AT',
-      'Kenaikan nilai transaksi per struk (Basket Size) membuktikan keberhasilan program paket bundling promo combo snack XXI, minuman berukuran jumbo, serta penawaran merchandise edisi film terbatas.',
+      data.isSinglePeriod ? 'INSIGHT AVERAGE TRANSAKSI' : 'INSIGHT PEMBANDING AT',
+      data.isSinglePeriod
+        ? `Rata-rata basket size Rp ${data.periodA.at.toLocaleString('id-ID')} per struk kasir periode ${data.periodA.label} membuktikan minat tinggi pada sajian paket combo Cafe XXI.`
+        : 'Kenaikan nilai transaksi per struk (Basket Size) membuktikan keberhasilan program paket bundling promo combo snack XXI, minuman berukuran jumbo, serta penawaran merchandise edisi film terbatas.',
       C_CYAN_BG,
       C_CYAN_BORDER,
       C_CYAN
@@ -1613,52 +2597,93 @@ export const exportKPIToPPTX = async (data: SlideKPIData) => {
       slide,
       6,
       totalBaseSlides,
-      'Volume Penonton & Perbandingan Omset Finansial',
-      'Komparasi menyeluruh volume penonton cinema, total transaksi kasir bill, dan proporsi pendapatan finansial.'
+      data.isSinglePeriod ? 'Volume Penonton & Realisasi Omset Finansial' : 'Volume Penonton & Perbandingan Omset Finansial',
+      data.isSinglePeriod
+        ? `Ringkasan volume penonton cinema, total transaksi struk kasir, dan proporsi pendapatan finansial: ${data.periodA.label}`
+        : 'Komparasi menyeluruh volume penonton cinema, total transaksi kasir bill, dan proporsi pendapatan finansial.'
     );
 
-    const volCards = [
-      {
-        label: 'PENONTON CINEMA',
-        valB: `${data.periodB.penonton.toLocaleString('id-ID')} Pax`,
-        valA: `Vs ${data.periodA.label}: ${data.periodA.penonton.toLocaleString('id-ID')} Pax`,
-        rawA: data.periodA.penonton,
-        rawB: data.periodB.penonton,
-        color: C_BLUE,
-        bg: C_BLUE_BG,
-        border: C_BLUE_BORDER,
-      },
-      {
-        label: 'TOTAL STRUK KASIR (BILL)',
-        valB: `${data.periodB.bill.toLocaleString('id-ID')} Bill`,
-        valA: `Vs ${data.periodA.label}: ${data.periodA.bill.toLocaleString('id-ID')} Bill`,
-        rawA: data.periodA.bill,
-        rawB: data.periodB.bill,
-        color: C_GREEN,
-        bg: C_GREEN_BG,
-        border: C_GREEN_BORDER,
-      },
-      {
-        label: 'OMSET F&B (CAFE XXI)',
-        valB: `Rp ${(data.periodB.fnb / 1000000).toFixed(1)} Jt`,
-        valA: `Vs ${data.periodA.label}: Rp ${(data.periodA.fnb / 1000000).toFixed(1)} Jt`,
-        rawA: data.periodA.fnb,
-        rawB: data.periodB.fnb,
-        color: C_AMBER,
-        bg: C_AMBER_BG,
-        border: C_AMBER_BORDER,
-      },
-      {
-        label: 'OMSET TIKET CINEMA',
-        valB: `Rp ${(data.periodB.cinema / 1000000).toFixed(1)} Jt`,
-        valA: `Vs ${data.periodA.label}: Rp ${(data.periodA.cinema / 1000000).toFixed(1)} Jt`,
-        rawA: data.periodA.cinema,
-        rawB: data.periodB.cinema,
-        color: C_PURPLE,
-        bg: C_PURPLE_BG,
-        border: C_PURPLE_BORDER,
-      },
-    ];
+    const volCards = data.isSinglePeriod
+      ? [
+          {
+            label: 'TOTAL PENONTON (PAX)',
+            valB: `${data.periodA.penonton.toLocaleString('id-ID')} Pax`,
+            valA: `Periode: ${data.periodA.label}`,
+            badgeText: 'VOLUME',
+            color: C_BLUE,
+            bg: C_BLUE_BG,
+            border: C_BLUE_BORDER,
+          },
+          {
+            label: 'TOTAL STRUK KASIR (BILL)',
+            valB: `${data.periodA.bill.toLocaleString('id-ID')} Bill`,
+            valA: `Daya Serap: ${data.periodA.dayaSerap}%`,
+            badgeText: 'STRUK',
+            color: C_GREEN,
+            bg: C_GREEN_BG,
+            border: C_GREEN_BORDER,
+          },
+          {
+            label: 'OMSET F&B (CAFE XXI)',
+            valB: `Rp ${(data.periodA.fnb / 1000000).toFixed(1)} Jt`,
+            valA: `% GBO: ${data.periodA.gbo}%`,
+            badgeText: 'CAFE',
+            color: C_AMBER,
+            bg: C_AMBER_BG,
+            border: C_AMBER_BORDER,
+          },
+          {
+            label: 'OMSET TIKET CINEMA',
+            valB: `Rp ${(data.periodA.cinema / 1000000).toFixed(1)} Jt`,
+            valA: `Box Office Cinema`,
+            badgeText: 'CINEMA',
+            color: C_PURPLE,
+            bg: C_PURPLE_BG,
+            border: C_PURPLE_BORDER,
+          },
+        ]
+      : [
+          {
+            label: 'PENONTON CINEMA',
+            valB: `${data.periodB.penonton.toLocaleString('id-ID')} Pax`,
+            valA: `Vs ${data.periodA.label}: ${data.periodA.penonton.toLocaleString('id-ID')} Pax`,
+            rawA: data.periodA.penonton,
+            rawB: data.periodB.penonton,
+            color: C_BLUE,
+            bg: C_BLUE_BG,
+            border: C_BLUE_BORDER,
+          },
+          {
+            label: 'TOTAL STRUK KASIR (BILL)',
+            valB: `${data.periodB.bill.toLocaleString('id-ID')} Bill`,
+            valA: `Vs ${data.periodA.label}: ${data.periodA.bill.toLocaleString('id-ID')} Bill`,
+            rawA: data.periodA.bill,
+            rawB: data.periodB.bill,
+            color: C_GREEN,
+            bg: C_GREEN_BG,
+            border: C_GREEN_BORDER,
+          },
+          {
+            label: 'OMSET F&B (CAFE XXI)',
+            valB: `Rp ${(data.periodB.fnb / 1000000).toFixed(1)} Jt`,
+            valA: `Vs ${data.periodA.label}: Rp ${(data.periodA.fnb / 1000000).toFixed(1)} Jt`,
+            rawA: data.periodA.fnb,
+            rawB: data.periodB.fnb,
+            color: C_AMBER,
+            bg: C_AMBER_BG,
+            border: C_AMBER_BORDER,
+          },
+          {
+            label: 'OMSET TIKET CINEMA',
+            valB: `Rp ${(data.periodB.cinema / 1000000).toFixed(1)} Jt`,
+            valA: `Vs ${data.periodA.label}: Rp ${(data.periodA.cinema / 1000000).toFixed(1)} Jt`,
+            rawA: data.periodA.cinema,
+            rawB: data.periodB.cinema,
+            color: C_PURPLE,
+            bg: C_PURPLE_BG,
+            border: C_PURPLE_BORDER,
+          },
+        ];
 
     const cW = 2.96;
     const cGap = 0.16;
@@ -1714,7 +2739,32 @@ export const exportKPIToPPTX = async (data: SlideKPIData) => {
         margin: 0,
       });
 
-      addGrowthBadge(slide, cx + 0.16, cY + 1.24, 0.78, 0.26, vc.rawA, vc.rawB, 8);
+      if (data.isSinglePeriod && 'badgeText' in vc) {
+        slide.addShape(pptx.ShapeType.roundRect, {
+          x: cx + 0.16,
+          y: cY + 1.24,
+          w: 0.78,
+          h: 0.26,
+          rectRadius: 0.05,
+          fill: { color: vc.bg },
+          line: { color: vc.border, width: 0.5 },
+        });
+        slide.addText(String(vc.badgeText), {
+          x: cx + 0.16,
+          y: cY + 1.24,
+          w: 0.78,
+          h: 0.26,
+          fontFace: FONT,
+          fontSize: 7.5,
+          bold: true,
+          color: vc.color,
+          align: 'center',
+          valign: 'middle',
+          margin: 0,
+        });
+      } else if ('rawA' in vc && 'rawB' in vc) {
+        addGrowthBadge(slide, cx + 0.16, cY + 1.24, 0.78, 0.26, vc.rawA, vc.rawB, 8);
+      }
     });
 
     // Revenue Contribution Ratio Progress Bar Box
@@ -1730,8 +2780,10 @@ export const exportKPIToPPTX = async (data: SlideKPIData) => {
       line: { color: C_BORDER_LIGHT, width: 1 },
     });
 
+    const focalPeriod = data.isSinglePeriod ? data.periodA : data.periodB;
+
     slide.addText(
-      `PROPORSI TOTAL PENDAPATAN FINANSIAL (${data.periodB.label.toUpperCase()}): F&B CAFE VS TICKET BOX OFFICE`,
+      `PROPORSI TOTAL PENDAPATAN FINANSIAL (${focalPeriod.label.toUpperCase()}): F&B CAFE VS TICKET BOX OFFICE`,
       {
         x: 0.72,
         y: propBoxY + 0.15,
@@ -1745,9 +2797,9 @@ export const exportKPIToPPTX = async (data: SlideKPIData) => {
       }
     );
 
-    const totalRevB = data.periodB.fnb + data.periodB.cinema || 1;
-    const fnbShare = (data.periodB.fnb / totalRevB) * 100;
-    const cinShare = (data.periodB.cinema / totalRevB) * 100;
+    const totalRevB = focalPeriod.fnb + focalPeriod.cinema || 1;
+    const fnbShare = (focalPeriod.fnb / totalRevB) * 100;
+    const cinShare = (focalPeriod.cinema / totalRevB) * 100;
 
     const barFullW = 11.89;
     const fnbBarW = Math.max(1.2, Math.min(barFullW - 1.2, (fnbShare / 100) * barFullW));
@@ -1795,31 +2847,20 @@ export const exportKPIToPPTX = async (data: SlideKPIData) => {
       margin: 0,
     });
 
-    slide.addText(`Pendapatan F&B: Rp ${data.periodB.fnb.toLocaleString('id-ID')}`, {
-      x: 0.72,
-      y: propBoxY + 1.08,
-      w: 5.8,
-      h: 0.28,
-      fontFace: FONT,
-      fontSize: 9,
-      bold: true,
-      color: C_AMBER,
-      margin: 0,
-    });
-
-    slide.addText(`Pendapatan Ticket Cinema: Rp ${data.periodB.cinema.toLocaleString('id-ID')}`, {
-      x: 6.7,
-      y: propBoxY + 1.08,
-      w: 5.9,
-      h: 0.28,
-      fontFace: FONT,
-      fontSize: 9,
-      bold: true,
-      color: C_PURPLE,
-      align: 'right',
-      margin: 0,
-    });
-
+    slide.addText(
+      `Pendapatan F&B: Rp ${focalPeriod.fnb.toLocaleString('id-ID')} (${fnbShare.toFixed(1)}%)   |   Pendapatan Ticket Cinema: Rp ${focalPeriod.cinema.toLocaleString('id-ID')} (${cinShare.toFixed(1)}%)`,
+      {
+        x: 0.72,
+        y: propBoxY + 1.08,
+        w: 11.8,
+        h: 0.28,
+        fontFace: FONT,
+        fontSize: 9,
+        bold: true,
+        color: C_SUBTEXT,
+        margin: 0,
+      }
+    );
     const finHdr = (align: 'left' | 'right' | 'center'): pptxgen.TableCellProps => ({
       bold: true,
       fill: { color: C_DARK },
@@ -1830,49 +2871,82 @@ export const exportKPIToPPTX = async (data: SlideKPIData) => {
       fontSize: 9,
     });
 
-    const finRows: pptxgen.TableRow[] = [
-      [
-        { text: 'KOMPONEN VOLUME & OMSET', options: finHdr('left') },
-        { text: data.periodA.label.toUpperCase(), options: finHdr('right') },
-        { text: data.periodB.label.toUpperCase(), options: finHdr('right') },
-        { text: 'SELISIH NOMINAL', options: finHdr('right') },
-        { text: 'GROWTH (%)', options: finHdr('center') },
-      ],
-      [
-        { text: 'Total Penonton Cinema (Pax)', options: { bold: true, fontFace: FONT, fontSize: 9, color: C_BLUE, fill: { color: 'FFFFFF' } } },
-        { text: `${data.periodA.penonton.toLocaleString('id-ID')} Pax`, options: { align: 'right', fontFace: FONT, fontSize: 9, fill: { color: 'FFFFFF' } } },
-        { text: `${data.periodB.penonton.toLocaleString('id-ID')} Pax`, options: { align: 'right', bold: true, fontFace: FONT, fontSize: 9, fill: { color: 'FFFFFF' } } },
-        { text: `${(data.periodB.penonton - data.periodA.penonton).toLocaleString('id-ID')} Pax`, options: { align: 'right', fontFace: FONT, fontSize: 9, fill: { color: 'FFFFFF' } } },
-        { text: calcGrowthStr(data.periodA.penonton, data.periodB.penonton), options: { align: 'center', bold: true, fontFace: FONT, fontSize: 9, color: data.periodB.penonton >= data.periodA.penonton ? C_GREEN : C_RED, fill: { color: 'FFFFFF' } } },
-      ],
-      [
-        { text: 'Total Transaksi Struk (Bill)', options: { bold: true, fontFace: FONT, fontSize: 9, color: C_GREEN, fill: { color: C_BG } } },
-        { text: `${data.periodA.bill.toLocaleString('id-ID')} Bill`, options: { align: 'right', fontFace: FONT, fontSize: 9, fill: { color: C_BG } } },
-        { text: `${data.periodB.bill.toLocaleString('id-ID')} Bill`, options: { align: 'right', bold: true, fontFace: FONT, fontSize: 9, fill: { color: C_BG } } },
-        { text: `${(data.periodB.bill - data.periodA.bill).toLocaleString('id-ID')} Bill`, options: { align: 'right', fontFace: FONT, fontSize: 9, fill: { color: C_BG } } },
-        { text: calcGrowthStr(data.periodA.bill, data.periodB.bill), options: { align: 'center', bold: true, fontFace: FONT, fontSize: 9, color: data.periodB.bill >= data.periodA.bill ? C_GREEN : C_RED, fill: { color: C_BG } } },
-      ],
-      [
-        { text: 'Total Omset F&B Cafe XXI (Rp)', options: { bold: true, fontFace: FONT, fontSize: 9, color: C_AMBER, fill: { color: 'FFFFFF' } } },
-        { text: `Rp ${data.periodA.fnb.toLocaleString('id-ID')}`, options: { align: 'right', fontFace: FONT, fontSize: 9, fill: { color: 'FFFFFF' } } },
-        { text: `Rp ${data.periodB.fnb.toLocaleString('id-ID')}`, options: { align: 'right', bold: true, fontFace: FONT, fontSize: 9, fill: { color: 'FFFFFF' } } },
-        { text: `Rp ${(data.periodB.fnb - data.periodA.fnb).toLocaleString('id-ID')}`, options: { align: 'right', fontFace: FONT, fontSize: 9, fill: { color: 'FFFFFF' } } },
-        { text: calcGrowthStr(data.periodA.fnb, data.periodB.fnb), options: { align: 'center', bold: true, fontFace: FONT, fontSize: 9, color: data.periodB.fnb >= data.periodA.fnb ? C_GREEN : C_RED, fill: { color: 'FFFFFF' } } },
-      ],
-      [
-        { text: 'Total Omset Tiket Cinema (Rp)', options: { bold: true, fontFace: FONT, fontSize: 9, color: C_PURPLE, fill: { color: C_BG } } },
-        { text: `Rp ${data.periodA.cinema.toLocaleString('id-ID')}`, options: { align: 'right', fontFace: FONT, fontSize: 9, fill: { color: C_BG } } },
-        { text: `Rp ${data.periodB.cinema.toLocaleString('id-ID')}`, options: { align: 'right', bold: true, fontFace: FONT, fontSize: 9, fill: { color: C_BG } } },
-        { text: `Rp ${(data.periodB.cinema - data.periodA.cinema).toLocaleString('id-ID')}`, options: { align: 'right', fontFace: FONT, fontSize: 9, fill: { color: C_BG } } },
-        { text: calcGrowthStr(data.periodA.cinema, data.periodB.cinema), options: { align: 'center', bold: true, fontFace: FONT, fontSize: 9, color: data.periodB.cinema >= data.periodA.cinema ? C_GREEN : C_RED, fill: { color: C_BG } } },
-      ],
-    ];
+    const finRows: pptxgen.TableRow[] = data.isSinglePeriod
+      ? [
+          [
+            { text: 'KOMPONEN VOLUME & OMSET', options: finHdr('left') },
+            { text: `REALISASI (${data.periodA.label.toUpperCase()})`, options: finHdr('right') },
+            { text: 'KONTRIBUSI / RASIO', options: finHdr('center') },
+            { text: 'DESKRIPSI ANALISIS', options: finHdr('left') },
+          ],
+          [
+            { text: 'Total Penonton Cinema (Pax)', options: { bold: true, fontFace: FONT, fontSize: 9, color: C_BLUE, fill: { color: 'FFFFFF' } } },
+            { text: `${data.periodA.penonton.toLocaleString('id-ID')} Pax`, options: { align: 'right', bold: true, fontFace: FONT, fontSize: 9, fill: { color: 'FFFFFF' } } },
+            { text: '100% Basis Pengunjung', options: { align: 'center', bold: true, fontFace: FONT, fontSize: 9, color: C_BLUE, fill: { color: C_BLUE_BG } } },
+            { text: `Total pengunjung aktif penonton bioskop Cinema XXI periode ${data.periodA.label}.`, options: { align: 'left', fontFace: FONT, fontSize: 8.5, fill: { color: 'FFFFFF' } } },
+          ],
+          [
+            { text: 'Total Transaksi Struk Kasir (Bill)', options: { bold: true, fontFace: FONT, fontSize: 9, color: C_GREEN, fill: { color: C_BG } } },
+            { text: `${data.periodA.bill.toLocaleString('id-ID')} Bill`, options: { align: 'right', bold: true, fontFace: FONT, fontSize: 9, fill: { color: C_BG } } },
+            { text: `${data.periodA.dayaSerap}% Daya Serap`, options: { align: 'center', bold: true, fontFace: FONT, fontSize: 9, color: C_GREEN, fill: { color: C_GREEN_BG } } },
+            { text: `Jumlah struk belanja produk Cafe XXI yang berhasil dilayani kasir.`, options: { align: 'left', fontFace: FONT, fontSize: 8.5, fill: { color: C_BG } } },
+          ],
+          [
+            { text: 'Total Omset F&B Cafe XXI (Rp)', options: { bold: true, fontFace: FONT, fontSize: 9, color: C_AMBER, fill: { color: 'FFFFFF' } } },
+            { text: `Rp ${data.periodA.fnb.toLocaleString('id-ID')}`, options: { align: 'right', bold: true, fontFace: FONT, fontSize: 9, fill: { color: 'FFFFFF' } } },
+            { text: `${data.periodA.gbo}% GBO Ratio`, options: { align: 'center', bold: true, fontFace: FONT, fontSize: 9, color: C_AMBER, fill: { color: C_AMBER_BG } } },
+            { text: `Total perolehan omset penjualan makanan & minuman Cafe XXI.`, options: { align: 'left', fontFace: FONT, fontSize: 8.5, fill: { color: 'FFFFFF' } } },
+          ],
+          [
+            { text: 'Total Omset Tiket Cinema (Rp)', options: { bold: true, fontFace: FONT, fontSize: 9, color: C_PURPLE, fill: { color: C_BG } } },
+            { text: `Rp ${data.periodA.cinema.toLocaleString('id-ID')}`, options: { align: 'right', bold: true, fontFace: FONT, fontSize: 9, fill: { color: C_BG } } },
+            { text: `Box Office Tiket`, options: { align: 'center', bold: true, fontFace: FONT, fontSize: 9, color: C_PURPLE, fill: { color: C_PURPLE_BG } } },
+            { text: `Total pendapatan dari penjualan tiket bioskop cinema.`, options: { align: 'left', fontFace: FONT, fontSize: 8.5, fill: { color: C_BG } } },
+          ],
+        ]
+      : [
+          [
+            { text: 'KOMPONEN VOLUME & OMSET', options: finHdr('left') },
+            { text: data.periodA.label.toUpperCase(), options: finHdr('right') },
+            { text: data.periodB.label.toUpperCase(), options: finHdr('right') },
+            { text: 'SELISIH NOMINAL', options: finHdr('right') },
+            { text: 'GROWTH (%)', options: finHdr('center') },
+          ],
+          [
+            { text: 'Total Penonton Cinema (Pax)', options: { bold: true, fontFace: FONT, fontSize: 9, color: C_BLUE, fill: { color: 'FFFFFF' } } },
+            { text: `${data.periodA.penonton.toLocaleString('id-ID')} Pax`, options: { align: 'right', fontFace: FONT, fontSize: 9, fill: { color: 'FFFFFF' } } },
+            { text: `${data.periodB.penonton.toLocaleString('id-ID')} Pax`, options: { align: 'right', bold: true, fontFace: FONT, fontSize: 9, fill: { color: 'FFFFFF' } } },
+            { text: `${(data.periodB.penonton - data.periodA.penonton).toLocaleString('id-ID')} Pax`, options: { align: 'right', fontFace: FONT, fontSize: 9, fill: { color: 'FFFFFF' } } },
+            { text: calcGrowthStr(data.periodA.penonton, data.periodB.penonton), options: { align: 'center', bold: true, fontFace: FONT, fontSize: 9, color: data.periodB.penonton >= data.periodA.penonton ? C_GREEN : C_RED, fill: { color: 'FFFFFF' } } },
+          ],
+          [
+            { text: 'Total Transaksi Struk (Bill)', options: { bold: true, fontFace: FONT, fontSize: 9, color: C_GREEN, fill: { color: C_BG } } },
+            { text: `${data.periodA.bill.toLocaleString('id-ID')} Bill`, options: { align: 'right', fontFace: FONT, fontSize: 9, fill: { color: C_BG } } },
+            { text: `${data.periodB.bill.toLocaleString('id-ID')} Bill`, options: { align: 'right', bold: true, fontFace: FONT, fontSize: 9, fill: { color: C_BG } } },
+            { text: `${(data.periodB.bill - data.periodA.bill).toLocaleString('id-ID')} Bill`, options: { align: 'right', fontFace: FONT, fontSize: 9, fill: { color: C_BG } } },
+            { text: calcGrowthStr(data.periodA.bill, data.periodB.bill), options: { align: 'center', bold: true, fontFace: FONT, fontSize: 9, color: data.periodB.bill >= data.periodA.bill ? C_GREEN : C_RED, fill: { color: C_BG } } },
+          ],
+          [
+            { text: 'Total Omset F&B Cafe XXI (Rp)', options: { bold: true, fontFace: FONT, fontSize: 9, color: C_AMBER, fill: { color: 'FFFFFF' } } },
+            { text: `Rp ${data.periodA.fnb.toLocaleString('id-ID')}`, options: { align: 'right', fontFace: FONT, fontSize: 9, fill: { color: 'FFFFFF' } } },
+            { text: `Rp ${data.periodB.fnb.toLocaleString('id-ID')}`, options: { align: 'right', bold: true, fontFace: FONT, fontSize: 9, fill: { color: 'FFFFFF' } } },
+            { text: `Rp ${(data.periodB.fnb - data.periodA.fnb).toLocaleString('id-ID')}`, options: { align: 'right', fontFace: FONT, fontSize: 9, fill: { color: 'FFFFFF' } } },
+            { text: calcGrowthStr(data.periodA.fnb, data.periodB.fnb), options: { align: 'center', bold: true, fontFace: FONT, fontSize: 9, color: data.periodB.fnb >= data.periodA.fnb ? C_GREEN : C_RED, fill: { color: 'FFFFFF' } } },
+          ],
+          [
+            { text: 'Total Omset Tiket Cinema (Rp)', options: { bold: true, fontFace: FONT, fontSize: 9, color: C_PURPLE, fill: { color: C_BG } } },
+            { text: `Rp ${data.periodA.cinema.toLocaleString('id-ID')}`, options: { align: 'right', fontFace: FONT, fontSize: 9, fill: { color: C_BG } } },
+            { text: `Rp ${data.periodB.cinema.toLocaleString('id-ID')}`, options: { align: 'right', bold: true, fontFace: FONT, fontSize: 9, fill: { color: 'FFFFFF' } } },
+            { text: `Rp ${(data.periodB.cinema - data.periodA.cinema).toLocaleString('id-ID')}`, options: { align: 'right', fontFace: FONT, fontSize: 9, fill: { color: C_BG } } },
+            { text: calcGrowthStr(data.periodA.cinema, data.periodB.cinema), options: { align: 'center', bold: true, fontFace: FONT, fontSize: 9, color: data.periodB.cinema >= data.periodA.cinema ? C_GREEN : C_RED, fill: { color: C_BG } } },
+          ],
+        ];
 
     slide.addTable(finRows, {
       x: 0.5,
       y: 4.74,
       w: 12.33,
-      colW: [3.53, 2.3, 2.3, 2.4, 1.8],
+      colW: data.isSinglePeriod ? [3.53, 2.8, 2.2, 3.8] : [3.53, 2.3, 2.3, 2.4, 1.8],
       rowH: 0.43,
       border: { type: 'solid', color: C_BORDER, pt: 0.75 },
     });
@@ -1896,7 +2970,7 @@ export const exportKPIToPPTX = async (data: SlideKPIData) => {
         slide,
         7,
         totalBaseSlides,
-        `Peringkat Performa Outlet & Pencapaian Target (${data.periodB.label})${pageSuffix}`,
+        `Peringkat Performa Outlet & Pencapaian Target (${(data.isSinglePeriod ? data.periodA : data.periodB).label})${pageSuffix}`,
         `Pemetaan performa ${data.rankingData.length} outlet berdasarkan indikator terpilih.`,
         `Urutan: ${data.selectedRankingIndicator.toUpperCase()}`
       );
@@ -2007,50 +3081,62 @@ export const exportKPIToPPTX = async (data: SlideKPIData) => {
       8,
       totalBaseSlides,
       'Evaluasi Performa & Rencana Aksi Bisnis (Action Plan)',
-      `Sintesis analitis 4 pilar KPI (${data.periodA.label} vs ${data.periodB.label}) untuk strategi akselerasi omset F&B Cafe XXI.`
+      data.isSinglePeriod
+        ? `Sintesis analitis 4 pilar KPI periode ${data.periodA.label} untuk strategi akselerasi omset F&B Cafe XXI.`
+        : `Sintesis analitis 4 pilar KPI (${data.periodA.label} vs ${data.periodB.label}) untuk strategi akselerasi omset F&B Cafe XXI.`
     );
+
+    const focal = data.isSinglePeriod ? data.periodA : data.periodB;
 
     const evalCards = [
       {
-        title: `1. EVALUASI HEAD (SPH): ${data.periodB.sph >= data.targetSph ? 'OPTIMAL' : 'PERLU INTERVENSI'}`,
-        badge: `Ach: ${data.periodB.achievement}%`,
+        title: `1. EVALUASI HEAD (SPH): ${focal.sph >= data.targetSph ? 'OPTIMAL' : 'PERLU INTERVENSI'}`,
+        badge: `Ach: ${focal.achievement}%`,
         color: C_AMBER,
         bg: C_AMBER_BG,
         border: C_AMBER_BORDER,
-        desc: `Rata-rata pengeluaran penonton berada di angka Rp ${data.periodB.sph.toLocaleString('id-ID')} (pertumbuhan ${calcGrowthStr(data.periodA.sph, data.periodB.sph)} dibanding ${data.periodA.label}).`,
+        desc: data.isSinglePeriod
+          ? `Rata-rata pengeluaran penonton berada di angka Rp ${focal.sph.toLocaleString('id-ID')} dengan pencapaian ${focal.achievement}% dari target head Rp ${data.targetSph.toLocaleString('id-ID')}.`
+          : `Rata-rata pengeluaran penonton berada di angka Rp ${focal.sph.toLocaleString('id-ID')} (pertumbuhan ${calcGrowthStr(data.periodA.sph, data.periodB.sph)} dibanding ${data.periodA.label}).`,
         actionTitle: 'REKOMENDASI AKSI OPERATIONAL:',
         action:
           'Terapkan script greeting aktif di kasir untuk menawarkan upsize popcorn manis dan minuman edisi film blockbuster.',
       },
       {
-        title: `2. EVALUASI % GBO: ${data.periodB.gbo >= 40 ? 'SANGAT KUAT' : 'STANDAR'}`,
-        badge: `${data.periodB.gbo}% Kontribusi`,
+        title: `2. EVALUASI % GBO: ${focal.gbo >= 40 ? 'SANGAT KUAT' : 'STANDAR'}`,
+        badge: `${focal.gbo}% Kontribusi`,
         color: C_PURPLE,
         bg: C_PURPLE_BG,
         border: C_PURPLE_BORDER,
-        desc: `Kontribusi omset F&B terhadap box office cinema mencapai ${data.periodB.gbo}%. Rasio ini membuktikan keterikatan pengunjung terhadap sajian bioskop XXI.`,
+        desc: data.isSinglePeriod
+          ? `Kontribusi omset F&B terhadap box office cinema mencapai ${focal.gbo}% (Total Omset Cafe Rp ${(focal.fnb / 1000000).toFixed(1)} Jt). Rasio ini membuktikan keterikatan pengunjung terhadap sajian bioskop XXI.`
+          : `Kontribusi omset F&B terhadap box office cinema mencapai ${focal.gbo}%. Rasio ini membuktikan keterikatan pengunjung terhadap sajian bioskop XXI.`,
         actionTitle: 'REKOMENDASI AKSI MARKETING:',
         action:
           'Perkuat promosi pra-tayang melalui e-banner lobby dan pemesanan praktis mobile ordering m.tix F&B.',
       },
       {
-        title: `3. EVALUASI DAYA SERAP: ${data.periodB.dayaSerap >= 25 ? 'TINGGI' : 'PERLU DIDORONG'}`,
-        badge: `${data.periodB.dayaSerap}% Pembeli`,
+        title: `3. EVALUASI DAYA SERAP: ${focal.dayaSerap >= 25 ? 'TINGGI' : 'PERLU DIDORONG'}`,
+        badge: `${focal.dayaSerap}% Pembeli`,
         color: C_GREEN,
         bg: C_GREEN_BG,
         border: C_GREEN_BORDER,
-        desc: `Sebanyak ${data.periodB.dayaSerap}% dari total penonton bertransaksi di Cafe XXI (${data.periodB.bill.toLocaleString('id-ID')} struk kasir dari ${data.periodB.penonton.toLocaleString('id-ID')} penonton).`,
+        desc: data.isSinglePeriod
+          ? `Sebanyak ${focal.dayaSerap}% dari total penonton bertransaksi di Cafe XXI (${focal.bill.toLocaleString('id-ID')} struk kasir dari ${focal.penonton.toLocaleString('id-ID')} penonton aktif).`
+          : `Sebanyak ${focal.dayaSerap}% dari total penonton bertransaksi di Cafe XXI (${focal.bill.toLocaleString('id-ID')} struk kasir dari ${focal.penonton.toLocaleString('id-ID')} penonton).`,
         actionTitle: 'REKOMENDASI AKSI SERVICE SPEED:',
         action:
           'Pastikan kelancaran antrean kasir berjalan maksimal pada 20 menit sebelum jam tayang film dimulai.',
       },
       {
         title: '4. EVALUASI AVERAGE TRANSAKSI (AT)',
-        badge: `Rp ${data.periodB.at.toLocaleString('id-ID')}`,
+        badge: `Rp ${focal.at.toLocaleString('id-ID')}`,
         color: C_CYAN,
         bg: C_CYAN_BG,
         border: C_CYAN_BORDER,
-        desc: `Basket size per transaksi berada pada level Rp ${data.periodB.at.toLocaleString('id-ID')} (pertumbuhan ${calcGrowthStr(data.periodA.at, data.periodB.at)} dibanding ${data.periodA.label}).`,
+        desc: data.isSinglePeriod
+          ? `Basket size per transaksi berada pada level Rp ${focal.at.toLocaleString('id-ID')} per struk dengan total akumulasi omset Cafe XXI mencapai Rp ${(focal.fnb / 1000000).toFixed(1)} Jt.`
+          : `Basket size per transaksi berada pada level Rp ${focal.at.toLocaleString('id-ID')} (pertumbuhan ${calcGrowthStr(data.periodA.at, data.periodB.at)} dibanding ${data.periodA.label}).`,
         actionTitle: 'REKOMENDASI AKSI BUNDLING:',
         action:
           'Dorong penjualan paket combo keluarga atau bundle snack sharing untuk menaikkan nominal transaksi per struk.',
