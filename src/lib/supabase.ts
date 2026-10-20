@@ -305,6 +305,7 @@ function scheduleDebouncedRealtimeMerge(key: string, fn: () => Promise<any>, del
 const recentSalesDeltaMap = new Map<string, DailySalesRecord>();
 const recentInspectionsDeltaMap = new Map<string, ToiletInspectionRecord>();
 const occupancyWriteTimers: Record<string, any> = {};
+let salesArchiveTimer: NodeJS.Timeout | null = null;
 
 /**
  * Sinkronisasi Data Sales Harian ke Supabase (Hemat Egress: Master Sync + 2 KB Delta Row untuk Live Broadcast)
@@ -398,11 +399,9 @@ export async function syncSalesToSupabase(sales: DailySalesRecord[]): Promise<bo
     const finalOverrides = Array.from(overrideMap.values());
     const deltaSalesList = Array.from(recentSalesDeltaMap.values());
 
-    // Catat timestamp tulis lokal SEBELUM upsert agar echo WebSocket diabaikan (0 Egress tambahan)
-    recordSyncTimestamp('__SYSTEM_SYNC_DAILY_SALES__', nowIso, true);
+    // 1. Kirim Delta Sales (~1 KB) secara instan ke Supabase agar realtime super responsif
     recordSyncTimestamp('__SYSTEM_SYNC_DAILY_SALES_DELTA__', nowIso, true);
-
-    const { error } = await client.from('cinema_sales').upsert(
+    const { error: deltaErr } = await client.from('cinema_sales').upsert(
       [
         {
           id: '__SYSTEM_SYNC_DAILY_SALES_DELTA__',
@@ -411,22 +410,37 @@ export async function syncSalesToSupabase(sales: DailySalesRecord[]): Promise<bo
           shows: deltaSalesList as any,
           updated_at: nowIso,
         },
-        {
-          id: '__SYSTEM_SYNC_DAILY_SALES__',
-          outlet_id: '__SYSTEM_SYNC__',
-          date: '2026-01-01',
-          shows: finalOverrides as any,
-          updated_at: nowIso,
-        },
       ],
       { onConflict: 'id' }
     );
 
-    if (error) {
-      console.warn('Sync sales to Supabase warning:', error);
-      return false;
-    }
-    return true;
+    // 2. Debounce master sales archive (2 menit) agar tidak upload puluhan KB di setiap ketukan sel input
+    if (salesArchiveTimer) clearTimeout(salesArchiveTimer);
+    salesArchiveTimer = setTimeout(async () => {
+      salesArchiveTimer = null;
+      try {
+        const cl = getSupabase();
+        if (!cl) return;
+        const archIso = new Date().toISOString();
+        recordSyncTimestamp('__SYSTEM_SYNC_DAILY_SALES__', archIso, true);
+        await cl.from('cinema_sales').upsert(
+          [
+            {
+              id: '__SYSTEM_SYNC_DAILY_SALES__',
+              outlet_id: '__SYSTEM_SYNC__',
+              date: '2026-01-01',
+              shows: finalOverrides as any,
+              updated_at: archIso,
+            },
+          ],
+          { onConflict: 'id' }
+        );
+      } catch (err) {
+        console.warn('Sales archive debounced sync error:', err);
+      }
+    }, 120000);
+
+    return !deltaErr;
   } catch (e) {
     console.warn('Supabase sales sync error:', e);
     return false;
@@ -781,7 +795,7 @@ export async function syncInspectionToSupabase(record: ToiletInspectionRecord): 
       { onConflict: 'id' }
     );
 
-    // 2. Debounce Master Archive (400 KB) selama 15 detik agar tidak upload ratusan KB di setiap klik ceklis show
+    // 2. Debounce Master Archive (hanya cadangan cloud) selama 5 menit agar tidak memboroskan egress dan upload berulang-ulang
     pendingArchiveInspections.set(record.id, record);
     if (inspectionArchiveTimer) {
       clearTimeout(inspectionArchiveTimer);
@@ -801,10 +815,10 @@ export async function syncInspectionToSupabase(record: ToiletInspectionRecord): 
         pendingArchiveInspections.forEach((v, k) => allMap.set(k, v));
         pendingArchiveInspections.clear();
 
-        // Prune data inspections lama (> 14 hari) dari master cloud sync agar ukuran row tidak terus membesar
-        const fourteenDaysAgo = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+        // Prune data inspections lama (> 7 hari) dari master cloud sync agar ukuran row tidak terus membesar
+        const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
         const filteredArchive = Array.from(allMap.values()).filter(
-          (ins) => !ins.date || ins.date >= fourteenDaysAgo
+          (ins) => !ins.date || ins.date >= sevenDaysAgo
         );
 
         recordSyncTimestamp('__SYSTEM_SYNC_INSPECTIONS__', archiveIso, true);
@@ -823,7 +837,7 @@ export async function syncInspectionToSupabase(record: ToiletInspectionRecord): 
       } catch (err) {
         console.warn('Debounced inspection archive sync error:', err);
       }
-    }, 15000);
+    }, 300000); // 5 menit debounce
 
     return !deltaErr;
   } catch (e) {
@@ -2272,13 +2286,38 @@ export function setupSupabaseRealtimeSync(): () => void {
   };
   document.addEventListener('visibilitychange', handleVisibility);
 
-  // Setup Supabase Realtime channel subscription (WebSocket Push + Anti Self-Echo + Debounce)
+  // Setup Supabase Realtime channel subscription (Server-side Filter + WebSocket Push + Anti Self-Echo + Debounce)
   try {
+    const realtimeAllowedIds = [
+      '__SYSTEM_SYNC_INSPECTIONS_DELTA__',
+      '__SYSTEM_SYNC_DAILY_SALES_DELTA__',
+      '__SYSTEM_SYNC_BAKING_SALES__',
+      '__SYSTEM_SYNC_OUTLETS__',
+      '__SYSTEM_SYNC_AREAS__',
+      '__SYSTEM_SYNC_USERS__',
+      '__SYSTEM_SYNC_FILM_GENRES__',
+      '__SYSTEM_SYNC_ADMINISTRATION__',
+      '__SYSTEM_SYNC_BOPO__',
+      '__SYSTEM_SYNC_LOST_FOUND__',
+      '__SYSTEM_SYNC_WAREHOUSE__',
+      '__SYSTEM_SYNC_EMPLOYEE_KPIS__',
+      '__SYSTEM_SYNC_SDM_PERFORMANCE__',
+      '__SYSTEM_SYNC_SDM_PRODUCTS__',
+      '__SYSTEM_SYNC_DAILY_SECTION__',
+      '__SYSTEM_SYNC_EMPLOYEES__',
+      '__SYSTEM_SYNC_DELETED_EMPLOYEES__',
+    ];
+
     const channel = client
       .channel('cinema_xxi_realtime_changes')
       .on(
         'postgres_changes',
-        { event: '*', schema: 'public', table: 'cinema_sales' },
+        {
+          event: '*',
+          schema: 'public',
+          table: 'cinema_sales',
+          filter: `id=in.(${realtimeAllowedIds.join(',')})`,
+        },
         (payload: any) => {
           if (!payload.new || !payload.new.id) return;
           const rowId = String(payload.new.id);
