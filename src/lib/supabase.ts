@@ -170,6 +170,7 @@ const DEVICE_CLIENT_ID = `dev_${Math.random().toString(36).slice(2, 10)}_${Date.
 let hybridClientInstance: SupabaseClient | null = null;
 let hybridClientKey = '';
 let supabaseQuotaBackoffUntil = 0;
+let lastSupabaseMetaPollAt = 0;
 
 function getWorkerSyncEndpoints(action: 'query' | 'upsert' | 'status'): string[] {
   const endpoints = [`/api/sync/${action}`];
@@ -323,10 +324,10 @@ function createInternalTableQueryBuilder(table: string, rawSupabase: SupabaseCli
         const itemMap = new Map<string, any>();
         const getKey = (item: any, idx: number) => {
           if (!item || typeof item !== 'object') return `idx_${idx}`;
-          if (item.id) return String(item.id);
           if (item.outletId && item.date && item.showNumber !== undefined && item.type) {
-            return `${item.outletId}_${item.date}_${item.showNumber}_${item.type}`;
+            return `${item.outletId}-${item.date}-show${Number(item.showNumber)}-${item.type}`;
           }
+          if (item.id) return String(item.id);
           if (item.outletId && item.date && item.nik) {
             return `${item.outletId}_${item.date}_${item.nik}`;
           }
@@ -404,8 +405,21 @@ function createInternalTableQueryBuilder(table: string, rawSupabase: SupabaseCli
       return null;
     };
 
-    // Fetch from both Internal Server Sync Engine and Supabase Cloud (delta-gated by pullAllRemoteToLocal so 0 wasted Egress)
-    const [internalRes, supaRes] = await Promise.all([fetchInternal(), fetchSupa()]);
+    // Fetch from Internal Server Sync Engine first; only poll Supabase Cloud for routine metadata checks once every 90s (or when Internal Server is empty) to keep Log Ingestion & Egress near 0
+    const isMetaHeartbeat = selectCols.replace(/\s+/g, '') === 'id,updated_at';
+    const internalRes = await fetchInternal();
+    const hasWarmInternalMeta =
+      isMetaHeartbeat && Array.isArray(internalRes?.data) && internalRes.data.length > 0;
+    const shouldSkipSupaMeta =
+      hasWarmInternalMeta && Date.now() - lastSupabaseMetaPollAt < 90000;
+
+    let supaRes: any = null;
+    if (!shouldSkipSupaMeta) {
+      if (isMetaHeartbeat) {
+        lastSupabaseMetaPollAt = Date.now();
+      }
+      supaRes = await fetchSupa();
+    }
 
     if (headOnly) {
       const count = Math.max(internalRes?.count ?? 0, supaRes?.count ?? 0);
@@ -506,9 +520,16 @@ function createInternalTableQueryBuilder(table: string, rawSupabase: SupabaseCli
         clientId: DEVICE_CLIENT_ID,
       });
 
-      // 2. Secondary Background Mirror: Mirror to Supabase Cloud asynchronously without blocking UI or failing if Egress/Log Ingestion is full
+      // 2. Secondary Background Mirror: Mirror additively-merged rows from Internal Server to Supabase Cloud
+      // so a device with partial local state never overwrites previous shows in Supabase JSONB
       if (rawSupabase) {
-        Promise.resolve(rawSupabase.from(table).upsert(records, options)).catch(() => {});
+        const recordsToMirror =
+          internalRes.ok && Array.isArray(internalRes.data) && internalRes.data.length > 0
+            ? !Array.isArray(records) && internalRes.data.length === 1
+              ? internalRes.data[0]
+              : internalRes.data
+            : records;
+        Promise.resolve(rawSupabase.from(table).upsert(recordsToMirror, options)).catch(() => {});
       }
 
       if (internalRes.ok) {
@@ -1217,27 +1238,50 @@ const pendingArchiveInspections = new Map<string, ToiletInspectionRecord>();
 /**
  * Sinkronisasi Satu Record Card Inspection ke Supabase (Delta Instan + Safe Merge Master Archive 1.5 Detik)
  */
+function normalizeInspectionItem(item: any): ToiletInspectionRecord | null {
+  if (!item || !item.outletId || !item.date || item.showNumber === undefined || !item.type) {
+    return null;
+  }
+  const showNum = Number(item.showNumber) || 1;
+  const canonicalId = `${item.outletId}-${item.date}-show${showNum}-${item.type}`;
+  return {
+    ...item,
+    id: canonicalId,
+    showNumber: showNum,
+  };
+}
+
+/**
+ * Sinkronisasi Satu Record Card Inspection ke Supabase (Delta Instan + Safe Merge Master Archive)
+ */
 export async function syncInspectionToSupabase(record: ToiletInspectionRecord): Promise<boolean> {
   const client = getSupabase();
   if (!client || !record) return false;
 
   try {
     const nowIso = new Date().toISOString();
+    const normalizedRecord = normalizeInspectionItem({
+      ...record,
+      updatedAt: (record as any).updatedAt || nowIso,
+    });
+    if (!normalizedRecord) return false;
 
-    // 1. Seed Delta Buffer dengan data inspeksi hari yang sama dari localStorage agar tidak menimpa show/outlet lain
+    // 1. Seed Delta Buffer dengan SELURUH data inspeksi dari outlet & tanggal yang sama dari localStorage
+    // agar Show 1 s/d Show 5 di outlet tersebut selalu utuh di dalam paket Delta maupun Master!
     const localList = StorageService.getInspections();
     localList
-      .filter((l) => l && l.id && l.date === record.date)
-      .slice(0, 20)
+      .filter((l) => l && (l.date === normalizedRecord.date || l.outletId === normalizedRecord.outletId))
+      .slice(0, 120)
       .forEach((l) => {
-        if (!recentInspectionsDeltaMap.has(l.id)) {
-          recentInspectionsDeltaMap.set(l.id, l);
+        const norm = normalizeInspectionItem(l);
+        if (norm && !recentInspectionsDeltaMap.has(norm.id)) {
+          recentInspectionsDeltaMap.set(norm.id, norm);
         }
       });
 
-    recentInspectionsDeltaMap.delete(record.id);
-    recentInspectionsDeltaMap.set(record.id, record);
-    while (recentInspectionsDeltaMap.size > 25) {
+    recentInspectionsDeltaMap.delete(normalizedRecord.id);
+    recentInspectionsDeltaMap.set(normalizedRecord.id, normalizedRecord);
+    while (recentInspectionsDeltaMap.size > 150) {
       const oldestKey = recentInspectionsDeltaMap.keys().next().value;
       if (oldestKey) recentInspectionsDeltaMap.delete(oldestKey);
       else break;
@@ -1246,7 +1290,7 @@ export async function syncInspectionToSupabase(record: ToiletInspectionRecord): 
     const deltaInspectionsList = Array.from(recentInspectionsDeltaMap.values());
     recordSyncTimestamp('__SYSTEM_SYNC_INSPECTIONS_DELTA__', nowIso, true);
 
-    // Kirim Delta (~2-4 KB) secara instan ke Supabase agar live realtime antar device langsung terbaca
+    // Kirim Delta secara instan ke Internal Server & Supabase agar live realtime antar device langsung terbaca
     const { error: deltaErr } = await client.from('cinema_sales').upsert(
       [
         {
@@ -1260,8 +1304,9 @@ export async function syncInspectionToSupabase(record: ToiletInspectionRecord): 
       { onConflict: 'id' }
     );
 
-    // 2. Debounce Master Archive singkat (1.5 detik) dengan Safe Remote Merge agar bila browser ditutup data sudah tersimpan permanen & tidak menimpa device lain
-    pendingArchiveInspections.set(record.id, record);
+    // 2. Debounce Master Archive singkat (300ms) dengan Safe Remote Merge berbasis Canonical Key
+    // agar bila browser ditutup data sudah tersimpan permanen & tidak pernah menimpa show sebelumnya
+    pendingArchiveInspections.set(normalizedRecord.id, normalizedRecord);
     if (inspectionArchiveTimer) {
       clearTimeout(inspectionArchiveTimer);
     }
@@ -1273,8 +1318,22 @@ export async function syncInspectionToSupabase(record: ToiletInspectionRecord): 
         const archiveIso = new Date().toISOString();
 
         const allMap = new Map<string, ToiletInspectionRecord>();
+        const putAdditive = (rawItem: any) => {
+          const norm = normalizeInspectionItem(rawItem);
+          if (!norm) return;
+          const prev = allMap.get(norm.id);
+          if (!prev) {
+            allMap.set(norm.id, norm);
+          } else {
+            const prevTs = (prev as any).updatedAt ? new Date((prev as any).updatedAt).getTime() : 0;
+            const nextTs = (norm as any).updatedAt ? new Date((norm as any).updatedAt).getTime() : 0;
+            if (nextTs >= prevTs) {
+              allMap.set(norm.id, norm);
+            }
+          }
+        };
 
-        // Tarik dulu data yang sudah ada di server agar Device A tidak menimpa data outlet lain
+        // Tarik dulu data yang sudah ada di server agar Device A tidak menimpa data outlet/show lain
         const { data: remoteRows } = await archiveClient
           .from('cinema_sales')
           .select('id, shows, updated_at')
@@ -1284,9 +1343,7 @@ export async function syncInspectionToSupabase(record: ToiletInspectionRecord): 
           for (const rRow of remoteRows) {
             if (rRow && Array.isArray(rRow.shows)) {
               for (const item of rRow.shows) {
-                if (item && item.id) {
-                  allMap.set(item.id, item);
-                }
+                putAdditive(item);
               }
             }
           }
@@ -1294,15 +1351,20 @@ export async function syncInspectionToSupabase(record: ToiletInspectionRecord): 
 
         // Gabungkan dengan localStorage & pendingArchiveInspections terbaru
         const currentLocalList = StorageService.getInspections();
-        currentLocalList.forEach((l) => {
-          if (l && l.id) allMap.set(l.id, l);
-        });
-        pendingArchiveInspections.forEach((v, k) => allMap.set(k, v));
+        currentLocalList.forEach((l) => putAdditive(l));
+        pendingArchiveInspections.forEach((v) => putAdditive(v));
         pendingArchiveInspections.clear();
 
-        // Simpan juga hasil gabungan ke localStorage agar Device A juga mendapat update dari outlet lain
+        // Simpan juga hasil gabungan ke localStorage + backup overrides
         const mergedFullList = Array.from(allMap.values());
-        localStorage.setItem('cinema_xxi_toilet_inspections', JSON.stringify(mergedFullList));
+        try {
+          const serialized = JSON.stringify(mergedFullList);
+          localStorage.setItem('cinema_xxi_toilet_inspections', serialized);
+          localStorage.setItem('cinema_xxi_user_inspections_overrides', serialized);
+          sessionStorage.setItem('cinema_xxi_toilet_inspections_session', serialized);
+        } catch {
+          // ignore quota error
+        }
 
         // Prune data inspections lama (> 14 hari) dari master cloud sync agar ukuran row tetap ringan
         const fourteenDaysAgo = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
@@ -1326,7 +1388,7 @@ export async function syncInspectionToSupabase(record: ToiletInspectionRecord): 
       } catch (err) {
         console.warn('Debounced inspection archive sync error:', err);
       }
-    }, 400); // 400ms debounce (langsung tersimpan instan & aman)
+    }, 300);
 
     return !deltaErr;
   } catch (e) {
@@ -1336,7 +1398,7 @@ export async function syncInspectionToSupabase(record: ToiletInspectionRecord): 
 }
 
 /**
- * Ambil Rekap Card Inspection dari Supabase (Menggabungkan Master Archive & Delta Terbaru)
+ * Ambil Rekap Card Inspection dari Supabase (Menggabungkan Master Archive & Delta Terbaru secara Aditif)
  */
 export async function fetchInspectionsFromSupabase(
   outletId?: string,
@@ -1348,6 +1410,22 @@ export async function fetchInspectionsFromSupabase(
 
   try {
     const map = new Map<string, ToiletInspectionRecord>();
+    const absorbItem = (rawItem: any) => {
+      const item = normalizeInspectionItem(rawItem);
+      if (!item) return;
+      if (outletId && item.outletId !== outletId) return;
+      if (date && item.date !== date) return;
+      const prev = map.get(item.id);
+      if (!prev) {
+        map.set(item.id, item);
+      } else {
+        const prevTs = (prev as any).updatedAt ? new Date((prev as any).updatedAt).getTime() : 0;
+        const nextTs = (item as any).updatedAt ? new Date((item as any).updatedAt).getTime() : 0;
+        if (nextTs >= prevTs) {
+          map.set(item.id, item);
+        }
+      }
+    };
 
     if (deltaOnly) {
       const { data: syncRow, error } = await client
@@ -1364,11 +1442,7 @@ export async function fetchInspectionsFromSupabase(
         }
         if (Array.isArray(syncRow.shows)) {
           for (const item of syncRow.shows) {
-            if (item && item.id) {
-              if (outletId && item.outletId !== outletId) continue;
-              if (date && item.date !== date) continue;
-              map.set(item.id, item);
-            }
+            absorbItem(item);
           }
         }
       }
@@ -1390,11 +1464,7 @@ export async function fetchInspectionsFromSupabase(
         }
         if (Array.isArray(masterRow.shows)) {
           for (const item of masterRow.shows) {
-            if (item && item.id) {
-              if (outletId && item.outletId !== outletId) continue;
-              if (date && item.date !== date) continue;
-              map.set(item.id, item);
-            }
+            absorbItem(item);
           }
         }
       }
@@ -1405,11 +1475,7 @@ export async function fetchInspectionsFromSupabase(
         }
         if (Array.isArray(deltaRow.shows)) {
           for (const item of deltaRow.shows) {
-            if (item && item.id) {
-              if (outletId && item.outletId !== outletId) continue;
-              if (date && item.date !== date) continue;
-              map.set(item.id, item);
-            }
+            absorbItem(item);
           }
         }
       }
@@ -1425,7 +1491,7 @@ export async function fetchInspectionsFromSupabase(
 let hasAutoHealedLocalInspections = false;
 
 /**
- * Merges remote inspection records from Supabase & Internal Server into local storage,
+ * Merges remote inspection records from Supabase & Internal Server into local storage additively,
  * and auto-pushes any local inspection (from Device A) that was not yet on the remote server.
  */
 export async function mergeRemoteInspectionsToLocal(deltaOnly = false): Promise<boolean> {
@@ -1435,35 +1501,53 @@ export async function mergeRemoteInspectionsToLocal(deltaOnly = false): Promise<
   const remoteMap = new Map<string, ToiletInspectionRecord>();
   if (Array.isArray(remoteInspections)) {
     remoteInspections.forEach((r) => {
-      if (r && r.id) remoteMap.set(r.id, r);
+      const norm = normalizeInspectionItem(r);
+      if (norm) remoteMap.set(norm.id, norm);
     });
   }
+
+  const mergedMap = new Map<string, ToiletInspectionRecord>();
+  currentLocal.forEach((loc) => {
+    const norm = normalizeInspectionItem(loc);
+    if (norm) mergedMap.set(norm.id, norm);
+  });
 
   let updated = false;
 
   remoteMap.forEach((remote) => {
-    const idx = currentLocal.findIndex((i) => i.id === remote.id);
-    if (idx >= 0) {
-      if (JSON.stringify(currentLocal[idx]) !== JSON.stringify(remote)) {
-        currentLocal[idx] = remote;
+    const existing = mergedMap.get(remote.id);
+    if (!existing) {
+      mergedMap.set(remote.id, remote);
+      updated = true;
+    } else {
+      const exTs = (existing as any).updatedAt ? new Date((existing as any).updatedAt).getTime() : 0;
+      const remTs = (remote as any).updatedAt ? new Date((remote as any).updatedAt).getTime() : 0;
+      if (remTs >= exTs && JSON.stringify(existing) !== JSON.stringify(remote)) {
+        mergedMap.set(remote.id, remote);
         updated = true;
       }
-    } else {
-      currentLocal.unshift(remote);
-      updated = true;
     }
   });
 
+  const finalList = Array.from(mergedMap.values());
+
   if (updated) {
-    localStorage.setItem('cinema_xxi_toilet_inspections', JSON.stringify(currentLocal));
+    try {
+      const serialized = JSON.stringify(finalList);
+      localStorage.setItem('cinema_xxi_toilet_inspections', serialized);
+      localStorage.setItem('cinema_xxi_user_inspections_overrides', serialized);
+      sessionStorage.setItem('cinema_xxi_toilet_inspections_session', serialized);
+    } catch {
+      // ignore
+    }
     StorageService.broadcastChange('inspection');
   }
 
   // Auto-Heal: Jika Device A memiliki data Card Inspection lokal (14 hari terakhir) yang belum masuk ke Server/Device B,
   // otomatis dorong (push) hasil gabungan ke Server sekali saat sinkronisasi penuh!
-  if (!deltaOnly && !hasAutoHealedLocalInspections && currentLocal.length > 0) {
+  if (!deltaOnly && !hasAutoHealedLocalInspections && finalList.length > 0) {
     const fourteenDaysAgo = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-    const localRecentMissingOnRemote = currentLocal.some(
+    const localRecentMissingOnRemote = finalList.some(
       (l) => l && l.id && (!l.date || l.date >= fourteenDaysAgo) && !remoteMap.has(l.id)
     );
 
@@ -1472,7 +1556,7 @@ export async function mergeRemoteInspectionsToLocal(deltaOnly = false): Promise<
       const client = getSupabase();
       if (client) {
         const nowIso = new Date().toISOString();
-        const activeArchive = currentLocal.filter((ins) => !ins.date || ins.date >= fourteenDaysAgo);
+        const activeArchive = finalList.filter((ins) => !ins.date || ins.date >= fourteenDaysAgo);
         recordSyncTimestamp('__SYSTEM_SYNC_INSPECTIONS__', nowIso, true);
         recordSyncTimestamp('__SYSTEM_SYNC_INSPECTIONS_DELTA__', nowIso, true);
         Promise.resolve(
@@ -1491,7 +1575,7 @@ export async function mergeRemoteInspectionsToLocal(deltaOnly = false): Promise<
                   id: '__SYSTEM_SYNC_INSPECTIONS_DELTA__',
                   outlet_id: '__SYSTEM_SYNC__',
                   date: '2026-01-01',
-                  shows: activeArchive.slice(0, 25) as any,
+                  shows: activeArchive.slice(0, 120) as any,
                   updated_at: nowIso,
                 },
               ],
@@ -2770,7 +2854,7 @@ export async function pullAllRemoteToLocal(forceFull = false): Promise<void> {
       if (!localStorage.getItem('cinema_xxi_outlets') && serverIds.has('__SYSTEM_SYNC_OUTLETS__')) {
         changedIds.add('__SYSTEM_SYNC_OUTLETS__');
       }
-      if (!localStorage.getItem('cinema_xxi_toilet_inspections') && serverIds.has('__SYSTEM_SYNC_INSPECTIONS__')) {
+      if (StorageService.getInspections().length === 0 && (serverIds.has('__SYSTEM_SYNC_INSPECTIONS__') || serverIds.has('__SYSTEM_SYNC_INSPECTIONS_DELTA__'))) {
         changedIds.add('__SYSTEM_SYNC_INSPECTIONS__');
       }
       if (!localStorage.getItem('cinema_xxi_occupancy_manifest') && serverIds.has('__SYSTEM_SYNC_OCCUPANCY__')) {

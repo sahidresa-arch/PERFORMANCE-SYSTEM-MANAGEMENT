@@ -127,7 +127,68 @@ export const ToiletInspection: React.FC<ToiletInspectionProps> = ({
       : '') || (outlets.length > 0 ? outlets[0].id : '');
   const [formOutletId, setFormOutletId] = useState<string>(defaultOutletId);
   const [formToiletType, setFormToiletType] = useState<'Pria' | 'Wanita'>('Pria');
-  const [formShowNumber, setFormShowNumber] = useState<number>(1);
+
+  // Track if user explicitly clicked an already-completed Show to review/edit it
+  const manualShowRef = React.useRef<string | null>(null);
+
+  // Sequential Show Helpers: Show N hanya bisa diceklis jika Show 1 s/d Show N-1 sudah selesai diceklis
+  const getShowRecord = (
+    showNum: number,
+    outletId: string = formOutletId,
+    toiletType: 'Pria' | 'Wanita' = formToiletType
+  ): ToiletInspectionRecord | undefined => {
+    const targetShow = Number(showNum);
+    return StorageService.getInspections().find(
+      (ins: ToiletInspectionRecord) =>
+        ins.outletId === outletId &&
+        ins.date === selectedDate &&
+        ins.type === toiletType &&
+        Number(ins.showNumber) === targetShow &&
+        (ins.status === 'Sudah Lapor' ||
+          CHECKLIST_ITEMS.every((ci) => {
+            const val = ins.checklist?.[ci.key as keyof ToiletChecklist];
+            return val === 'B' || val === 'K' || val === 'R';
+          }))
+    );
+  };
+
+  const isShowCompleted = (
+    showNum: number,
+    outletId: string = formOutletId,
+    toiletType: 'Pria' | 'Wanita' = formToiletType
+  ): boolean => {
+    return Boolean(getShowRecord(showNum, outletId, toiletType));
+  };
+
+  const getFirstIncompleteShow = (
+    outletId: string = formOutletId,
+    toiletType: 'Pria' | 'Wanita' = formToiletType
+  ): number => {
+    for (let s = 1; s <= 5; s++) {
+      if (!isShowCompleted(s, outletId, toiletType)) {
+        return s;
+      }
+    }
+    return 5;
+  };
+
+  const isShowUnlocked = (
+    showNum: number,
+    outletId: string = formOutletId,
+    toiletType: 'Pria' | 'Wanita' = formToiletType
+  ): boolean => {
+    if (showNum <= 1) return true;
+    for (let prev = 1; prev < showNum; prev++) {
+      if (!isShowCompleted(prev, outletId, toiletType)) {
+        return false;
+      }
+    }
+    return true;
+  };
+
+  const [formShowNumber, setFormShowNumber] = useState<number>(() =>
+    getFirstIncompleteShow(defaultOutletId, 'Pria')
+  );
   const [inspectorName, setInspectorName] = useState('');
   const [notes, setNotes] = useState('');
   const [statusMessage, setStatusMessage] = useState('');
@@ -173,19 +234,29 @@ export const ToiletInspection: React.FC<ToiletInspectionProps> = ({
 
   useEffect(() => {
     reloadInspections();
+    setIsSyncingLive(true);
     import('../../lib/supabase')
-      .then((m) => {
-        m.mergeRemoteInspectionsToLocal(false).then((changed) => {
+      .then(async (m) => {
+        try {
+          const changed = await m.mergeRemoteInspectionsToLocal(false);
           if (changed) reloadInspections();
-        });
-        m.pullAllRemoteToLocal(false);
+          await m.pullAllRemoteToLocal(true);
+          reloadInspections();
+        } finally {
+          setIsSyncingLive(false);
+        }
       })
-      .catch(() => {});
+      .catch(() => {
+        setIsSyncingLive(false);
+      });
 
     const runLiveInspectionSync = () => {
       if (document.visibilityState !== 'visible') return;
       import('../../lib/supabase')
         .then((m) => {
+          m.mergeRemoteInspectionsToLocal(true).then((changed) => {
+            if (changed) reloadInspections();
+          });
           m.pullAllRemoteToLocal(false);
         })
         .catch(() => {});
@@ -205,73 +276,44 @@ export const ToiletInspection: React.FC<ToiletInspectionProps> = ({
       clearInterval(liveInterval);
       window.removeEventListener('cinema-xxi-storage-update', handleStorageUpdate);
     };
-  }, [selectedDate, viewMode]);
-
-  // Sequential Show Helpers: Show N hanya bisa diceklis jika Show 1 s/d Show N-1 sudah selesai diceklis
-  const getShowRecord = (
-    showNum: number,
-    outletId: string = formOutletId,
-    toiletType: 'Pria' | 'Wanita' = formToiletType
-  ): ToiletInspectionRecord | undefined => {
-    return StorageService.getInspections().find(
-      (ins: ToiletInspectionRecord) =>
-        ins.outletId === outletId &&
-        ins.date === selectedDate &&
-        ins.type === toiletType &&
-        ins.showNumber === showNum &&
-        CHECKLIST_ITEMS.every((ci) => {
-          const val = ins.checklist?.[ci.key as keyof ToiletChecklist];
-          return val === 'B' || val === 'K' || val === 'R';
-        })
-    );
-  };
-
-  const isShowCompleted = (
-    showNum: number,
-    outletId: string = formOutletId,
-    toiletType: 'Pria' | 'Wanita' = formToiletType
-  ): boolean => {
-    return Boolean(getShowRecord(showNum, outletId, toiletType));
-  };
-
-  const getFirstIncompleteShow = (
-    outletId: string = formOutletId,
-    toiletType: 'Pria' | 'Wanita' = formToiletType
-  ): number => {
-    for (let s = 1; s <= 5; s++) {
-      if (!isShowCompleted(s, outletId, toiletType)) {
-        return s;
-      }
-    }
-    return 5;
-  };
-
-  const isShowUnlocked = (
-    showNum: number,
-    outletId: string = formOutletId,
-    toiletType: 'Pria' | 'Wanita' = formToiletType
-  ): boolean => {
-    if (showNum <= 1) return true;
-    for (let prev = 1; prev < showNum; prev++) {
-      if (!isShowCompleted(prev, outletId, toiletType)) {
-        return false;
-      }
-    }
-    return true;
-  };
+  }, [selectedDate, formOutletId, viewMode]);
 
   // Guard Check: Check if an inspection already exists for this exact combination
   const existingRecord = getShowRecord(formShowNumber, formOutletId, formToiletType);
 
-  // Pastikan jika user mengganti Outlet, Tipe Toilet, atau Tanggal, Show otomatis mengarah ke Show berurutan yang belum diceklis (atau terkunci)
+  const completedCountPria = [1, 2, 3, 4, 5].filter((s) =>
+    isShowCompleted(s, formOutletId, 'Pria')
+  ).length;
+  const completedCountWanita = [1, 2, 3, 4, 5].filter((s) =>
+    isShowCompleted(s, formOutletId, 'Wanita')
+  ).length;
+
+  // Pastikan setiap buka form, ganti Outlet/Tipe Toilet/Tanggal, atau saat data sinkronisasi masuk:
+  // Show otomatis melompat ke Show pertama yang BELUM diceklis (misal Show 1 sudah selesai -> otomatis ke Show 2),
+  // KECUALI jika user memang sengaja mengklik tombol Show yang sudah selesai untuk melihat/mengeditnya.
   useEffect(() => {
+    const manualKey = `${formOutletId}|${selectedDate}|${formToiletType}|${formShowNumber}`;
     if (!isShowUnlocked(formShowNumber, formOutletId, formToiletType)) {
       const nextValidShow = getFirstIncompleteShow(formOutletId, formToiletType);
-      setFormShowNumber(nextValidShow);
+      manualShowRef.current = null;
+      if (nextValidShow !== formShowNumber) {
+        setFormShowNumber(nextValidShow);
+      }
+      return;
     }
-  }, [formOutletId, selectedDate, formToiletType, inspections]);
 
-  // Auto-populate checklist if existing record found
+    if (
+      isShowCompleted(formShowNumber, formOutletId, formToiletType) &&
+      manualShowRef.current !== manualKey
+    ) {
+      const nextIncomplete = getFirstIncompleteShow(formOutletId, formToiletType);
+      if (nextIncomplete !== formShowNumber) {
+        setFormShowNumber(nextIncomplete);
+      }
+    }
+  }, [formOutletId, selectedDate, formToiletType, inspections, formShowNumber]);
+
+  // Reset checklist ketika berpindah Outlet, Tanggal, Tipe Toilet, atau Nomor Show
   useEffect(() => {
     setErrorMessage('');
     const rec = getShowRecord(formShowNumber, formOutletId, formToiletType);
@@ -286,9 +328,20 @@ export const ToiletInspection: React.FC<ToiletInspectionProps> = ({
     }
   }, [formOutletId, selectedDate, formToiletType, formShowNumber]);
 
+  // Jika data sinkronisasi baru tiba untuk Show yang sedang dibuka, muat datanya tanpa menghapus ketikan pada Show yang belum selesai
+  useEffect(() => {
+    const rec = getShowRecord(formShowNumber, formOutletId, formToiletType);
+    if (rec) {
+      setChecklist(rec.checklist || DEFAULT_CHECKLIST);
+      setInspectorName(rec.inspectorName || '');
+      setNotes(rec.notes || '');
+    }
+  }, [inspections]);
+
   const handleSelectShowSequential = (targetShow: number) => {
     if (!isShowUnlocked(targetShow, formOutletId, formToiletType)) {
       const firstMissing = getFirstIncompleteShow(formOutletId, formToiletType);
+      manualShowRef.current = null;
       setErrorMessage(
         `Show ${targetShow} masih terkunci! Wajib melakukan ceklis secara berurutan. Silakan selesaikan ceklis Show ${firstMissing} (${formToiletType}) terlebih dahulu.`
       );
@@ -299,6 +352,11 @@ export const ToiletInspection: React.FC<ToiletInspectionProps> = ({
       return;
     }
     setErrorMessage('');
+    if (isShowCompleted(targetShow, formOutletId, formToiletType)) {
+      manualShowRef.current = `${formOutletId}|${selectedDate}|${formToiletType}|${targetShow}`;
+    } else {
+      manualShowRef.current = null;
+    }
     setFormShowNumber(targetShow);
   };
 
@@ -402,18 +460,23 @@ export const ToiletInspection: React.FC<ToiletInspectionProps> = ({
     StorageService.saveInspection(record);
     reloadInspections();
 
-    // Auto switch to show 2 if saved show 1, show 3 if saved show 2, etc.
+    // Auto switch to next incomplete show after saving
+    manualShowRef.current = null;
     const currentShow = formShowNumber;
-    const nextShow = currentShow < 5 ? currentShow + 1 : currentShow;
+    const nextIncomplete = getFirstIncompleteShow(formOutletId, formToiletType);
+    const allCompletedNow = [1, 2, 3, 4, 5].every((s) =>
+      s === currentShow ? true : isShowCompleted(s, formOutletId, formToiletType)
+    );
 
-    if (currentShow < 5) {
-      setFormShowNumber(nextShow);
+    if (!allCompletedNow) {
+      setFormShowNumber(nextIncomplete);
       setStatusMessage(
-        `Laporan Show ${currentShow} (${formToiletType}) Berhasil Disimpan! Show ${nextShow} kini terbuka dan siap diceklis.`
+        `Laporan Show ${currentShow} (${formToiletType}) Berhasil Disimpan! Otomatis lanjut ke Show ${nextIncomplete} yang siap diceklis.`
       );
     } else {
+      setFormShowNumber(5);
       setStatusMessage(
-        `Laporan Show ${currentShow} (${formToiletType}) Berhasil Disimpan! Semua Show (1-5) Selesai secara berurutan.`
+        `Laporan Show ${currentShow} (${formToiletType}) Berhasil Disimpan! Semua Show (1-5) untuk Toilet ${formToiletType} telah selesai.`
       );
     }
 
@@ -512,6 +575,11 @@ export const ToiletInspection: React.FC<ToiletInspectionProps> = ({
       preferredShow && isShowUnlocked(preferredShow, outletId, toiletType)
         ? preferredShow
         : firstIncomplete;
+    if (preferredShow && isShowCompleted(targetShow, outletId, toiletType)) {
+      manualShowRef.current = `${outletId}|${selectedDate}|${toiletType}|${targetShow}`;
+    } else {
+      manualShowRef.current = null;
+    }
     setFormShowNumber(targetShow);
     setErrorMessage('');
     setViewMode('form');
@@ -541,21 +609,19 @@ export const ToiletInspection: React.FC<ToiletInspectionProps> = ({
           </div>
         </div>
 
-        {/* View Switcher Tabs + Live Sync Button (Admin Only on Dashboard Higienitas) */}
+        {/* View Switcher Tabs + Live Sync Button */}
         <div className="flex flex-wrap items-center gap-2">
-          {currentUser?.role === 'admin' && viewMode === 'dashboard' && (
-            <button
-              type="button"
-              onClick={handleManualInspectionSync}
-              disabled={isSyncingLive}
-              title="Sinkronkan Card Inspection Antar-Device Sekarang"
-              className="px-3 py-2 rounded-xl bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 text-emerald-800 text-[11px] font-extrabold transition cursor-pointer flex items-center space-x-1.5 shadow-2xs"
-            >
-              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-              <RotateCcw className={`w-3.5 h-3.5 text-emerald-700 ${isSyncingLive ? 'animate-spin' : ''}`} />
-              <span>{isSyncingLive ? 'MENYINKRONKAN...' : 'LIVE SYNC AKTIF'}</span>
-            </button>
-          )}
+          <button
+            type="button"
+            onClick={handleManualInspectionSync}
+            disabled={isSyncingLive}
+            title="Sinkronkan Card Inspection Antar-Device Sekarang"
+            className="px-3 py-2 rounded-xl bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 text-emerald-800 text-[11px] font-extrabold transition cursor-pointer flex items-center space-x-1.5 shadow-2xs"
+          >
+            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+            <RotateCcw className={`w-3.5 h-3.5 text-emerald-700 ${isSyncingLive ? 'animate-spin' : ''}`} />
+            <span>{isSyncingLive ? 'MENYINKRONKAN...' : 'SINKRONKAN SHOW'}</span>
+          </button>
 
           <div className="flex items-center p-1.5 rounded-2xl bg-slate-100/90 border border-slate-200 text-xs font-bold space-x-1">
             <button
@@ -691,6 +757,7 @@ export const ToiletInspection: React.FC<ToiletInspectionProps> = ({
                     value={formOutletId}
                     onChange={(e) => {
                       const nextOutlet = e.target.value;
+                      manualShowRef.current = null;
                       setFormOutletId(nextOutlet);
                       setFormShowNumber(getFirstIncompleteShow(nextOutlet, formToiletType));
                     }}
@@ -706,19 +773,24 @@ export const ToiletInspection: React.FC<ToiletInspectionProps> = ({
 
                 <div>
                   <label className="text-[10px] font-extrabold text-slate-600 uppercase block mb-1.5 flex items-center space-x-1">
-                    <span>TIPE TOILET</span>
+                    <span>TIPE TOILET (STATUS PER TIPE)</span>
                   </label>
                   <select
                     value={formToiletType}
                     onChange={(e) => {
                       const nextType = e.target.value as 'Pria' | 'Wanita';
+                      manualShowRef.current = null;
                       setFormToiletType(nextType);
                       setFormShowNumber(getFirstIncompleteShow(formOutletId, nextType));
                     }}
                     className="w-full text-xs font-bold px-3 py-2.5 rounded-xl border border-slate-300 bg-white text-slate-900 focus:border-amber-500 focus:ring-1 focus:ring-amber-500 shadow-xs"
                   >
-                    <option value="Pria">🚹 Toilet Pria</option>
-                    <option value="Wanita">🚺 Toilet Wanita</option>
+                    <option value="Pria">
+                      🚹 Toilet Pria ({completedCountPria}/5 Show Selesai)
+                    </option>
+                    <option value="Wanita">
+                      🚺 Toilet Wanita ({completedCountWanita}/5 Show Selesai)
+                    </option>
                   </select>
                 </div>
 
@@ -739,7 +811,7 @@ export const ToiletInspection: React.FC<ToiletInspectionProps> = ({
                           {completed
                             ? `✅ Show ${sh} (Sudah Ceklis)`
                             : unlocked
-                            ? `👉 Show ${sh} (Siap Ceklis)`
+                            ? `👉 Show ${sh} (Giliran Ceklis)`
                             : `🔒 Show ${sh} (Wajib Ceklis Show ${sh - 1} Dulu)`}
                         </option>
                       );
@@ -755,7 +827,10 @@ export const ToiletInspection: React.FC<ToiletInspectionProps> = ({
                   <input
                     type="date"
                     value={selectedDate}
-                    onChange={(e) => onDateChange(e.target.value)}
+                    onChange={(e) => {
+                      manualShowRef.current = null;
+                      onDateChange(e.target.value);
+                    }}
                     className="w-full text-xs font-bold px-3 py-2.5 rounded-xl border border-slate-300 bg-white text-amber-900 focus:border-amber-500 focus:ring-1 focus:ring-amber-500 shadow-xs"
                   />
                 </div>
@@ -792,15 +867,44 @@ export const ToiletInspection: React.FC<ToiletInspectionProps> = ({
               {/* Sequential Show Stepper Cards (Show 1 -> Show 2 -> Show 3 -> Show 4 -> Show 5) */}
               <div className="p-4 rounded-2xl bg-slate-50/90 border border-slate-200/90 space-y-3">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                  <div className="flex items-center space-x-2">
+                  <div className="flex items-center space-x-2 flex-wrap gap-y-1">
                     <Lock className="w-3.5 h-3.5 text-amber-600" />
                     <span className="text-[11px] font-black uppercase tracking-wider text-slate-800">
                       Urutan Wajib Ceklis Show ({formToiletType === 'Pria' ? '🚹 Toilet Pria' : '🚺 Toilet Wanita'})
                     </span>
                   </div>
-                  <span className="text-[11px] font-semibold text-slate-500">
-                    Show berikutnya otomatis terbuka setelah Show sebelumnya selesai diceklis
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        manualShowRef.current = null;
+                        setFormToiletType('Pria');
+                        setFormShowNumber(getFirstIncompleteShow(formOutletId, 'Pria'));
+                      }}
+                      className={`px-2.5 py-1 rounded-lg text-[10px] font-extrabold border transition cursor-pointer ${
+                        formToiletType === 'Pria'
+                          ? 'bg-blue-600 text-white border-blue-700 shadow-2xs'
+                          : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'
+                      }`}
+                    >
+                      🚹 Pria: {completedCountPria}/5 Show
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        manualShowRef.current = null;
+                        setFormToiletType('Wanita');
+                        setFormShowNumber(getFirstIncompleteShow(formOutletId, 'Wanita'));
+                      }}
+                      className={`px-2.5 py-1 rounded-lg text-[10px] font-extrabold border transition cursor-pointer ${
+                        formToiletType === 'Wanita'
+                          ? 'bg-rose-600 text-white border-rose-700 shadow-2xs'
+                          : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'
+                      }`}
+                    >
+                      🚺 Wanita: {completedCountWanita}/5 Show
+                    </button>
+                  </div>
                 </div>
 
                 <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5">

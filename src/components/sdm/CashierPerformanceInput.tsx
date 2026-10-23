@@ -1033,17 +1033,21 @@ export const CashierPerformanceInput: React.FC<CashierPerformanceInputProps> = (
         (it) => it.name.trim().toLowerCase() === cleanName.toLowerCase()
       );
 
-      // JIKA ITEM BARU: Otomatis buat baris baru di tabel Excel!
+      // JIKA ITEM BARU: Otomatis buat baris baru di tabel Excel dengan kategori Makanan/Minuman yang presisi!
       if (!matchedItem) {
         matchedItem = {
           id: `item_ocr_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
           name: cleanName,
           unit: (scanned.unit || 'PCS').toUpperCase(),
-          category: scanned.category || 'F&B Cafe',
+          category: resolveProductItemCategory(cleanName, scanned.category),
         };
         updatedItems.push(matchedItem);
         newRowsCreated++;
       } else {
+        matchedItem.category = resolveProductItemCategory(
+          matchedItem.name,
+          matchedItem.category
+        );
         existingRowsUpdated++;
       }
 
@@ -2334,14 +2338,27 @@ export const CashierPerformanceInput: React.FC<CashierPerformanceInputProps> = (
                   value={newItemCategory}
                   onChange={(e) => setNewItemCategory(e.target.value)}
                   className="px-2.5 py-2 rounded-xl border border-slate-300 bg-white text-xs font-bold text-slate-700"
-                  title="Pilih Kategori Minuman / Produk"
+                  title="Pilih Kategori Produk (Makanan / Minuman)"
                 >
                   <option value="AUTO">Kategori: Deteksi Otomatis</option>
-                  {BEVERAGE_CATEGORIES.map((cat) => (
-                    <option key={cat.id} value={cat.id}>
-                      {cat.shortLabel}
-                    </option>
-                  ))}
+                  <optgroup label="🍿 KATEGORI MAKANAN">
+                    {BEVERAGE_CATEGORIES.filter(
+                      (c) => c.productGroup === 'makanan'
+                    ).map((cat) => (
+                      <option key={cat.id} value={cat.id}>
+                        {cat.shortLabel}
+                      </option>
+                    ))}
+                  </optgroup>
+                  <optgroup label="🥤 KATEGORI MINUMAN">
+                    {BEVERAGE_CATEGORIES.filter(
+                      (c) => c.productGroup === 'minuman'
+                    ).map((cat) => (
+                      <option key={cat.id} value={cat.id}>
+                        {cat.shortLabel}
+                      </option>
+                    ))}
+                  </optgroup>
                 </select>
                 <button
                   type="button"
@@ -2488,13 +2505,26 @@ export const CashierPerformanceInput: React.FC<CashierPerformanceInputProps> = (
                                   handleCategoryItemRowChange(item.id, e.target.value)
                                 }
                                 className="text-[10px] font-semibold text-purple-800 bg-transparent hover:bg-purple-50 rounded px-1 py-0.5 outline-hidden cursor-pointer"
-                                title="Kategori untuk Submenu Minuman Perkategori"
+                                title="Kategori untuk Submenu Produk Perkategori"
                               >
-                                {BEVERAGE_CATEGORIES.map((catOpt) => (
-                                  <option key={catOpt.id} value={catOpt.id}>
-                                    {catOpt.shortLabel}
-                                  </option>
-                                ))}
+                                <optgroup label="🍿 KATEGORI MAKANAN">
+                                  {BEVERAGE_CATEGORIES.filter(
+                                    (c) => c.productGroup === 'makanan'
+                                  ).map((catOpt) => (
+                                    <option key={catOpt.id} value={catOpt.id}>
+                                      {catOpt.shortLabel}
+                                    </option>
+                                  ))}
+                                </optgroup>
+                                <optgroup label="🥤 KATEGORI MINUMAN">
+                                  {BEVERAGE_CATEGORIES.filter(
+                                    (c) => c.productGroup === 'minuman'
+                                  ).map((catOpt) => (
+                                    <option key={catOpt.id} value={catOpt.id}>
+                                      {catOpt.shortLabel}
+                                    </option>
+                                  ))}
+                                </optgroup>
                               </select>
                             </div>
                           </td>

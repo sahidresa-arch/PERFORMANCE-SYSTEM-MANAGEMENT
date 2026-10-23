@@ -1322,36 +1322,117 @@ export const StorageService = {
     return updatedRecord;
   },
 
-  // Toilet Inspections
+  // Toilet Inspections (Multi-Layer Additive Persistence per Outlet + Date + Show + Type)
   getInspections(): ToiletInspectionRecord[] {
-    const raw = localStorage.getItem(KEYS.INSPECTION);
-    if (!raw) {
-      return [];
-    }
+    const parseSafe = (raw: string | null): ToiletInspectionRecord[] => {
+      if (!raw) return [];
+      try {
+        const parsed = JSON.parse(raw);
+        return Array.isArray(parsed) ? parsed : [];
+      } catch {
+        return [];
+      }
+    };
+
+    const primaryList = parseSafe(localStorage.getItem(KEYS.INSPECTION));
+    const overrideList = parseSafe(localStorage.getItem('cinema_xxi_user_inspections_overrides'));
+    let sessionList: ToiletInspectionRecord[] = [];
     try {
-      return JSON.parse(raw);
+      sessionList = parseSafe(sessionStorage.getItem('cinema_xxi_toilet_inspections_session'));
     } catch {
+      sessionList = [];
+    }
+
+    if (primaryList.length === 0 && overrideList.length === 0 && sessionList.length === 0) {
       return [];
     }
+
+    const mergedMap = new Map<string, ToiletInspectionRecord>();
+    const absorb = (items: ToiletInspectionRecord[]) => {
+      for (const item of items) {
+        if (!item || !item.outletId || !item.date || item.showNumber === undefined || !item.type) {
+          continue;
+        }
+        const showNum = Number(item.showNumber) || 1;
+        const canonicalId = `${item.outletId}-${item.date}-show${showNum}-${item.type}`;
+        const normalized: ToiletInspectionRecord = {
+          ...item,
+          id: canonicalId,
+          showNumber: showNum,
+        };
+        const existing = mergedMap.get(canonicalId);
+        if (!existing) {
+          mergedMap.set(canonicalId, normalized);
+        } else {
+          const exTs = (existing as any).updatedAt ? new Date((existing as any).updatedAt).getTime() : 0;
+          const newTs = (normalized as any).updatedAt ? new Date((normalized as any).updatedAt).getTime() : 0;
+          if (newTs >= exTs) {
+            mergedMap.set(canonicalId, normalized);
+          }
+        }
+      }
+    };
+
+    // Absorb primary, overrides, and session backup additively
+    absorb(primaryList);
+    absorb(overrideList);
+    absorb(sessionList);
+
+    const finalList = Array.from(mergedMap.values());
+    if (finalList.length !== primaryList.length) {
+      try {
+        localStorage.setItem(KEYS.INSPECTION, JSON.stringify(finalList));
+      } catch {
+        // ignore storage quota errors
+      }
+    }
+
+    return finalList;
   },
 
   saveInspection(record: ToiletInspectionRecord): ToiletInspectionRecord {
+    const nowIso = new Date().toISOString();
+    const showNum = Number(record.showNumber) || 1;
+    const canonicalId = `${record.outletId}-${record.date}-show${showNum}-${record.type}`;
+    const normalizedRecord: ToiletInspectionRecord = {
+      ...record,
+      id: canonicalId,
+      showNumber: showNum,
+      ...({ updatedAt: nowIso } as any),
+    };
+
     const list = this.getInspections();
-    const idx = list.findIndex((i) => i.id === record.id);
+    const idx = list.findIndex(
+      (i) =>
+        i.id === canonicalId ||
+        (i.outletId === normalizedRecord.outletId &&
+          i.date === normalizedRecord.date &&
+          Number(i.showNumber) === showNum &&
+          i.type === normalizedRecord.type)
+    );
     if (idx >= 0) {
-      list[idx] = record;
+      list[idx] = normalizedRecord;
     } else {
-      list.unshift(record);
+      list.unshift(normalizedRecord);
     }
-    localStorage.setItem(KEYS.INSPECTION, JSON.stringify(list));
+
+    try {
+      const serialized = JSON.stringify(list);
+      localStorage.setItem(KEYS.INSPECTION, serialized);
+      localStorage.setItem('cinema_xxi_user_inspections_overrides', serialized);
+      sessionStorage.setItem('cinema_xxi_toilet_inspections_session', serialized);
+    } catch {
+      // ignore quota error
+    }
+
     this.broadcastChange('inspection');
 
-    // Asynchronous background sync ke Supabase jika terhubung
+    // Asynchronous background sync ke Supabase & Internal Server jika terhubung
     import('./supabase')
-      .then((m) => m.syncInspectionToSupabase(record))
+      .then((m) => m.syncInspectionToSupabase(normalizedRecord))
       .catch(() => {});
 
-    return record;
+    return normalizedRecord;
   },
 
   // Movie Screening History

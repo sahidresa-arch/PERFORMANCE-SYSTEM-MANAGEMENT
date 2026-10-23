@@ -23,7 +23,6 @@ import {
   ChevronRight,
   Users,
   PackageSearch,
-  Boxes,
   Trophy,
   UserCheck,
   CupSoda,
@@ -399,7 +398,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <>
                 {renderSubMenuItem('sdm_input', 'Input Sales & Item Kasir', UserCheck, 0)}
                 {renderSubMenuItem('sdm_leaderboard', 'Ranking & Leaderboard Kasir', Trophy, 1)}
-                {renderSubMenuItem('sdm_beverage_category', 'Minuman Perkategori', CupSoda, 2)}
+                {renderSubMenuItem('sdm_beverage_category', 'Produk Perkategori', CupSoda, 2)}
               </>
             ))}
 
@@ -424,7 +423,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
             {renderAccordionSection('accounting', 'Accounting', Calculator, isAccountingActive, (
               <>
                 {renderSubMenuItem('accounting_bopo', 'BOPO', DollarSign, 0)}
-                {renderSubMenuItem('accounting_inventory', 'Stok Gudang & Opname', Boxes, 1)}
               </>
             ))}
 

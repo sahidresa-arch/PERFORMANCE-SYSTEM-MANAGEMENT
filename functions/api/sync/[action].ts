@@ -48,17 +48,35 @@ function smartMergeSalesRow(existingRow: any, incomingRow: any): any {
   }
 
   const rowId = String(incomingRow.id || '');
+  const exRowTs = existingRow.updated_at ? new Date(existingRow.updated_at).getTime() : 0;
+  const incRowTs = incomingRow.updated_at ? new Date(incomingRow.updated_at).getTime() : 0;
+  const bestUpdatedAt = incRowTs >= exRowTs ? incomingRow.updated_at : existingRow.updated_at;
+
+  const getCanonicalKey = (item: any): string => {
+    if (!item || typeof item !== 'object') return '';
+    if (
+      (rowId === '__SYSTEM_SYNC_INSPECTIONS__' || rowId === '__SYSTEM_SYNC_INSPECTIONS_DELTA__') &&
+      item.outletId &&
+      item.date &&
+      item.showNumber !== undefined &&
+      item.type
+    ) {
+      return `${item.outletId}-${item.date}-show${Number(item.showNumber)}-${item.type}`;
+    }
+    return item.id ? String(item.id) : '';
+  };
 
   if (MERGE_BY_ID_ROWS.has(rowId)) {
     const mergedMap = new Map<string, any>();
     for (const item of existingRow.shows) {
-      if (item && item.id) {
-        mergedMap.set(String(item.id), item);
+      const key = getCanonicalKey(item);
+      if (key) {
+        mergedMap.set(key, item);
       }
     }
     for (const item of incomingRow.shows) {
-      if (item && item.id) {
-        const key = String(item.id);
+      const key = getCanonicalKey(item);
+      if (key) {
         const prev = mergedMap.get(key);
         if (!prev) {
           mergedMap.set(key, item);
@@ -72,12 +90,13 @@ function smartMergeSalesRow(existingRow: any, incomingRow: any): any {
       }
     }
     let finalShows = Array.from(mergedMap.values());
-    if (rowId.endsWith('_DELTA__') && finalShows.length > 35) {
-      finalShows = finalShows.slice(-35);
+    if (rowId.endsWith('_DELTA__') && finalShows.length > 150) {
+      finalShows = finalShows.slice(-150);
     }
     return {
       ...existingRow,
       ...incomingRow,
+      updated_at: bestUpdatedAt,
       shows: finalShows,
     };
   }
@@ -115,11 +134,15 @@ function smartMergeSalesRow(existingRow: any, incomingRow: any): any {
     return {
       ...existingRow,
       ...incomingRow,
+      updated_at: bestUpdatedAt,
       shows: finalShows,
     };
   }
 
-  return incomingRow;
+  return {
+    ...incomingRow,
+    updated_at: bestUpdatedAt,
+  };
 }
 
 function mergeStoreTables(target: SyncStoreData, incoming: any): void {

@@ -18,7 +18,6 @@ import { MarketIntelligence } from './components/occupancy/MarketIntelligence';
 import { HistoryRekapFilm } from './components/occupancy/HistoryRekapFilm';
 import { ToiletInspection } from './components/inspection/ToiletInspection';
 import { BopoView } from './components/accounting/BopoView';
-import { WarehouseStockView } from './components/accounting/WarehouseStockView';
 import { UserOutletManagement } from './components/admin/UserOutletManagement';
 import { EmployeesView } from './components/hc/EmployeesView';
 import { KpiKaryawanView } from './components/hc/KpiKaryawanView';
@@ -334,13 +333,6 @@ export default function App() {
               {/* Accounting Submenus */}
               {activeMenu === 'accounting_bopo' && (
                 <BopoView
-                  currentUser={currentUser}
-                  selectedDate={selectedDate}
-                />
-              )}
-
-              {activeMenu === 'accounting_inventory' && (
-                <WarehouseStockView
                   currentUser={currentUser}
                   selectedDate={selectedDate}
                 />

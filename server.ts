@@ -3,7 +3,16 @@ import fs from 'fs';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
 
-const PORT = Number(process.env.PORT) || 3000;
+// Prevent transient stream/socket or Vite pre-warm errors from crashing the server process
+process.on('uncaughtException', (err) => {
+  console.warn('[Server Warning] Caught uncaughtException:', err?.message || err);
+});
+
+process.on('unhandledRejection', (reason: any) => {
+  console.warn('[Server Warning] Caught unhandledRejection:', reason?.message || reason);
+});
+
+const PORT = 3000;
 const DATA_DIR = path.resolve(process.cwd(), '.data');
 const STORE_FILE = path.join(DATA_DIR, 'cinema_xxi_sync_store.json');
 
@@ -88,17 +97,35 @@ function smartMergeSalesRow(existingRow: any, incomingRow: any): any {
   }
 
   const rowId = String(incomingRow.id || '');
+  const exRowTs = existingRow.updated_at ? new Date(existingRow.updated_at).getTime() : 0;
+  const incRowTs = incomingRow.updated_at ? new Date(incomingRow.updated_at).getTime() : 0;
+  const bestUpdatedAt = incRowTs >= exRowTs ? incomingRow.updated_at : existingRow.updated_at;
+
+  const getCanonicalKey = (item: any): string => {
+    if (!item || typeof item !== 'object') return '';
+    if (
+      (rowId === '__SYSTEM_SYNC_INSPECTIONS__' || rowId === '__SYSTEM_SYNC_INSPECTIONS_DELTA__') &&
+      item.outletId &&
+      item.date &&
+      item.showNumber !== undefined &&
+      item.type
+    ) {
+      return `${item.outletId}-${item.date}-show${Number(item.showNumber)}-${item.type}`;
+    }
+    return item.id ? String(item.id) : '';
+  };
 
   if (MERGE_BY_ID_ROWS.has(rowId)) {
     const mergedMap = new Map<string, any>();
     for (const item of existingRow.shows) {
-      if (item && item.id) {
-        mergedMap.set(String(item.id), item);
+      const key = getCanonicalKey(item);
+      if (key) {
+        mergedMap.set(key, item);
       }
     }
     for (const item of incomingRow.shows) {
-      if (item && item.id) {
-        const key = String(item.id);
+      const key = getCanonicalKey(item);
+      if (key) {
         const prev = mergedMap.get(key);
         if (!prev) {
           mergedMap.set(key, item);
@@ -112,12 +139,13 @@ function smartMergeSalesRow(existingRow: any, incomingRow: any): any {
       }
     }
     let finalShows = Array.from(mergedMap.values());
-    if (rowId.endsWith('_DELTA__') && finalShows.length > 35) {
-      finalShows = finalShows.slice(-35);
+    if (rowId.endsWith('_DELTA__') && finalShows.length > 150) {
+      finalShows = finalShows.slice(-150);
     }
     return {
       ...existingRow,
       ...incomingRow,
+      updated_at: bestUpdatedAt,
       shows: finalShows,
     };
   }
@@ -155,11 +183,15 @@ function smartMergeSalesRow(existingRow: any, incomingRow: any): any {
     return {
       ...existingRow,
       ...incomingRow,
+      updated_at: bestUpdatedAt,
       shows: finalShows,
     };
   }
 
-  return incomingRow;
+  return {
+    ...incomingRow,
+    updated_at: bestUpdatedAt,
+  };
 }
 
 // Active SSE Clients for Real-Time Cross-Device Broadcast
@@ -200,22 +232,30 @@ async function startServer() {
     res.setHeader('X-Accel-Buffering', 'no');
     res.flushHeaders?.();
 
-    res.write(`data: ${JSON.stringify({ type: 'CONNECTED', ts: new Date().toISOString() })}\n\n`);
-    sseClients.add(res);
+    const cleanup = () => {
+      clearInterval(keepAlive);
+      sseClients.delete(res);
+    };
+
+    req.on('close', cleanup);
+    req.on('error', cleanup);
+    res.on('error', cleanup);
+
+    try {
+      res.write(`data: ${JSON.stringify({ type: 'CONNECTED', ts: new Date().toISOString() })}\n\n`);
+      sseClients.add(res);
+    } catch {
+      cleanup();
+      return;
+    }
 
     const keepAlive = setInterval(() => {
       try {
         res.write(': keepalive\n\n');
       } catch {
-        clearInterval(keepAlive);
-        sseClients.delete(res);
+        cleanup();
       }
     }, 25000);
-
-    req.on('close', () => {
-      clearInterval(keepAlive);
-      sseClients.delete(res);
-    });
   });
 
   // 3. Upsert Endpoint (Supports single object or array of records)
@@ -361,22 +401,38 @@ async function startServer() {
 
   // Mount Vite in development or static dist in production
   if (process.env.NODE_ENV !== 'production') {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
+    const vitePromise = createViteServer({
+      server: { middlewareMode: true, hmr: false, watch: null },
       appType: 'spa',
     });
-    app.use(vite.middlewares);
+    vitePromise.catch((err) => {
+      console.error('[Vite Init Warning]:', err?.message || err);
+    });
+    app.use(async (req, res, next) => {
+      try {
+        const vite = await vitePromise;
+        vite.middlewares(req, res, next);
+      } catch (err) {
+        next(err);
+      }
+    });
   } else {
     const distPath = path.join(process.cwd(), 'dist');
     app.use(express.static(distPath));
-    app.get('*all', (_req, res) => {
+    app.get('*', (_req, res) => {
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
+  const httpServer = app.listen(PORT, '0.0.0.0', () => {
     console.log(`Cinema XXI Internal Sync Server running on http://0.0.0.0:${PORT}`);
+  });
+
+  httpServer.on('error', (err: any) => {
+    console.error('[HTTP Server Warning]:', err?.message || err);
   });
 }
 
-startServer();
+startServer().catch((err) => {
+  console.error('[Server Startup Warning]:', err?.message || err);
+});
