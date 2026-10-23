@@ -59,6 +59,20 @@ const KEYS = {
   DAILY_SECTION_SALES: 'cinema_xxi_daily_section_sales',
 };
 
+let cachedInspectionsList: ToiletInspectionRecord[] | null = null;
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('storage', (e) => {
+    if (
+      !e.key ||
+      e.key === KEYS.INSPECTION ||
+      e.key === 'cinema_xxi_user_inspections_overrides'
+    ) {
+      cachedInspectionsList = null;
+    }
+  });
+}
+
 // Helper perbandingan teks & regex yang aman
 export function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -954,8 +968,10 @@ export const StorageService = {
         (o) =>
           !['premiere-cibinong-xxi', 'premiere-living-world-kota-wisata-xxi', 'premiere-aeon-sentul-xxi'].includes(o.id)
       );
-      localStorage.setItem(KEYS.OUTLETS, JSON.stringify(finalOutlets));
-      localStorage.setItem('cinema_xxi_outlets_target_synced_v2_db', 'true');
+      if (!syncedOutletsV2 || finalOutlets.length !== stored.length) {
+        localStorage.setItem(KEYS.OUTLETS, JSON.stringify(finalOutlets));
+        localStorage.setItem('cinema_xxi_outlets_target_synced_v2_db', 'true');
+      }
       return finalOutlets;
     } catch {
       const cleanInit = INITIAL_OUTLETS.filter(
@@ -1322,8 +1338,16 @@ export const StorageService = {
     return updatedRecord;
   },
 
-  // Toilet Inspections (Multi-Layer Additive Persistence per Outlet + Date + Show + Type)
-  getInspections(): ToiletInspectionRecord[] {
+  // Toilet Inspections (Multi-Layer Additive Persistence per Outlet + Date + Show + Type + In-Memory O(1) Cache)
+  invalidateInspectionsCache() {
+    cachedInspectionsList = null;
+  },
+
+  getInspections(forceReload = false): ToiletInspectionRecord[] {
+    if (!forceReload && cachedInspectionsList !== null) {
+      return cachedInspectionsList;
+    }
+
     const parseSafe = (raw: string | null): ToiletInspectionRecord[] => {
       if (!raw) return [];
       try {
@@ -1344,7 +1368,8 @@ export const StorageService = {
     }
 
     if (primaryList.length === 0 && overrideList.length === 0 && sessionList.length === 0) {
-      return [];
+      cachedInspectionsList = [];
+      return cachedInspectionsList;
     }
 
     const mergedMap = new Map<string, ToiletInspectionRecord>();
@@ -1387,6 +1412,7 @@ export const StorageService = {
       }
     }
 
+    cachedInspectionsList = finalList;
     return finalList;
   },
 
@@ -1401,7 +1427,7 @@ export const StorageService = {
       ...({ updatedAt: nowIso } as any),
     };
 
-    const list = this.getInspections();
+    const list = [...this.getInspections()];
     const idx = list.findIndex(
       (i) =>
         i.id === canonicalId ||
@@ -1415,6 +1441,8 @@ export const StorageService = {
     } else {
       list.unshift(normalizedRecord);
     }
+
+    cachedInspectionsList = list;
 
     try {
       const serialized = JSON.stringify(list);
@@ -2470,6 +2498,12 @@ export const StorageService = {
 
   // Broadcast & Sync (Asynchronous to prevent React setState-in-render collisions)
   broadcastChange(type: string) {
+    if (type === 'inspection' || type === 'all-reset') {
+      // Keep cache if saveInspection just updated it, or clear on external/reset
+      if (type === 'all-reset') {
+        cachedInspectionsList = null;
+      }
+    }
     setTimeout(() => {
       window.dispatchEvent(
         new CustomEvent('cinema-xxi-storage-update', { detail: { type, key: type } })
@@ -2479,6 +2513,7 @@ export const StorageService = {
 
   // Reset all to fresh initial state
   resetAllData() {
+    cachedInspectionsList = null;
     localStorage.removeItem(KEYS.SALES);
     localStorage.removeItem(KEYS.BAKING);
     localStorage.removeItem(KEYS.INSPECTION);

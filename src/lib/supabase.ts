@@ -1522,7 +1522,7 @@ export async function mergeRemoteInspectionsToLocal(deltaOnly = false): Promise<
     } else {
       const exTs = (existing as any).updatedAt ? new Date((existing as any).updatedAt).getTime() : 0;
       const remTs = (remote as any).updatedAt ? new Date((remote as any).updatedAt).getTime() : 0;
-      if (remTs >= exTs && JSON.stringify(existing) !== JSON.stringify(remote)) {
+      if (remTs > exTs || (remTs === 0 && exTs === 0 && JSON.stringify(existing) !== JSON.stringify(remote))) {
         mergedMap.set(remote.id, remote);
         updated = true;
       }
@@ -1540,6 +1540,7 @@ export async function mergeRemoteInspectionsToLocal(deltaOnly = false): Promise<
     } catch {
       // ignore
     }
+    StorageService.invalidateInspectionsCache();
     StorageService.broadcastChange('inspection');
   }
 

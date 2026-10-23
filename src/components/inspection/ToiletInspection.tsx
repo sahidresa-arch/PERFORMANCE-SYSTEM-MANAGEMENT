@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { User, ToiletInspectionRecord, ToiletChecklist } from '../../types';
 import { StorageService } from '../../lib/storage';
 import { CHECKLIST_ITEMS } from '../../lib/constants';
@@ -104,18 +104,26 @@ export const ToiletInspection: React.FC<ToiletInspectionProps> = ({
   initialMode = 'form',
 }) => {
   const [viewMode, setViewMode] = useState<'dashboard' | 'form'>(initialMode);
-  const areas = StorageService.getAreas();
-  const rawOutlets = StorageService.getOutlets().filter(
-    (o) => !isExcludedFromToiletInspection(o)
+  const areas = useMemo(() => StorageService.getAreas(), []);
+  const rawOutlets = useMemo(
+    () => StorageService.getOutlets().filter((o) => !isExcludedFromToiletInspection(o)),
+    []
   );
-  const isManagerOrCleaner = (currentUser?.role === 'manager' || currentUser?.role === 'cleaner') && currentUser?.outletId;
-  const outlets = isManagerOrCleaner
-    ? rawOutlets.filter((o) => o.id === currentUser.outletId)
-    : rawOutlets;
+  const isManagerOrCleaner =
+    (currentUser?.role === 'manager' || currentUser?.role === 'cleaner') && currentUser?.outletId;
+  const outlets = useMemo(
+    () =>
+      isManagerOrCleaner
+        ? rawOutlets.filter((o) => o.id === currentUser.outletId)
+        : rawOutlets,
+    [isManagerOrCleaner, rawOutlets, currentUser?.outletId]
+  );
 
   // Filters for dashboard
   const [selectedAreaId, setSelectedAreaId] = useState<string>('');
-  const [selectedOutletFilter, setSelectedOutletFilter] = useState<string>(isManagerOrCleaner ? currentUser.outletId! : '');
+  const [selectedOutletFilter, setSelectedOutletFilter] = useState<string>(
+    isManagerOrCleaner ? currentUser.outletId! : ''
+  );
 
   // Tab for Notification Outlet Status
   const [notifTab, setNotifTab] = useState<'pending' | 'partial' | 'complete'>('pending');
@@ -131,13 +139,59 @@ export const ToiletInspection: React.FC<ToiletInspectionProps> = ({
   // Track if user explicitly clicked an already-completed Show to review/edit it
   const manualShowRef = React.useRef<string | null>(null);
 
-  // Sequential Show Helpers: Show N hanya bisa diceklis jika Show 1 s/d Show N-1 sudah selesai diceklis
+  // All inspections for selected date (initialized immediately from fast in-memory cache)
+  const [inspections, setInspections] = useState<ToiletInspectionRecord[]>(() =>
+    StorageService.getInspections().filter(
+      (ins: ToiletInspectionRecord) =>
+        ins.date === selectedDate &&
+        ins.outletId !== 'hs-aeon-sentul-xxi' &&
+        ins.outletId !== 'hs-margo-city-xxi' &&
+        ins.outletId !== 'premiere-pesona-square-xxi'
+    )
+  );
+
+  // Load inspections from storage
+  const reloadInspections = useCallback(() => {
+    const list = StorageService.getInspections().filter(
+      (ins: ToiletInspectionRecord) =>
+        ins.date === selectedDate &&
+        ins.outletId !== 'hs-aeon-sentul-xxi' &&
+        ins.outletId !== 'hs-margo-city-xxi' &&
+        ins.outletId !== 'premiere-pesona-square-xxi'
+    );
+    setInspections(list);
+  }, [selectedDate]);
+
+  // O(1) Lookup Map for completed shows on selectedDate so clicking B/K/R or typing never scans arrays or localStorage
+  const completedShowMap = useMemo(() => {
+    const map = new Map<string, ToiletInspectionRecord>();
+    for (const ins of inspections) {
+      const isComplete =
+        ins.status === 'Sudah Lapor' ||
+        CHECKLIST_ITEMS.every((ci) => {
+          const val = ins.checklist?.[ci.key as keyof ToiletChecklist];
+          return val === 'B' || val === 'K' || val === 'R';
+        });
+      if (isComplete) {
+        const key = `${ins.outletId}-${ins.date}-show${Number(ins.showNumber)}-${ins.type}`;
+        map.set(key, ins);
+      }
+    }
+    return map;
+  }, [inspections]);
+
+  // Sequential Show Helpers: O(1) lookup via completedShowMap
   const getShowRecord = (
     showNum: number,
     outletId: string = formOutletId,
     toiletType: 'Pria' | 'Wanita' = formToiletType
   ): ToiletInspectionRecord | undefined => {
     const targetShow = Number(showNum);
+    const key = `${outletId}-${selectedDate}-show${targetShow}-${toiletType}`;
+    const fromMap = completedShowMap.get(key);
+    if (fromMap) return fromMap;
+
+    // Fallback to in-memory StorageService cache only if state hasn't flushed yet
     return StorageService.getInspections().find(
       (ins: ToiletInspectionRecord) =>
         ins.outletId === outletId &&
@@ -197,24 +251,12 @@ export const ToiletInspection: React.FC<ToiletInspectionProps> = ({
   // Checklist items mapping
   const [checklist, setChecklist] = useState<ToiletChecklist>(DEFAULT_CHECKLIST);
 
-  const selectedOutlet =
-    outlets.find((o) => o.id === formOutletId) ||
-    outlets[0] || { id: '', name: 'Cinema XXI', areaId: '' };
-
-  // All inspections for selected date
-  const [inspections, setInspections] = useState<ToiletInspectionRecord[]>([]);
-
-  // Load inspections from storage
-  const reloadInspections = () => {
-    const list = StorageService.getInspections().filter(
-      (ins: ToiletInspectionRecord) =>
-        ins.date === selectedDate &&
-        ins.outletId !== 'hs-aeon-sentul-xxi' &&
-        ins.outletId !== 'hs-margo-city-xxi' &&
-        ins.outletId !== 'premiere-pesona-square-xxi'
-    );
-    setInspections(list);
-  };
+  const selectedOutlet = useMemo(
+    () =>
+      outlets.find((o) => o.id === formOutletId) ||
+      outlets[0] || { id: '', name: 'Cinema XXI', areaId: '' },
+    [outlets, formOutletId]
+  );
 
   const [isSyncingLive, setIsSyncingLive] = useState(false);
 
@@ -240,8 +282,6 @@ export const ToiletInspection: React.FC<ToiletInspectionProps> = ({
         try {
           const changed = await m.mergeRemoteInspectionsToLocal(false);
           if (changed) reloadInspections();
-          await m.pullAllRemoteToLocal(true);
-          reloadInspections();
         } finally {
           setIsSyncingLive(false);
         }
@@ -257,12 +297,11 @@ export const ToiletInspection: React.FC<ToiletInspectionProps> = ({
           m.mergeRemoteInspectionsToLocal(true).then((changed) => {
             if (changed) reloadInspections();
           });
-          m.pullAllRemoteToLocal(false);
         })
         .catch(() => {});
     };
 
-    const liveInterval = setInterval(runLiveInspectionSync, 5000);
+    const liveInterval = setInterval(runLiveInspectionSync, 8000);
 
     const handleStorageUpdate = (e: any) => {
       const type = e?.detail?.type;
@@ -276,10 +315,11 @@ export const ToiletInspection: React.FC<ToiletInspectionProps> = ({
       clearInterval(liveInterval);
       window.removeEventListener('cinema-xxi-storage-update', handleStorageUpdate);
     };
-  }, [selectedDate, formOutletId, viewMode]);
+  }, [selectedDate, reloadInspections]);
 
   // Guard Check: Check if an inspection already exists for this exact combination
   const existingRecord = getShowRecord(formShowNumber, formOutletId, formToiletType);
+  const currentShowUnlocked = isShowUnlocked(formShowNumber, formOutletId, formToiletType);
 
   const completedCountPria = [1, 2, 3, 4, 5].filter((s) =>
     isShowCompleted(s, formOutletId, 'Pria')
@@ -485,82 +525,110 @@ export const ToiletInspection: React.FC<ToiletInspectionProps> = ({
     }, 4000);
   };
 
-  const filteredOutlets = outlets.filter((o) => {
-    const matchArea = selectedAreaId ? o.areaId === selectedAreaId : true;
-    const matchOutlet = selectedOutletFilter ? o.id === selectedOutletFilter : true;
-    return matchArea && matchOutlet;
-  });
+  const filteredOutlets = useMemo(
+    () =>
+      outlets.filter((o) => {
+        const matchArea = selectedAreaId ? o.areaId === selectedAreaId : true;
+        const matchOutlet = selectedOutletFilter ? o.id === selectedOutletFilter : true;
+        return matchArea && matchOutlet;
+      }),
+    [outlets, selectedAreaId, selectedOutletFilter]
+  );
 
-  // Calculate detailed compliance per outlet
-  const outletsCompliance = outlets.map((o) => {
-    const outletInspections = inspections.filter((ins) => ins.outletId === o.id);
-    const completedShowsPria = [1, 2, 3, 4, 5].filter((sNum) =>
-      outletInspections.some((ins) => ins.type === 'Pria' && ins.showNumber === sNum)
-    ).length;
-    const completedShowsWanita = [1, 2, 3, 4, 5].filter((sNum) =>
-      outletInspections.some((ins) => ins.type === 'Wanita' && ins.showNumber === sNum)
-    ).length;
+  // Calculate detailed compliance per outlet (memoized so typing/clicking in form does zero work)
+  const outletsCompliance = useMemo(
+    () =>
+      outlets.map((o) => {
+        const outletInspections = inspections.filter((ins) => ins.outletId === o.id);
+        const completedShowsPria = [1, 2, 3, 4, 5].filter((sNum) =>
+          outletInspections.some((ins) => ins.type === 'Pria' && ins.showNumber === sNum)
+        ).length;
+        const completedShowsWanita = [1, 2, 3, 4, 5].filter((sNum) =>
+          outletInspections.some((ins) => ins.type === 'Wanita' && ins.showNumber === sNum)
+        ).length;
 
-    // Shows that have at least one inspection
-    const uniqueShowsSubmitted = [1, 2, 3, 4, 5].filter((sNum) =>
-      outletInspections.some((ins) => ins.showNumber === sNum)
-    ).length;
+        // Shows that have at least one inspection
+        const uniqueShowsSubmitted = [1, 2, 3, 4, 5].filter((sNum) =>
+          outletInspections.some((ins) => ins.showNumber === sNum)
+        ).length;
 
-    const totalSubmittedInspections = outletInspections.length;
-    const hasAnyR = outletInspections.some((ins) =>
-      Object.values(ins.checklist || {}).includes('R')
-    );
+        const totalSubmittedInspections = outletInspections.length;
+        const hasAnyR = outletInspections.some((ins) =>
+          Object.values(ins.checklist || {}).includes('R')
+        );
 
-    return {
-      outlet: o,
-      totalSubmittedInspections,
-      uniqueShowsSubmitted,
-      completedShowsPria,
-      completedShowsWanita,
-      hasAnyR,
-      isUnreported: totalSubmittedInspections === 0,
-      isPartial: totalSubmittedInspections > 0 && uniqueShowsSubmitted < 5,
-      isComplete: uniqueShowsSubmitted === 5,
-    };
-  });
+        return {
+          outlet: o,
+          totalSubmittedInspections,
+          uniqueShowsSubmitted,
+          completedShowsPria,
+          completedShowsWanita,
+          hasAnyR,
+          isUnreported: totalSubmittedInspections === 0,
+          isPartial: totalSubmittedInspections > 0 && uniqueShowsSubmitted < 5,
+          isComplete: uniqueShowsSubmitted === 5,
+        };
+      }),
+    [outlets, inspections]
+  );
 
-  const unreportedList = outletsCompliance.filter((item) => item.isUnreported);
-  const partialList = outletsCompliance.filter((item) => item.isPartial);
-  const completeList = outletsCompliance.filter((item) => item.isComplete);
+  const unreportedList = useMemo(
+    () => outletsCompliance.filter((item) => item.isUnreported),
+    [outletsCompliance]
+  );
+  const partialList = useMemo(
+    () => outletsCompliance.filter((item) => item.isPartial),
+    [outletsCompliance]
+  );
+  const completeList = useMemo(
+    () => outletsCompliance.filter((item) => item.isComplete),
+    [outletsCompliance]
+  );
 
   const compliancePercentage = Math.round(
     ((outlets.length - unreportedList.length) / (outlets.length || 1)) * 100
   );
 
   // Filter laporan sesuai hak akses outlet (khusus Manager/Cleaner hanya menampilkan outlet masing-masing)
-  const allowedOutletIds = new Set(filteredOutlets.map((o) => o.id));
-  const scopedInspections = inspections.filter((ins) => {
-    if (isManagerOrCleaner && currentUser?.outletId) {
-      return ins.outletId === currentUser.outletId;
+  const scopedInspections = useMemo(() => {
+    const allowedOutletIds = new Set(filteredOutlets.map((o) => o.id));
+    return inspections.filter((ins) => {
+      if (isManagerOrCleaner && currentUser?.outletId) {
+        return ins.outletId === currentUser.outletId;
+      }
+      return allowedOutletIds.has(ins.outletId);
+    });
+  }, [filteredOutlets, inspections, isManagerOrCleaner, currentUser?.outletId]);
+
+  // Reports with 'R' (Rusak / Temuan) & summary metrics (memoized)
+  const { reportsWithR, totalLaporan, countBersih, countKurang, countRusak } = useMemo(() => {
+    const rList = scopedInspections.filter((ins) => {
+      const values = Object.values(ins.checklist || {});
+      return values.includes('R');
+    });
+    let bersih = 0;
+    let kurang = 0;
+    let rusak = 0;
+    for (const ins of scopedInspections) {
+      const values = Object.values(ins.checklist || {});
+      const hasR = values.includes('R');
+      const hasK = values.includes('K');
+      if (hasR) {
+        rusak++;
+      } else if (hasK) {
+        kurang++;
+      } else if (values.length > 0 && values.every((v) => v === 'B')) {
+        bersih++;
+      }
     }
-    return allowedOutletIds.has(ins.outletId);
-  });
-
-  // Reports with 'R' (Rusak / Temuan)
-  const reportsWithR = scopedInspections.filter((ins) => {
-    const values = Object.values(ins.checklist || {});
-    return values.includes('R');
-  });
-
-  // Calculate summary metrics for dashboard
-  const totalLaporan = scopedInspections.length;
-  const countBersih = scopedInspections.reduce((acc, ins) => {
-    const values = Object.values(ins.checklist || {});
-    return acc + (values.every((v) => v === 'B') ? 1 : 0);
-  }, 0);
-  const countKurang = scopedInspections.reduce((acc, ins) => {
-    const values = Object.values(ins.checklist || {});
-    return acc + (values.some((v) => v === 'K') && !values.some((v) => v === 'R') ? 1 : 0);
-  }, 0);
-  const countRusak = scopedInspections.reduce((acc, ins) => {
-    const values = Object.values(ins.checklist || {});
-    return acc + (values.some((v) => v === 'R') ? 1 : 0);
-  }, 0);
+    return {
+      reportsWithR: rList,
+      totalLaporan: scopedInspections.length,
+      countBersih: bersih,
+      countKurang: kurang,
+      countRusak: rusak,
+    };
+  }, [scopedInspections]);
 
   // Function to navigate directly to form with selected outlet (automatically picks valid sequential show)
   const handleDirectInspect = (
@@ -1024,7 +1092,6 @@ export const ToiletInspection: React.FC<ToiletInspectionProps> = ({
                   {CHECKLIST_ITEMS.map((item) => {
                     const itemKey = item.key as keyof ToiletChecklist;
                     const currentVal = checklist[itemKey] ?? '';
-                    const currentShowUnlocked = isShowUnlocked(formShowNumber, formOutletId, formToiletType);
 
                     return (
                       <div
@@ -1105,7 +1172,7 @@ export const ToiletInspection: React.FC<ToiletInspectionProps> = ({
 
                 <button
                   type="submit"
-                  disabled={!isShowUnlocked(formShowNumber, formOutletId, formToiletType)}
+                  disabled={!currentShowUnlocked}
                   className="px-6 py-3 rounded-xl bg-gradient-to-r from-amber-500 via-amber-600 to-amber-700 hover:from-amber-400 hover:to-amber-600 disabled:from-slate-300 disabled:to-slate-400 text-white text-xs font-black uppercase tracking-wider flex items-center space-x-2 shadow-md shadow-amber-500/25 active:scale-[0.99] transition cursor-pointer disabled:cursor-not-allowed"
                 >
                   <Save className="w-4 h-4 text-white" />
