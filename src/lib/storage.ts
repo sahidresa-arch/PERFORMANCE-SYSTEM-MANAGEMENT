@@ -59,13 +59,16 @@ const KEYS = {
   DAILY_SECTION_SALES: 'cinema_xxi_daily_section_sales',
 };
 
+const RECENT_INSPECTIONS_KEY = 'cinema_xxi_recent_inspections_v2';
 let cachedInspectionsList: ToiletInspectionRecord[] | null = null;
+const sessionSavedInspectionsMap = new Map<string, ToiletInspectionRecord>();
 
 if (typeof window !== 'undefined') {
   window.addEventListener('storage', (e) => {
     if (
       !e.key ||
       e.key === KEYS.INSPECTION ||
+      e.key === RECENT_INSPECTIONS_KEY ||
       e.key === 'cinema_xxi_user_inspections_overrides'
     ) {
       cachedInspectionsList = null;
@@ -1338,42 +1341,54 @@ export const StorageService = {
     return updatedRecord;
   },
 
-  // Toilet Inspections (Multi-Layer Additive Persistence per Outlet + Date + Show + Type + In-Memory O(1) Cache)
+  // Toilet Inspections (Multi-Layer Additive Persistence per Outlet + Date + Show + Type + In-Memory Session Guard)
   invalidateInspectionsCache() {
     cachedInspectionsList = null;
   },
 
-  getInspections(forceReload = false): ToiletInspectionRecord[] {
-    if (!forceReload && cachedInspectionsList !== null) {
-      return cachedInspectionsList;
-    }
+  persistInspectionsSafe(list: ToiletInspectionRecord[]) {
+    const threeDaysAgo = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const recentList = list.filter((i) => i && (!i.date || i.date >= threeDaysAgo));
 
-    const parseSafe = (raw: string | null): ToiletInspectionRecord[] => {
-      if (!raw) return [];
-      try {
-        const parsed = JSON.parse(raw);
-        return Array.isArray(parsed) ? parsed : [];
-      } catch {
-        return [];
-      }
-    };
-
-    const primaryList = parseSafe(localStorage.getItem(KEYS.INSPECTION));
-    const overrideList = parseSafe(localStorage.getItem('cinema_xxi_user_inspections_overrides'));
-    let sessionList: ToiletInspectionRecord[] = [];
+    // 1. Always write lightweight recent 3-day buffer (~15-25 KB) FIRST so active days never fail quota
     try {
-      sessionList = parseSafe(sessionStorage.getItem('cinema_xxi_toilet_inspections_session'));
+      const recentSerialized = JSON.stringify(recentList);
+      localStorage.setItem(RECENT_INSPECTIONS_KEY, recentSerialized);
+      sessionStorage.setItem('cinema_xxi_toilet_inspections_session', recentSerialized);
     } catch {
-      sessionList = [];
+      // ignore if even tiny write fails
     }
 
-    if (primaryList.length === 0 && overrideList.length === 0 && sessionList.length === 0) {
-      cachedInspectionsList = [];
-      return cachedInspectionsList;
+    // 2. Remove redundant 1.25MB duplicate key to free localStorage quota
+    try {
+      if (localStorage.getItem('cinema_xxi_user_inspections_overrides') !== null) {
+        localStorage.removeItem('cinema_xxi_user_inspections_overrides');
+      }
+    } catch {
+      // ignore
     }
 
+    // 3. Write full list to primary key; if QuotaExceededError, fall back to last 14 days
+    try {
+      localStorage.setItem(KEYS.INSPECTION, JSON.stringify(list));
+    } catch {
+      try {
+        const fourteenDaysAgo = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+        const prunedList = list.filter((i) => i && (!i.date || i.date >= fourteenDaysAgo));
+        localStorage.setItem(KEYS.INSPECTION, JSON.stringify(prunedList));
+      } catch {
+        try {
+          localStorage.setItem(KEYS.INSPECTION, JSON.stringify(recentList));
+        } catch {
+          // in-memory cachedInspectionsList & sessionSavedInspectionsMap still hold all records
+        }
+      }
+    }
+  },
+
+  saveMergedInspectionsList(list: ToiletInspectionRecord[]) {
     const mergedMap = new Map<string, ToiletInspectionRecord>();
-    const absorb = (items: ToiletInspectionRecord[]) => {
+    const absorb = (items: Iterable<ToiletInspectionRecord>) => {
       for (const item of items) {
         if (!item || !item.outletId || !item.date || item.showNumber === undefined || !item.type) {
           continue;
@@ -1389,27 +1404,110 @@ export const StorageService = {
         if (!existing) {
           mergedMap.set(canonicalId, normalized);
         } else {
-          const exTs = (existing as any).updatedAt ? new Date((existing as any).updatedAt).getTime() : 0;
-          const newTs = (normalized as any).updatedAt ? new Date((normalized as any).updatedAt).getTime() : 0;
-          if (newTs >= exTs) {
+          const exIso = String((existing as any).updatedAt || '');
+          const newIso = String((normalized as any).updatedAt || '');
+          if (newIso >= exIso) {
             mergedMap.set(canonicalId, normalized);
           }
         }
       }
     };
 
-    // Absorb primary, overrides, and session backup additively
-    absorb(primaryList);
-    absorb(overrideList);
-    absorb(sessionList);
+    absorb(list);
+    // Always preserve records saved in the current browser session so background sync never drops them
+    absorb(sessionSavedInspectionsMap.values());
 
     const finalList = Array.from(mergedMap.values());
-    if (finalList.length !== primaryList.length) {
-      try {
-        localStorage.setItem(KEYS.INSPECTION, JSON.stringify(finalList));
-      } catch {
-        // ignore storage quota errors
+    cachedInspectionsList = finalList;
+    this.persistInspectionsSafe(finalList);
+  },
+
+  getInspections(forceReload = false): ToiletInspectionRecord[] {
+    if (!forceReload && cachedInspectionsList !== null) {
+      if (sessionSavedInspectionsMap.size > 0) {
+        let needsMerge = false;
+        for (const [id, rec] of sessionSavedInspectionsMap.entries()) {
+          const found = cachedInspectionsList.find((c) => c.id === id);
+          if (!found || String((rec as any).updatedAt || '') > String((found as any).updatedAt || '')) {
+            needsMerge = true;
+            break;
+          }
+        }
+        if (!needsMerge) {
+          return cachedInspectionsList;
+        }
+      } else {
+        return cachedInspectionsList;
       }
+    }
+
+    const parseSafe = (raw: string | null): ToiletInspectionRecord[] => {
+      if (!raw) return [];
+      try {
+        const parsed = JSON.parse(raw);
+        return Array.isArray(parsed) ? parsed : [];
+      } catch {
+        return [];
+      }
+    };
+
+    const primaryList = parseSafe(localStorage.getItem(KEYS.INSPECTION));
+    const recentProtectedList = parseSafe(localStorage.getItem(RECENT_INSPECTIONS_KEY));
+    const overrideList = parseSafe(localStorage.getItem('cinema_xxi_user_inspections_overrides'));
+    let sessionList: ToiletInspectionRecord[] = [];
+    try {
+      sessionList = parseSafe(sessionStorage.getItem('cinema_xxi_toilet_inspections_session'));
+    } catch {
+      sessionList = [];
+    }
+
+    if (
+      primaryList.length === 0 &&
+      recentProtectedList.length === 0 &&
+      overrideList.length === 0 &&
+      sessionList.length === 0 &&
+      sessionSavedInspectionsMap.size === 0
+    ) {
+      cachedInspectionsList = [];
+      return cachedInspectionsList;
+    }
+
+    const mergedMap = new Map<string, ToiletInspectionRecord>();
+    const absorb = (items: Iterable<ToiletInspectionRecord>) => {
+      for (const item of items) {
+        if (!item || !item.outletId || !item.date || item.showNumber === undefined || !item.type) {
+          continue;
+        }
+        const showNum = Number(item.showNumber) || 1;
+        const canonicalId = `${item.outletId}-${item.date}-show${showNum}-${item.type}`;
+        const normalized: ToiletInspectionRecord = {
+          ...item,
+          id: canonicalId,
+          showNumber: showNum,
+        };
+        const existing = mergedMap.get(canonicalId);
+        if (!existing) {
+          mergedMap.set(canonicalId, normalized);
+        } else {
+          const exIso = String((existing as any).updatedAt || '');
+          const newIso = String((normalized as any).updatedAt || '');
+          if (newIso >= exIso) {
+            mergedMap.set(canonicalId, normalized);
+          }
+        }
+      }
+    };
+
+    // Absorb primary, overrides, recent protected buffer, session storage, and in-memory session saves additively
+    absorb(primaryList);
+    absorb(overrideList);
+    absorb(recentProtectedList);
+    absorb(sessionList);
+    absorb(sessionSavedInspectionsMap.values());
+
+    const finalList = Array.from(mergedMap.values());
+    if (overrideList.length > 0 || finalList.length !== primaryList.length) {
+      this.persistInspectionsSafe(finalList);
     }
 
     cachedInspectionsList = finalList;
@@ -1427,6 +1525,9 @@ export const StorageService = {
       ...({ updatedAt: nowIso } as any),
     };
 
+    // Pin in session memory so background sync or localStorage quota can NEVER lose this record
+    sessionSavedInspectionsMap.set(canonicalId, normalizedRecord);
+
     const list = [...this.getInspections()];
     const idx = list.findIndex(
       (i) =>
@@ -1443,15 +1544,7 @@ export const StorageService = {
     }
 
     cachedInspectionsList = list;
-
-    try {
-      const serialized = JSON.stringify(list);
-      localStorage.setItem(KEYS.INSPECTION, serialized);
-      localStorage.setItem('cinema_xxi_user_inspections_overrides', serialized);
-      sessionStorage.setItem('cinema_xxi_toilet_inspections_session', serialized);
-    } catch {
-      // ignore quota error
-    }
+    this.persistInspectionsSafe(list);
 
     this.broadcastChange('inspection');
 
@@ -2514,9 +2607,12 @@ export const StorageService = {
   // Reset all to fresh initial state
   resetAllData() {
     cachedInspectionsList = null;
+    sessionSavedInspectionsMap.clear();
     localStorage.removeItem(KEYS.SALES);
     localStorage.removeItem(KEYS.BAKING);
     localStorage.removeItem(KEYS.INSPECTION);
+    localStorage.removeItem(RECENT_INSPECTIONS_KEY);
+    localStorage.removeItem('cinema_xxi_user_inspections_overrides');
     localStorage.removeItem(KEYS.MOVIES);
     localStorage.removeItem(KEYS.AREAS);
     localStorage.removeItem(KEYS.OUTLETS);

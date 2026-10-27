@@ -42,20 +42,72 @@ const MERGE_BY_OUTLET_DATE_ROWS = new Set([
   '__SYSTEM_SYNC_ADMINISTRATION__',
 ]);
 
+function fastTimestampMs(val: any): number {
+  if (!val) return 0;
+  if (typeof val === 'number') return val;
+  const t = Date.parse(String(val));
+  return Number.isNaN(t) ? 0 : t;
+}
+
+function isNewerOrEqualIso(nextVal: any, prevVal: any): boolean {
+  if (!prevVal) return true;
+  if (!nextVal) return false;
+  const sNext = String(nextVal);
+  const sPrev = String(prevVal);
+  if (sNext.length === sPrev.length && sNext.includes('T') && sPrev.includes('T')) {
+    return sNext >= sPrev;
+  }
+  return fastTimestampMs(sNext) >= fastTimestampMs(sPrev);
+}
+
+function sortAndBoundInspectionShows(shows: any[], isDelta: boolean): any[] {
+  const cutoffDate = new Date(Date.now() - (isDelta ? 3 : 14) * 24 * 60 * 60 * 1000)
+    .toISOString()
+    .slice(0, 10);
+
+  const filtered = shows.filter((item) => {
+    if (!item || typeof item !== 'object') return false;
+    if (isDelta && item.date && String(item.date) < cutoffDate) return false;
+    return true;
+  });
+
+  const baseList = filtered.length > 0 ? filtered : shows;
+  baseList.sort((a: any, b: any) => {
+    const dA = String(a?.date || '');
+    const dB = String(b?.date || '');
+    if (dA !== dB) return dA < dB ? -1 : 1;
+    const tA = String(a?.updatedAt || '');
+    const tB = String(b?.updatedAt || '');
+    if (tA !== tB) return tA < tB ? -1 : 1;
+    return (Number(a?.showNumber) || 0) - (Number(b?.showNumber) || 0);
+  });
+
+  if (isDelta && baseList.length > 240) {
+    return baseList.slice(-240);
+  }
+  if (!isDelta && baseList.length > 3000) {
+    return baseList.slice(-3000);
+  }
+  return baseList;
+}
+
 function smartMergeSalesRow(existingRow: any, incomingRow: any): any {
   if (!existingRow || !Array.isArray(existingRow.shows) || !Array.isArray(incomingRow.shows)) {
     return incomingRow;
   }
 
-  const rowId = String(incomingRow.id || '');
-  const exRowTs = existingRow.updated_at ? new Date(existingRow.updated_at).getTime() : 0;
-  const incRowTs = incomingRow.updated_at ? new Date(incomingRow.updated_at).getTime() : 0;
-  const bestUpdatedAt = incRowTs >= exRowTs ? incomingRow.updated_at : existingRow.updated_at;
+  const rowId = String(incomingRow.id || existingRow.id || '');
+  const bestUpdatedAt = isNewerOrEqualIso(incomingRow.updated_at, existingRow.updated_at)
+    ? incomingRow.updated_at
+    : existingRow.updated_at;
+
+  const isInspectionRow =
+    rowId === '__SYSTEM_SYNC_INSPECTIONS__' || rowId === '__SYSTEM_SYNC_INSPECTIONS_DELTA__';
 
   const getCanonicalKey = (item: any): string => {
     if (!item || typeof item !== 'object') return '';
     if (
-      (rowId === '__SYSTEM_SYNC_INSPECTIONS__' || rowId === '__SYSTEM_SYNC_INSPECTIONS_DELTA__') &&
+      isInspectionRow &&
       item.outletId &&
       item.date &&
       item.showNumber !== undefined &&
@@ -78,19 +130,15 @@ function smartMergeSalesRow(existingRow: any, incomingRow: any): any {
       const key = getCanonicalKey(item);
       if (key) {
         const prev = mergedMap.get(key);
-        if (!prev) {
-          mergedMap.set(key, item);
-        } else {
-          const prevTs = prev.updatedAt ? new Date(prev.updatedAt).getTime() : 0;
-          const nextTs = item.updatedAt ? new Date(item.updatedAt).getTime() : Date.now();
-          if (nextTs >= prevTs) {
-            mergedMap.set(key, item);
-          }
+        if (!prev || isNewerOrEqualIso(item.updatedAt || incomingRow.updated_at, prev.updatedAt)) {
+          mergedMap.set(key, isInspectionRow ? { ...item, id: key, showNumber: Number(item.showNumber) || 1 } : item);
         }
       }
     }
     let finalShows = Array.from(mergedMap.values());
-    if (rowId.endsWith('_DELTA__') && finalShows.length > 150) {
+    if (isInspectionRow) {
+      finalShows = sortAndBoundInspectionShows(finalShows, rowId.endsWith('_DELTA__'));
+    } else if (rowId.endsWith('_DELTA__') && finalShows.length > 150) {
       finalShows = finalShows.slice(-150);
     }
     return {
@@ -114,22 +162,19 @@ function smartMergeSalesRow(existingRow: any, incomingRow: any): any {
       if (item && item.outletId && item.date) {
         const key = `${item.outletId}_${item.date}`;
         const prev = mergedMap.get(key);
-        if (!prev) {
+        if (!prev || isNewerOrEqualIso(item.updatedAt || incomingRow.updated_at, prev.updatedAt)) {
           mergedMap.set(key, item);
-        } else {
-          const prevTs = prev.updatedAt ? new Date(prev.updatedAt).getTime() : 0;
-          const nextTs = item.updatedAt ? new Date(item.updatedAt).getTime() : Date.now();
-          if (nextTs >= prevTs) {
-            mergedMap.set(key, item);
-          }
         }
       } else if (item && item.id) {
         mergedMap.set(String(item.id), item);
       }
     }
     let finalShows = Array.from(mergedMap.values());
-    if (rowId.endsWith('_DELTA__') && finalShows.length > 30) {
-      finalShows = finalShows.slice(-30);
+    if (rowId.endsWith('_DELTA__')) {
+      finalShows.sort((a: any, b: any) => String(a?.date || '').localeCompare(String(b?.date || '')));
+      if (finalShows.length > 40) {
+        finalShows = finalShows.slice(-40);
+      }
     }
     return {
       ...existingRow,
@@ -154,10 +199,17 @@ function mergeStoreTables(target: SyncStoreData, incoming: any): void {
       const existing = target.cinema_sales[id];
       if (!existing) {
         target.cinema_sales[id] = incRow;
+      } else if (
+        existing.updated_at &&
+        incRow.updated_at &&
+        existing.updated_at === incRow.updated_at &&
+        Array.isArray(existing.shows) &&
+        Array.isArray(incRow.shows) &&
+        existing.shows.length === incRow.shows.length
+      ) {
+        continue;
       } else {
-        const exTs = existing.updated_at ? new Date(existing.updated_at).getTime() : 0;
-        const incTs = incRow.updated_at ? new Date(incRow.updated_at).getTime() : 0;
-        if (incTs >= exTs) {
+        if (isNewerOrEqualIso(incRow.updated_at, existing.updated_at)) {
           target.cinema_sales[id] = smartMergeSalesRow(existing, incRow);
         } else {
           target.cinema_sales[id] = smartMergeSalesRow(incRow, existing);
@@ -170,14 +222,8 @@ function mergeStoreTables(target: SyncStoreData, incoming: any): void {
     for (const [id, incRow] of Object.entries<any>(incoming.cinema_occupancy)) {
       if (!incRow || !id) continue;
       const existing = target.cinema_occupancy[id];
-      if (!existing) {
+      if (!existing || isNewerOrEqualIso(incRow.updated_at, existing.updated_at)) {
         target.cinema_occupancy[id] = incRow;
-      } else {
-        const exTs = existing.updated_at ? new Date(existing.updated_at).getTime() : 0;
-        const incTs = incRow.updated_at ? new Date(incRow.updated_at).getTime() : 0;
-        if (incTs >= exTs) {
-          target.cinema_occupancy[id] = incRow;
-        }
       }
     }
   }
@@ -186,14 +232,8 @@ function mergeStoreTables(target: SyncStoreData, incoming: any): void {
     for (const [id, incRow] of Object.entries<any>(incoming.cinema_config)) {
       if (!incRow || !id) continue;
       const existing = target.cinema_config[id];
-      if (!existing) {
+      if (!existing || isNewerOrEqualIso(incRow.updated_at, existing.updated_at)) {
         target.cinema_config[id] = incRow;
-      } else {
-        const exTs = existing.updated_at ? new Date(existing.updated_at).getTime() : 0;
-        const incTs = incRow.updated_at ? new Date(incRow.updated_at).getTime() : 0;
-        if (incTs >= exTs) {
-          target.cinema_config[id] = incRow;
-        }
       }
     }
   }
@@ -202,23 +242,12 @@ function mergeStoreTables(target: SyncStoreData, incoming: any): void {
 async function getHydratedStore(env: any, forceRefresh = false): Promise<SyncStoreData> {
   const store = g.__CINEMA_XXI_EDGE_STORE__;
   const now = Date.now();
-  if (store.hydrated && !forceRefresh && now - (store.lastHydratedAt || 0) < 1500) {
+  if (store.hydrated && !forceRefresh && now - (store.lastHydratedAt || 0) < 8000) {
     return store;
   }
 
-  // 1. Try Cloudflare KV if bound as SYNC_KV
-  if (env && env.SYNC_KV && typeof env.SYNC_KV.get === 'function') {
-    try {
-      const raw = await env.SYNC_KV.get('CINEMA_XXI_STORE', 'json');
-      if (raw && typeof raw === 'object') {
-        mergeStoreTables(store, raw);
-      }
-    } catch {
-      // ignore KV error
-    }
-  }
-
-  // 2. Try Cloudflare Edge Cache API (Zero-Config)
+  // 1. Try Cloudflare Edge Cache API (Zero-Config, fastest local colocation cache)
+  let loadedFromCache = false;
   try {
     const cache = (globalThis as any).caches?.default;
     if (cache) {
@@ -227,11 +256,30 @@ async function getHydratedStore(env: any, forceRefresh = false): Promise<SyncSto
         const raw = await cachedResp.json();
         if (raw && typeof raw === 'object') {
           mergeStoreTables(store, raw);
+          loadedFromCache = true;
         }
       }
     }
   } catch {
     // ignore cache error
+  }
+
+  // 2. Try Cloudflare KV if bound as SYNC_KV (only on cold start or every 30s)
+  if (
+    env &&
+    env.SYNC_KV &&
+    typeof env.SYNC_KV.get === 'function' &&
+    (!store.hydrated || !loadedFromCache || now - (store.lastKvHydratedAt || 0) > 30000)
+  ) {
+    try {
+      const raw = await env.SYNC_KV.get('CINEMA_XXI_STORE', 'json');
+      if (raw && typeof raw === 'object') {
+        mergeStoreTables(store, raw);
+        store.lastKvHydratedAt = now;
+      }
+    } catch {
+      // ignore KV error
+    }
   }
 
   store.hydrated = true;
@@ -240,13 +288,13 @@ async function getHydratedStore(env: any, forceRefresh = false): Promise<SyncSto
 }
 
 async function persistEdgeStore(store: SyncStoreData, env: any, ctx: any): Promise<void> {
-  const payload = JSON.stringify({
-    cinema_sales: store.cinema_sales,
-    cinema_occupancy: store.cinema_occupancy,
-    cinema_config: store.cinema_config,
-  });
-
   const saveTask = async () => {
+    const payload = JSON.stringify({
+      cinema_sales: store.cinema_sales,
+      cinema_occupancy: store.cinema_occupancy,
+      cinema_config: store.cinema_config,
+    });
+
     try {
       const cache = (globalThis as any).caches?.default;
       if (cache) {
@@ -326,7 +374,7 @@ export const onRequest = async (context: any): Promise<Response> => {
   if (action === 'upsert' && request.method === 'POST') {
     try {
       const body: any = await request.json();
-      const { table, records, seedMode } = body || {};
+      const { table, records, seedMode, returnFull } = body || {};
       if (!table || !records) {
         return new Response(JSON.stringify({ error: 'Missing table or records' }), {
           status: 400,
@@ -343,7 +391,7 @@ export const onRequest = async (context: any): Promise<Response> => {
 
       const list = Array.isArray(records) ? records : [records];
       const nowIso = new Date().toISOString();
-      const updatedRows: any[] = [];
+      const updatedMeta: any[] = [];
 
       for (const item of list) {
         if (!item || !item.id) continue;
@@ -368,15 +416,55 @@ export const onRequest = async (context: any): Promise<Response> => {
 
         if (table === 'cinema_sales') {
           targetTable[id] = smartMergeSalesRow(existing, normalized);
+
+          if (id === '__SYSTEM_SYNC_INSPECTIONS_DELTA__') {
+            const masterId = '__SYSTEM_SYNC_INSPECTIONS__';
+            const masterExisting = targetTable[masterId] || {
+              id: masterId,
+              outlet_id: '__SYSTEM_SYNC__',
+              date: '2026-01-01',
+              shows: [],
+              updated_at: normalized.updated_at,
+            };
+            targetTable[masterId] = smartMergeSalesRow(masterExisting, {
+              ...normalized,
+              id: masterId,
+            });
+          } else if (id === '__SYSTEM_SYNC_DAILY_SALES_DELTA__') {
+            const masterId = '__SYSTEM_SYNC_DAILY_SALES__';
+            const masterExisting = targetTable[masterId] || {
+              id: masterId,
+              outlet_id: '__SYSTEM_SYNC__',
+              date: '2026-01-01',
+              shows: [],
+              updated_at: normalized.updated_at,
+            };
+            targetTable[masterId] = smartMergeSalesRow(masterExisting, {
+              ...normalized,
+              id: masterId,
+            });
+          }
         } else {
           targetTable[id] = normalized;
         }
-        updatedRows.push(targetTable[id]);
+
+        const saved = targetTable[id];
+        updatedMeta.push(
+          returnFull
+            ? saved
+            : {
+                id: saved.id,
+                outlet_id: saved.outlet_id,
+                date: saved.date,
+                updated_at: saved.updated_at,
+                count: Array.isArray(saved.shows) ? saved.shows.length : undefined,
+              }
+        );
       }
 
       await persistEdgeStore(store, env, context);
 
-      return new Response(JSON.stringify({ data: updatedRows, error: null }), {
+      return new Response(JSON.stringify({ data: updatedMeta, error: null }), {
         status: 200,
         headers: jsonHeaders,
       });

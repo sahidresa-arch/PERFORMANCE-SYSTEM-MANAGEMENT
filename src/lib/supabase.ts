@@ -172,21 +172,103 @@ let hybridClientKey = '';
 let supabaseQuotaBackoffUntil = 0;
 let lastSupabaseMetaPollAt = 0;
 
-function getWorkerSyncEndpoints(action: 'query' | 'upsert' | 'status'): string[] {
+const LIVE_WORKER_ORIGINS = [
+  'https://performance-system-management.bdv3.workers.dev',
+  'https://performance-system-management-v2.bdv3.workers.dev',
+];
+
+function getWorkerSyncEndpoints(
+  action: 'query' | 'upsert' | 'status',
+  isSeedMode = false
+): string[] {
   const endpoints = [`/api/sync/${action}`];
-  if (typeof window !== 'undefined' && window.location?.hostname?.includes('bdv3.workers.dev')) {
-    const host = window.location.hostname;
-    if (host.includes('-v2.')) {
-      endpoints.push(`https://performance-system-management.bdv3.workers.dev/api/sync/${action}`);
-    } else {
-      endpoints.push(`https://performance-system-management-v2.bdv3.workers.dev/api/sync/${action}`);
+  if (typeof window !== 'undefined') {
+    const host = window.location?.hostname || '';
+    if (host.includes('bdv3.workers.dev')) {
+      if (host.includes('-v2.')) {
+        endpoints.push(`${LIVE_WORKER_ORIGINS[0]}/api/sync/${action}`);
+      } else {
+        endpoints.push(`${LIVE_WORKER_ORIGINS[1]}/api/sync/${action}`);
+      }
+    } else if (!isSeedMode) {
+      // Auto-Bridge AI Studio Preview (run.app / localhost) to Web Live Workers
+      // Safe mode: seedMode is excluded so AI Studio initial local seed never overwrites Web Live
+      endpoints.push(`${LIVE_WORKER_ORIGINS[0]}/api/sync/${action}`);
+      endpoints.push(`${LIVE_WORKER_ORIGINS[1]}/api/sync/${action}`);
     }
   }
   return endpoints;
 }
 
+function mergeSyncRowObjects(rowA: any, rowB: any): any {
+  if (!rowA) return rowB;
+  if (!rowB) return rowA;
+  const tsA = rowA.updated_at ? new Date(rowA.updated_at).getTime() : 0;
+  const tsB = rowB.updated_at ? new Date(rowB.updated_at).getTime() : 0;
+  const older = tsA <= tsB ? rowA : rowB;
+  const newer = tsA <= tsB ? rowB : rowA;
+
+  if (
+    Array.isArray(older.shows) &&
+    Array.isArray(newer.shows) &&
+    String(newer.id || '').startsWith('__SYSTEM_SYNC_')
+  ) {
+    const firstSample = newer.shows[0] || older.shows[0];
+    if (
+      firstSample &&
+      typeof firstSample === 'object' &&
+      !Array.isArray(firstSample) &&
+      (firstSample.id ||
+        (firstSample.outletId && (firstSample.date || firstSample.month || firstSample.year !== undefined)))
+    ) {
+      const itemMap = new Map<string, any>();
+      const getKey = (item: any, idx: number) => {
+        if (!item || typeof item !== 'object') return `idx_${idx}`;
+        if (item.outletId && item.date && item.showNumber !== undefined && item.type) {
+          return `${item.outletId}-${item.date}-show${Number(item.showNumber)}-${item.type}`;
+        }
+        if (item.id) return String(item.id);
+        if (item.outletId && item.year !== undefined && item.month !== undefined) {
+          return `${item.outletId}_${item.year}_${item.month}`;
+        }
+        if (item.outletId && item.date && item.nik) {
+          return `${item.outletId}_${item.date}_${item.nik}`;
+        }
+        if (item.outletId && item.date) {
+          return `${item.outletId}_${item.date}`;
+        }
+        if (item.outletId && item.month) {
+          return `${item.outletId}_${item.month}`;
+        }
+        return `idx_${idx}`;
+      };
+      const putItem = (it: any, idx: number) => {
+        const k = getKey(it, idx);
+        const prev = itemMap.get(k);
+        if (!prev) {
+          itemMap.set(k, it);
+        } else {
+          const pTs = prev.updatedAt ? new Date(prev.updatedAt).getTime() : 0;
+          const nTs = it.updatedAt ? new Date(it.updatedAt).getTime() : 0;
+          if (nTs >= pTs) {
+            itemMap.set(k, it);
+          }
+        }
+      };
+      older.shows.forEach((it: any, i: number) => putItem(it, i));
+      newer.shows.forEach((it: any, i: number) => putItem(it, i));
+      return {
+        ...newer,
+        shows: Array.from(itemMap.values()),
+      };
+    }
+  }
+
+  return newer;
+}
+
 async function callInternalSyncQuery(payload: any): Promise<any> {
-  const endpoints = getWorkerSyncEndpoints('query');
+  const endpoints = getWorkerSyncEndpoints('query', false);
 
   const fetchOne = async (url: string) => {
     try {
@@ -225,17 +307,13 @@ async function callInternalSyncQuery(payload: any): Promise<any> {
       if (!bestRow) {
         bestRow = candidate;
       } else {
-        const bTs = bestRow.updated_at ? new Date(bestRow.updated_at).getTime() : 0;
-        const cTs = candidate.updated_at ? new Date(candidate.updated_at).getTime() : 0;
-        if (cTs > bTs) {
-          bestRow = candidate;
-        }
+        bestRow = mergeSyncRowObjects(bestRow, candidate);
       }
     }
     return { data: bestRow, error: null };
   }
 
-  // Merge array results across endpoints by row.id picking newest updated_at
+  // Merge array results across endpoints by row.id additively picking newest updated_at
   const mergedMap = new Map<string, any>();
   for (const res of results) {
     const list = Array.isArray(res?.data) ? res.data : [];
@@ -246,11 +324,7 @@ async function callInternalSyncQuery(payload: any): Promise<any> {
       if (!prev) {
         mergedMap.set(key, row);
       } else {
-        const pTs = prev.updated_at ? new Date(prev.updated_at).getTime() : 0;
-        const rTs = row.updated_at ? new Date(row.updated_at).getTime() : 0;
-        if (rTs >= pTs) {
-          mergedMap.set(key, row);
-        }
+        mergedMap.set(key, mergeSyncRowObjects(prev, row));
       }
     }
   }
@@ -259,7 +333,7 @@ async function callInternalSyncQuery(payload: any): Promise<any> {
 }
 
 async function callInternalSyncUpsert(payload: any): Promise<{ ok: boolean; data: any }> {
-  const endpoints = getWorkerSyncEndpoints('upsert');
+  const endpoints = getWorkerSyncEndpoints('upsert', Boolean(payload?.seedMode));
   let primaryOk = false;
   let primaryData: any = null;
 
@@ -300,56 +374,6 @@ function createInternalTableQueryBuilder(table: string, rawSupabase: SupabaseCli
   let inFilter: { col: string; vals: any[] } | null = null;
   let likeFilter: { col: string; pattern: string } | null = null;
   let singleMode: 'none' | 'maybeSingle' | 'single' = 'none';
-
-  const mergeSyncRowObjects = (rowA: any, rowB: any): any => {
-    if (!rowA) return rowB;
-    if (!rowB) return rowA;
-    const tsA = rowA.updated_at ? new Date(rowA.updated_at).getTime() : 0;
-    const tsB = rowB.updated_at ? new Date(rowB.updated_at).getTime() : 0;
-    const older = tsA <= tsB ? rowA : rowB;
-    const newer = tsA <= tsB ? rowB : rowA;
-
-    if (
-      Array.isArray(older.shows) &&
-      Array.isArray(newer.shows) &&
-      String(newer.id || '').startsWith('__SYSTEM_SYNC_')
-    ) {
-      const firstSample = newer.shows[0] || older.shows[0];
-      if (
-        firstSample &&
-        typeof firstSample === 'object' &&
-        !Array.isArray(firstSample) &&
-        (firstSample.id || (firstSample.outletId && (firstSample.date || firstSample.month)))
-      ) {
-        const itemMap = new Map<string, any>();
-        const getKey = (item: any, idx: number) => {
-          if (!item || typeof item !== 'object') return `idx_${idx}`;
-          if (item.outletId && item.date && item.showNumber !== undefined && item.type) {
-            return `${item.outletId}-${item.date}-show${Number(item.showNumber)}-${item.type}`;
-          }
-          if (item.id) return String(item.id);
-          if (item.outletId && item.date && item.nik) {
-            return `${item.outletId}_${item.date}_${item.nik}`;
-          }
-          if (item.outletId && item.date) {
-            return `${item.outletId}_${item.date}`;
-          }
-          if (item.outletId && item.month) {
-            return `${item.outletId}_${item.month}`;
-          }
-          return `idx_${idx}`;
-        };
-        older.shows.forEach((it: any, i: number) => itemMap.set(getKey(it, i), it));
-        newer.shows.forEach((it: any, i: number) => itemMap.set(getKey(it, i), it));
-        return {
-          ...newer,
-          shows: Array.from(itemMap.values()),
-        };
-      }
-    }
-
-    return newer;
-  };
 
   const executeSelect = async (): Promise<{ data: any; error: any; count?: number }> => {
     const fetchInternal = () =>
@@ -1194,11 +1218,17 @@ export async function mergeRemoteOccupancyToLocal(
         try {
           const manRaw = localStorage.getItem('cinema_xxi_occupancy_manifest');
           const man = manRaw ? JSON.parse(manRaw) : {};
-          if (!man[outletId]) man[outletId] = [];
+          if (!man[outletId] || !Array.isArray(man[outletId])) man[outletId] = [];
           if (!man[outletId].includes(date)) {
             man[outletId].push(date);
-            localStorage.setItem('cinema_xxi_occupancy_manifest', JSON.stringify(man));
           }
+          man[`${outletId}_${date}`] = {
+            outletId,
+            date,
+            data: rows,
+            updatedAt: row.updated_at || new Date().toISOString(),
+          };
+          localStorage.setItem('cinema_xxi_occupancy_manifest', JSON.stringify(man));
         } catch {
           // ignore
         }
@@ -1252,7 +1282,8 @@ function normalizeInspectionItem(item: any): ToiletInspectionRecord | null {
 }
 
 /**
- * Sinkronisasi Satu Record Card Inspection ke Supabase (Delta Instan + Safe Merge Master Archive)
+ * Sinkronisasi Satu Record Card Inspection ke Supabase & Edge Sync Engine
+ * (Delta Instan Hanya untuk Outlet & Tanggal Aktif + Lightweight Additive Master Sync)
  */
 export async function syncInspectionToSupabase(record: ToiletInspectionRecord): Promise<boolean> {
   const client = getSupabase();
@@ -1266,47 +1297,78 @@ export async function syncInspectionToSupabase(record: ToiletInspectionRecord): 
     });
     if (!normalizedRecord) return false;
 
-    // 1. Seed Delta Buffer dengan SELURUH data inspeksi dari outlet & tanggal yang sama dari localStorage
-    // agar Show 1 s/d Show 5 di outlet tersebut selalu utuh di dalam paket Delta maupun Master!
+    const threeDaysAgo = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+
+    // Prune any stale historical dates (> 3 days old) from in-memory delta map so they never evict today's shows
+    for (const [k, v] of recentInspectionsDeltaMap.entries()) {
+      if (v && v.date && v.date < threeDaysAgo) {
+        recentInspectionsDeltaMap.delete(k);
+      }
+    }
+
+    // 1. Seed Delta Buffer HANYA dengan data inspeksi dari outlet DAN tanggal yang SAMA (Show 1 s/d Show 5 hari ini)
+    // JANGAN memasukkan tanggal historis lama dari outlet yang sama karena akan memenuhi kuota 150 item _DELTA__!
     const localList = StorageService.getInspections();
-    localList
-      .filter((l) => l && (l.date === normalizedRecord.date || l.outletId === normalizedRecord.outletId))
-      .slice(0, 120)
-      .forEach((l) => {
-        const norm = normalizeInspectionItem(l);
-        if (norm && !recentInspectionsDeltaMap.has(norm.id)) {
-          recentInspectionsDeltaMap.set(norm.id, norm);
-        }
-      });
+    const sameOutletAndDateShows = localList.filter(
+      (l) => l && l.date === normalizedRecord.date && l.outletId === normalizedRecord.outletId
+    );
+    for (const l of sameOutletAndDateShows) {
+      const norm = normalizeInspectionItem(l);
+      if (norm) {
+        recentInspectionsDeltaMap.set(norm.id, norm);
+      }
+    }
 
     recentInspectionsDeltaMap.delete(normalizedRecord.id);
     recentInspectionsDeltaMap.set(normalizedRecord.id, normalizedRecord);
-    while (recentInspectionsDeltaMap.size > 150) {
-      const oldestKey = recentInspectionsDeltaMap.keys().next().value;
-      if (oldestKey) recentInspectionsDeltaMap.delete(oldestKey);
-      else break;
+
+    // Sort chronologically by date & updatedAt and cap at 200 recent items
+    const sortedDelta = Array.from(recentInspectionsDeltaMap.values()).sort((a, b) => {
+      const dA = String(a?.date || '');
+      const dB = String(b?.date || '');
+      if (dA !== dB) return dA < dB ? -1 : 1;
+      const uA = String((a as any)?.updatedAt || '');
+      const uB = String((b as any)?.updatedAt || '');
+      return uA < uB ? -1 : uA > uB ? 1 : 0;
+    });
+    const boundedDelta = sortedDelta.slice(-200);
+    recentInspectionsDeltaMap.clear();
+    for (const item of boundedDelta) {
+      recentInspectionsDeltaMap.set(item.id, item);
     }
 
-    const deltaInspectionsList = Array.from(recentInspectionsDeltaMap.values());
-    recordSyncTimestamp('__SYSTEM_SYNC_INSPECTIONS_DELTA__', nowIso, true);
+    // Payload yang dikirim saat klik Simpan cukup berisi semua show dari outlet & tanggal tersebut + antrean terbaru (~3-15 KB)
+    // Server (worker.ts / server.ts) otomatis melakukan smartMergeSalesRow secara aditif ke _DELTA__ dan Master!
+    const outletDatePayloadMap = new Map<string, ToiletInspectionRecord>();
+    for (const item of sameOutletAndDateShows) {
+      const norm = normalizeInspectionItem(item);
+      if (norm) outletDatePayloadMap.set(norm.id, norm);
+    }
+    outletDatePayloadMap.set(normalizedRecord.id, normalizedRecord);
+    const lightweightDeltaPayload = Array.from(outletDatePayloadMap.values());
 
-    // Kirim Delta secara instan ke Internal Server & Supabase agar live realtime antar device langsung terbaca
+    recordSyncTimestamp('__SYSTEM_SYNC_INSPECTIONS_DELTA__', nowIso, true);
+    recordSyncTimestamp('__SYSTEM_SYNC_INSPECTIONS__', nowIso, true);
+
+    // Kirim Delta ringan (~3 KB) secara instan ke Internal Server & Live Worker (Server otomatis cross-merge ke Master)
     const { error: deltaErr } = await client.from('cinema_sales').upsert(
       [
         {
           id: '__SYSTEM_SYNC_INSPECTIONS_DELTA__',
           outlet_id: '__SYSTEM_SYNC__',
           date: '2026-01-01',
-          shows: deltaInspectionsList as any,
+          shows: lightweightDeltaPayload as any,
           updated_at: nowIso,
         },
       ],
       { onConflict: 'id' }
     );
 
-    // 2. Debounce Master Archive singkat (300ms) dengan Safe Remote Merge berbasis Canonical Key
-    // agar bila browser ditutup data sudah tersimpan permanen & tidak pernah menimpa show sebelumnya
-    pendingArchiveInspections.set(normalizedRecord.id, normalizedRecord);
+    // 2. Debounce Master Archive singkat (300ms): kirim paket aditif ringan ke __SYSTEM_SYNC_INSPECTIONS__
+    // tanpa mengunduh & mengunggah ulang seluruh 2.639 item (1.2 MB) agar Worker tidak pernah kena Error 503 CPU Limit!
+    for (const item of lightweightDeltaPayload) {
+      pendingArchiveInspections.set(item.id, item);
+    }
     if (inspectionArchiveTimer) {
       clearTimeout(inspectionArchiveTimer);
     }
@@ -1314,63 +1376,10 @@ export async function syncInspectionToSupabase(record: ToiletInspectionRecord): 
       inspectionArchiveTimer = null;
       try {
         const archiveClient = getSupabase();
-        if (!archiveClient) return;
+        if (!archiveClient || pendingArchiveInspections.size === 0) return;
         const archiveIso = new Date().toISOString();
-
-        const allMap = new Map<string, ToiletInspectionRecord>();
-        const putAdditive = (rawItem: any) => {
-          const norm = normalizeInspectionItem(rawItem);
-          if (!norm) return;
-          const prev = allMap.get(norm.id);
-          if (!prev) {
-            allMap.set(norm.id, norm);
-          } else {
-            const prevTs = (prev as any).updatedAt ? new Date((prev as any).updatedAt).getTime() : 0;
-            const nextTs = (norm as any).updatedAt ? new Date((norm as any).updatedAt).getTime() : 0;
-            if (nextTs >= prevTs) {
-              allMap.set(norm.id, norm);
-            }
-          }
-        };
-
-        // Tarik dulu data yang sudah ada di server agar Device A tidak menimpa data outlet/show lain
-        const { data: remoteRows } = await archiveClient
-          .from('cinema_sales')
-          .select('id, shows, updated_at')
-          .in('id', ['__SYSTEM_SYNC_INSPECTIONS__', '__SYSTEM_SYNC_INSPECTIONS_DELTA__']);
-
-        if (Array.isArray(remoteRows)) {
-          for (const rRow of remoteRows) {
-            if (rRow && Array.isArray(rRow.shows)) {
-              for (const item of rRow.shows) {
-                putAdditive(item);
-              }
-            }
-          }
-        }
-
-        // Gabungkan dengan localStorage & pendingArchiveInspections terbaru
-        const currentLocalList = StorageService.getInspections();
-        currentLocalList.forEach((l) => putAdditive(l));
-        pendingArchiveInspections.forEach((v) => putAdditive(v));
+        const batchToMerge = Array.from(pendingArchiveInspections.values());
         pendingArchiveInspections.clear();
-
-        // Simpan juga hasil gabungan ke localStorage + backup overrides
-        const mergedFullList = Array.from(allMap.values());
-        try {
-          const serialized = JSON.stringify(mergedFullList);
-          localStorage.setItem('cinema_xxi_toilet_inspections', serialized);
-          localStorage.setItem('cinema_xxi_user_inspections_overrides', serialized);
-          sessionStorage.setItem('cinema_xxi_toilet_inspections_session', serialized);
-        } catch {
-          // ignore quota error
-        }
-
-        // Prune data inspections lama (> 14 hari) dari master cloud sync agar ukuran row tetap ringan
-        const fourteenDaysAgo = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-        const filteredArchive = mergedFullList.filter(
-          (ins) => !ins.date || ins.date >= fourteenDaysAgo
-        );
 
         recordSyncTimestamp('__SYSTEM_SYNC_INSPECTIONS__', archiveIso, true);
         await archiveClient.from('cinema_sales').upsert(
@@ -1379,7 +1388,7 @@ export async function syncInspectionToSupabase(record: ToiletInspectionRecord): 
               id: '__SYSTEM_SYNC_INSPECTIONS__',
               outlet_id: '__SYSTEM_SYNC__',
               date: '2026-01-01',
-              shows: filteredArchive as any,
+              shows: batchToMerge as any,
               updated_at: archiveIso,
             },
           ],
@@ -1532,32 +1541,23 @@ export async function mergeRemoteInspectionsToLocal(deltaOnly = false): Promise<
   const finalList = Array.from(mergedMap.values());
 
   if (updated) {
-    try {
-      const serialized = JSON.stringify(finalList);
-      localStorage.setItem('cinema_xxi_toilet_inspections', serialized);
-      localStorage.setItem('cinema_xxi_user_inspections_overrides', serialized);
-      sessionStorage.setItem('cinema_xxi_toilet_inspections_session', serialized);
-    } catch {
-      // ignore
-    }
-    StorageService.invalidateInspectionsCache();
+    StorageService.saveMergedInspectionsList(finalList);
     StorageService.broadcastChange('inspection');
   }
 
-  // Auto-Heal: Jika Device A memiliki data Card Inspection lokal (14 hari terakhir) yang belum masuk ke Server/Device B,
-  // otomatis dorong (push) hasil gabungan ke Server sekali saat sinkronisasi penuh!
+  // Auto-Heal: Jika Device A memiliki data Card Inspection lokal (3 hari terakhir) yang belum masuk ke Server/Device B,
+  // otomatis dorong (push) item yang belum ada tersebut ke Server sekali saat sinkronisasi penuh!
   if (!deltaOnly && !hasAutoHealedLocalInspections && finalList.length > 0) {
-    const fourteenDaysAgo = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-    const localRecentMissingOnRemote = finalList.some(
-      (l) => l && l.id && (!l.date || l.date >= fourteenDaysAgo) && !remoteMap.has(l.id)
-    );
+    const threeDaysAgo = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const missingRecentItems = finalList
+      .filter((l) => l && l.id && (!l.date || l.date >= threeDaysAgo) && !remoteMap.has(l.id))
+      .sort((a, b) => String(a.date || '').localeCompare(String(b.date || '')));
 
-    if (localRecentMissingOnRemote) {
+    if (missingRecentItems.length > 0) {
       hasAutoHealedLocalInspections = true;
       const client = getSupabase();
       if (client) {
         const nowIso = new Date().toISOString();
-        const activeArchive = finalList.filter((ins) => !ins.date || ins.date >= fourteenDaysAgo);
         recordSyncTimestamp('__SYSTEM_SYNC_INSPECTIONS__', nowIso, true);
         recordSyncTimestamp('__SYSTEM_SYNC_INSPECTIONS_DELTA__', nowIso, true);
         Promise.resolve(
@@ -1566,17 +1566,10 @@ export async function mergeRemoteInspectionsToLocal(deltaOnly = false): Promise<
             .upsert(
               [
                 {
-                  id: '__SYSTEM_SYNC_INSPECTIONS__',
-                  outlet_id: '__SYSTEM_SYNC__',
-                  date: '2026-01-01',
-                  shows: activeArchive as any,
-                  updated_at: nowIso,
-                },
-                {
                   id: '__SYSTEM_SYNC_INSPECTIONS_DELTA__',
                   outlet_id: '__SYSTEM_SYNC__',
                   date: '2026-01-01',
-                  shows: activeArchive.slice(0, 120) as any,
+                  shows: missingRecentItems.slice(-180) as any,
                   updated_at: nowIso,
                 },
               ],
@@ -2847,36 +2840,35 @@ export async function pullAllRemoteToLocal(forceFull = false): Promise<void> {
     }
 
     // Jika pada saat buka pertama kali ada modul yang belum pernah ada di localStorage sama sekali, pastikan di-fetch
-    if (!hasCompletedInitialPull) {
+    const isInitialPullNow = !hasCompletedInitialPull;
+    if (isInitialPullNow) {
       const serverIds = new Set(metaRows.map((r: any) => String(r?.id || '')));
-      if (!localStorage.getItem('cinema_xxi_user_sales_overrides') && serverIds.has('__SYSTEM_SYNC_DAILY_SALES__')) {
+      if (serverIds.has('__SYSTEM_SYNC_DAILY_SALES__')) {
         changedIds.add('__SYSTEM_SYNC_DAILY_SALES__');
       }
-      if (!localStorage.getItem('cinema_xxi_outlets') && serverIds.has('__SYSTEM_SYNC_OUTLETS__')) {
+      if (serverIds.has('__SYSTEM_SYNC_OUTLETS__')) {
         changedIds.add('__SYSTEM_SYNC_OUTLETS__');
       }
-      if (StorageService.getInspections().length === 0 && (serverIds.has('__SYSTEM_SYNC_INSPECTIONS__') || serverIds.has('__SYSTEM_SYNC_INSPECTIONS_DELTA__'))) {
+      if (serverIds.has('__SYSTEM_SYNC_INSPECTIONS__') || serverIds.has('__SYSTEM_SYNC_INSPECTIONS_DELTA__')) {
         changedIds.add('__SYSTEM_SYNC_INSPECTIONS__');
       }
-      if (!localStorage.getItem('cinema_xxi_occupancy_manifest') && serverIds.has('__SYSTEM_SYNC_OCCUPANCY__')) {
-        changedIds.add('__SYSTEM_SYNC_OCCUPANCY__');
-      }
-      if (!localStorage.getItem('cinema_xxi_cashier_performance_daily') && serverIds.has('__SYSTEM_SYNC_SDM_PERFORMANCE__')) {
+      changedIds.add('__SYSTEM_SYNC_OCCUPANCY__');
+      if (serverIds.has('__SYSTEM_SYNC_SDM_PERFORMANCE__')) {
         changedIds.add('__SYSTEM_SYNC_SDM_PERFORMANCE__');
       }
-      if (!localStorage.getItem('cinema_xxi_cashier_monthly_products') && serverIds.has('__SYSTEM_SYNC_SDM_PRODUCTS__')) {
+      if (serverIds.has('__SYSTEM_SYNC_SDM_PRODUCTS__')) {
         changedIds.add('__SYSTEM_SYNC_SDM_PRODUCTS__');
       }
-      if (!localStorage.getItem('cinema_xxi_baking_sales') && serverIds.has('__SYSTEM_SYNC_BAKING_SALES__')) {
+      if (serverIds.has('__SYSTEM_SYNC_BAKING_SALES__')) {
         changedIds.add('__SYSTEM_SYNC_BAKING_SALES__');
       }
-      if (!localStorage.getItem('cinema_xxi_employees') && serverIds.has('__SYSTEM_SYNC_EMPLOYEES__')) {
+      if (serverIds.has('__SYSTEM_SYNC_EMPLOYEES__')) {
         changedIds.add('__SYSTEM_SYNC_EMPLOYEES__');
       }
-      hasCompletedInitialPull = true;
     }
 
     if (changedIds.size === 0) {
+      hasCompletedInitialPull = true;
       // 100% Sinkron -> 0 KB JSONB diunduh (Hemat 99.9% Egress & Log Ingestion bahkan saat Refresh F5!)
       return;
     }
@@ -2939,6 +2931,8 @@ export async function pullAllRemoteToLocal(forceFull = false): Promise<void> {
       await Promise.allSettled(tasks);
     }
 
+    hasCompletedInitialPull = true;
+
     // Simpan semua timestamp terbaru yang sudah berhasil ditarik
     for (const row of metaRows) {
       const id = String(row.id || '');
@@ -2965,21 +2959,17 @@ async function seedInternalServerFromLocalDevice(): Promise<void> {
     // 1. Inspections
     const inspections = StorageService.getInspections();
     if (inspections.length > 0) {
-      const fourteenDaysAgo = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-      const recentList = inspections.filter((ins) => !ins.date || ins.date >= fourteenDaysAgo);
-      if (recentList.length > 0) {
-        batchRecords.push({
-          id: '__SYSTEM_SYNC_INSPECTIONS__',
-          outlet_id: '__SYSTEM_SYNC__',
-          date: '2026-01-01',
-          shows: recentList,
-          updated_at: getSeedTs('__SYSTEM_SYNC_INSPECTIONS__'),
-        });
+      const threeDaysAgo = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      const recentDeltaList = inspections
+        .filter((ins) => ins && (!ins.date || ins.date >= threeDaysAgo))
+        .sort((a, b) => String(a.date || '').localeCompare(String(b.date || '')))
+        .slice(-180);
+      if (recentDeltaList.length > 0) {
         batchRecords.push({
           id: '__SYSTEM_SYNC_INSPECTIONS_DELTA__',
           outlet_id: '__SYSTEM_SYNC__',
           date: '2026-01-01',
-          shows: recentList.slice(0, 25),
+          shows: recentDeltaList,
           updated_at: getSeedTs('__SYSTEM_SYNC_INSPECTIONS_DELTA__'),
         });
       }

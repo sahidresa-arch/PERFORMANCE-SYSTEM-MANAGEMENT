@@ -497,26 +497,38 @@ export const ToiletInspection: React.FC<ToiletInspectionProps> = ({
       }),
     };
 
-    StorageService.saveInspection(record);
-    reloadInspections();
+    const savedRecord = StorageService.saveInspection(record);
+    const updatedInspections = StorageService.getInspections();
+    setInspections(updatedInspections);
 
-    // Auto switch to next incomplete show after saving
+    // Auto switch to next incomplete show after saving (deterministic check on updatedInspections)
     manualShowRef.current = null;
-    const currentShow = formShowNumber;
-    const nextIncomplete = getFirstIncompleteShow(formOutletId, formToiletType);
-    const allCompletedNow = [1, 2, 3, 4, 5].every((s) =>
-      s === currentShow ? true : isShowCompleted(s, formOutletId, formToiletType)
-    );
+    const currentShow = Number(formShowNumber);
+    const checkCompletedWithSaved = (showNum: number): boolean => {
+      if (showNum === currentShow) return true;
+      const found = updatedInspections.find(
+        (i) =>
+          i.outletId === formOutletId &&
+          i.date === selectedDate &&
+          Number(i.showNumber) === showNum &&
+          i.type === formToiletType
+      );
+      return found ? isChecklistComplete(found.checklist) : false;
+    };
+
+    const nextIncomplete =
+      [1, 2, 3, 4, 5].find((s) => !checkCompletedWithSaved(s)) ?? 5;
+    const allCompletedNow = [1, 2, 3, 4, 5].every((s) => checkCompletedWithSaved(s));
 
     if (!allCompletedNow) {
-      setFormShowNumber(nextIncomplete);
+      setFormShowNumber(nextIncomplete as 1 | 2 | 3 | 4 | 5);
       setStatusMessage(
-        `Laporan Show ${currentShow} (${formToiletType}) Berhasil Disimpan! Otomatis lanjut ke Show ${nextIncomplete} yang siap diceklis.`
+        `Laporan Show ${currentShow} (${formToiletType}) Berhasil Disimpan (${savedRecord.time})! Otomatis lanjut ke Show ${nextIncomplete} yang siap diceklis.`
       );
     } else {
       setFormShowNumber(5);
       setStatusMessage(
-        `Laporan Show ${currentShow} (${formToiletType}) Berhasil Disimpan! Semua Show (1-5) untuk Toilet ${formToiletType} telah selesai.`
+        `Laporan Show ${currentShow} (${formToiletType}) Berhasil Disimpan (${savedRecord.time})! Semua Show (1-5) untuk Toilet ${formToiletType} telah selesai.`
       );
     }
 
