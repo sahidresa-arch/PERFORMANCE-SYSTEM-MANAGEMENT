@@ -82,6 +82,38 @@ export default function App() {
     }
   }, [currentUser, activeMenu]);
 
+  // Auto-rollover tanggal aktif (selectedDate) jika tab browser HP dibiarkan terbuka melewati tengah malam (pergantian hari)
+  const lastKnownTodayRef = React.useRef<string>(getTodayDateString());
+  useEffect(() => {
+    const checkDateRollover = () => {
+      const currentToday = getTodayDateString();
+      const prevToday = lastKnownTodayRef.current;
+      if (currentToday !== prevToday) {
+        lastKnownTodayRef.current = currentToday;
+        setSelectedDate((prevSelected) => {
+          if (prevSelected === prevToday || currentUser?.role === 'cleaner') {
+            return currentToday;
+          }
+          return prevSelected;
+        });
+      }
+    };
+
+    const interval = setInterval(checkDateRollover, 30000);
+    const handleVisibilityOrFocus = () => {
+      if (document.visibilityState === 'visible') {
+        checkDateRollover();
+      }
+    };
+    window.addEventListener('focus', handleVisibilityOrFocus);
+    document.addEventListener('visibilitychange', handleVisibilityOrFocus);
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('focus', handleVisibilityOrFocus);
+      document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
+    };
+  }, [currentUser?.role]);
+
   // Safe initialization
   useEffect(() => {
     try {

@@ -264,6 +264,7 @@ export const ToiletInspection: React.FC<ToiletInspectionProps> = ({
     setIsSyncingLive(true);
     try {
       const m = await import('../../lib/supabase');
+      await m.pushLocalInspectionsForOutletDate(formOutletId || undefined, selectedDate);
       await m.mergeRemoteInspectionsToLocal(false);
       await m.pullAllRemoteToLocal(true);
       reloadInspections();
@@ -280,6 +281,7 @@ export const ToiletInspection: React.FC<ToiletInspectionProps> = ({
     import('../../lib/supabase')
       .then(async (m) => {
         try {
+          await m.pushLocalInspectionsForOutletDate(formOutletId || undefined, selectedDate);
           const changed = await m.mergeRemoteInspectionsToLocal(false);
           if (changed) reloadInspections();
         } finally {
@@ -301,6 +303,17 @@ export const ToiletInspection: React.FC<ToiletInspectionProps> = ({
         .catch(() => {});
     };
 
+    const handleReconnectOrVisible = () => {
+      if (document.visibilityState !== 'visible') return;
+      import('../../lib/supabase')
+        .then(async (m) => {
+          await m.pushLocalInspectionsForOutletDate(formOutletId || undefined, selectedDate);
+          const changed = await m.mergeRemoteInspectionsToLocal(false);
+          if (changed) reloadInspections();
+        })
+        .catch(() => {});
+    };
+
     const liveInterval = setInterval(runLiveInspectionSync, 8000);
 
     const handleStorageUpdate = (e: any) => {
@@ -311,11 +324,15 @@ export const ToiletInspection: React.FC<ToiletInspectionProps> = ({
     };
 
     window.addEventListener('cinema-xxi-storage-update', handleStorageUpdate);
+    window.addEventListener('online', handleReconnectOrVisible);
+    document.addEventListener('visibilitychange', handleReconnectOrVisible);
     return () => {
       clearInterval(liveInterval);
       window.removeEventListener('cinema-xxi-storage-update', handleStorageUpdate);
+      window.removeEventListener('online', handleReconnectOrVisible);
+      document.removeEventListener('visibilitychange', handleReconnectOrVisible);
     };
-  }, [selectedDate, reloadInspections]);
+  }, [selectedDate, formOutletId, reloadInspections]);
 
   // Guard Check: Check if an inspection already exists for this exact combination
   const existingRecord = getShowRecord(formShowNumber, formOutletId, formToiletType);

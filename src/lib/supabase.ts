@@ -1364,6 +1364,16 @@ export async function syncInspectionToSupabase(record: ToiletInspectionRecord): 
       { onConflict: 'id' }
     );
 
+    // Jika sinyal HP di area toilet sempat putus saat klik Simpan, jadwalkan auto-retry di background
+    if (deltaErr) {
+      setTimeout(() => {
+        pushLocalInspectionsForOutletDate(normalizedRecord.outletId, normalizedRecord.date).catch(() => {});
+      }, 2500);
+      setTimeout(() => {
+        pushLocalInspectionsForOutletDate(normalizedRecord.outletId, normalizedRecord.date).catch(() => {});
+      }, 6500);
+    }
+
     // 2. Debounce Master Archive singkat (300ms): kirim paket aditif ringan ke __SYSTEM_SYNC_INSPECTIONS__
     // tanpa mengunduh & mengunggah ulang seluruh 2.639 item (1.2 MB) agar Worker tidak pernah kena Error 503 CPU Limit!
     for (const item of lightweightDeltaPayload) {
@@ -1402,6 +1412,90 @@ export async function syncInspectionToSupabase(record: ToiletInspectionRecord): 
     return !deltaErr;
   } catch (e) {
     console.warn('Supabase inspection sync error:', e);
+    setTimeout(() => {
+      if (record?.outletId && record?.date) {
+        pushLocalInspectionsForOutletDate(record.outletId, record.date).catch(() => {});
+      }
+    }, 3000);
+    return false;
+  }
+}
+
+/**
+ * Dorong (Force-Push) seluruh data Card Inspection lokal untuk outlet & tanggal tertentu (atau 3 hari terakhir)
+ * ke Server (Delta & Master Archive) agar data yang tersimpan saat sinyal lemah di HP petugas langsung masuk ke Server.
+ */
+export async function pushLocalInspectionsForOutletDate(
+  outletId?: string,
+  date?: string
+): Promise<boolean> {
+  const client = getSupabase();
+  if (!client) return false;
+
+  try {
+    const localList = StorageService.getInspections();
+    if (!Array.isArray(localList) || localList.length === 0) return false;
+
+    const threeDaysAgo = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const matched: ToiletInspectionRecord[] = [];
+
+    for (const raw of localList) {
+      const norm = normalizeInspectionItem(raw);
+      if (!norm) continue;
+      if (outletId && norm.outletId !== outletId) continue;
+      if (date) {
+        if (norm.date !== date) continue;
+      } else if (norm.date && norm.date < threeDaysAgo) {
+        continue;
+      }
+      matched.push({
+        ...norm,
+        updatedAt: (norm as any).updatedAt || new Date().toISOString(),
+      } as ToiletInspectionRecord);
+    }
+
+    if (matched.length === 0) return false;
+
+    const nowIso = new Date().toISOString();
+    const payload = matched.slice(-180);
+
+    for (const item of payload) {
+      recentInspectionsDeltaMap.set(item.id, item);
+    }
+
+    recordSyncTimestamp('__SYSTEM_SYNC_INSPECTIONS_DELTA__', nowIso, true);
+    recordSyncTimestamp('__SYSTEM_SYNC_INSPECTIONS__', nowIso, true);
+
+    const [{ error: errDelta }, { error: errMaster }] = await Promise.all([
+      client.from('cinema_sales').upsert(
+        [
+          {
+            id: '__SYSTEM_SYNC_INSPECTIONS_DELTA__',
+            outlet_id: '__SYSTEM_SYNC__',
+            date: '2026-01-01',
+            shows: payload as any,
+            updated_at: nowIso,
+          },
+        ],
+        { onConflict: 'id' }
+      ),
+      client.from('cinema_sales').upsert(
+        [
+          {
+            id: '__SYSTEM_SYNC_INSPECTIONS__',
+            outlet_id: '__SYSTEM_SYNC__',
+            date: '2026-01-01',
+            shows: payload as any,
+            updated_at: nowIso,
+          },
+        ],
+        { onConflict: 'id' }
+      ),
+    ]);
+
+    return !errDelta || !errMaster;
+  } catch (e) {
+    console.warn('Force-push local inspections error:', e);
     return false;
   }
 }
@@ -1497,11 +1591,11 @@ export async function fetchInspectionsFromSupabase(
   }
 }
 
-let hasAutoHealedLocalInspections = false;
+const lastAutoPushedInspectionMap = new Map<string, number>();
 
 /**
  * Merges remote inspection records from Supabase & Internal Server into local storage additively,
- * and auto-pushes any local inspection (from Device A) that was not yet on the remote server.
+ * and continuously auto-pushes any recent local inspection (from Device A) that is missing or newer than the remote server.
  */
 export async function mergeRemoteInspectionsToLocal(deltaOnly = false): Promise<boolean> {
   const remoteInspections = await fetchInspectionsFromSupabase(undefined, undefined, deltaOnly);
@@ -1545,40 +1639,73 @@ export async function mergeRemoteInspectionsToLocal(deltaOnly = false): Promise<
     StorageService.broadcastChange('inspection');
   }
 
-  // Auto-Heal: Jika Device A memiliki data Card Inspection lokal (3 hari terakhir) yang belum masuk ke Server/Device B,
-  // otomatis dorong (push) item yang belum ada tersebut ke Server sekali saat sinkronisasi penuh!
-  if (!deltaOnly && !hasAutoHealedLocalInspections && finalList.length > 0) {
-    const threeDaysAgo = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  // Continuous Auto-Heal (Tanpa One-Shot Lock):
+  // Setiap siklus sinkronisasi (baik 8 detik delta maupun full sync), periksa apakah ada Card Inspection lokal
+  // (3 hari terakhir) yang belum masuk ke Server atau lebih baru di lokal dibanding Server.
+  // Gunakan cooldown per-item 15 detik agar otomatis retry sampai benar-benar tercatat di Server!
+  if (Array.isArray(remoteInspections) && finalList.length > 0) {
+    const nowMs = Date.now();
+    const threeDaysAgo = new Date(nowMs - 3 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const todayStr = new Date(nowMs).toISOString().slice(0, 10);
+    const minDateForMode = deltaOnly ? todayStr : threeDaysAgo;
+
     const missingRecentItems = finalList
-      .filter((l) => l && l.id && (!l.date || l.date >= threeDaysAgo) && !remoteMap.has(l.id))
+      .filter((l) => {
+        if (!l || !l.id || (l.date && l.date < minDateForMode)) return false;
+        const lastAttempt = lastAutoPushedInspectionMap.get(l.id) || 0;
+        if (nowMs - lastAttempt < 15000) return false;
+
+        const rem = remoteMap.get(l.id);
+        if (!rem) return true;
+
+        const locTs = (l as any).updatedAt ? new Date((l as any).updatedAt).getTime() : 0;
+        const remTs = (rem as any).updatedAt ? new Date((rem as any).updatedAt).getTime() : 0;
+        return locTs > remTs;
+      })
       .sort((a, b) => String(a.date || '').localeCompare(String(b.date || '')));
 
     if (missingRecentItems.length > 0) {
-      hasAutoHealedLocalInspections = true;
       const client = getSupabase();
       if (client) {
         const nowIso = new Date().toISOString();
+        const batchToPush = missingRecentItems.slice(-180).map((item) => ({
+          ...item,
+          updatedAt: (item as any).updatedAt || nowIso,
+        }));
+        for (const item of batchToPush) {
+          lastAutoPushedInspectionMap.set(item.id, nowMs);
+        }
+
         recordSyncTimestamp('__SYSTEM_SYNC_INSPECTIONS__', nowIso, true);
         recordSyncTimestamp('__SYSTEM_SYNC_INSPECTIONS_DELTA__', nowIso, true);
-        Promise.resolve(
-          client
-            .from('cinema_sales')
-            .upsert(
-              [
-                {
-                  id: '__SYSTEM_SYNC_INSPECTIONS_DELTA__',
-                  outlet_id: '__SYSTEM_SYNC__',
-                  date: '2026-01-01',
-                  shows: missingRecentItems.slice(-180) as any,
-                  updated_at: nowIso,
-                },
-              ],
-              { onConflict: 'id' }
-            )
-        ).catch(() => {});
+
+        Promise.all([
+          client.from('cinema_sales').upsert(
+            [
+              {
+                id: '__SYSTEM_SYNC_INSPECTIONS_DELTA__',
+                outlet_id: '__SYSTEM_SYNC__',
+                date: '2026-01-01',
+                shows: batchToPush as any,
+                updated_at: nowIso,
+              },
+            ],
+            { onConflict: 'id' }
+          ),
+          client.from('cinema_sales').upsert(
+            [
+              {
+                id: '__SYSTEM_SYNC_INSPECTIONS__',
+                outlet_id: '__SYSTEM_SYNC__',
+                date: '2026-01-01',
+                shows: batchToPush as any,
+                updated_at: nowIso,
+              },
+            ],
+            { onConflict: 'id' }
+          ),
+        ]).catch(() => {});
       }
-    } else if (remoteMap.size > 0) {
-      hasAutoHealedLocalInspections = true;
     }
   }
 
