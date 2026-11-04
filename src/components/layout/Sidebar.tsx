@@ -26,6 +26,11 @@ import {
   Trophy,
   UserCheck,
   CupSoda,
+  Wrench,
+  Armchair,
+  Layers,
+  Droplets,
+  Sun,
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -56,6 +61,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     if (menu.startsWith('inspection_')) return 'inspection';
     if (menu.startsWith('accounting_')) return 'accounting';
     if (menu.startsWith('hc_')) return 'hc';
+    if (menu.startsWith('maintenance_')) return 'maintenance';
     return null;
   };
 
@@ -81,6 +87,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const isInspectionActive = activeMenu.startsWith('inspection_');
   const isAccountingActive = activeMenu.startsWith('accounting_');
   const isHcActive = activeMenu.startsWith('hc_');
+  const isMaintenanceActive = activeMenu.startsWith('maintenance_');
 
   function getRoleTitle(user: User | null) {
     if (!user) return 'Administrator';
@@ -434,7 +441,17 @@ export const Sidebar: React.FC<SidebarProps> = ({
               </>
             ))}
 
-            {/* 6. LOST N FOUND STANDALONE MENU */}
+            {/* 6. MAINTENANCE ACCORDION */}
+            {renderAccordionSection('maintenance', 'Maintenance', Wrench, isMaintenanceActive, (
+              <>
+                {renderSubMenuItem('maintenance_kursi', 'Kursi Studio', Armchair, 0)}
+                {renderSubMenuItem('maintenance_karpet', 'Karpet', Layers, 1)}
+                {renderSubMenuItem('maintenance_filter_air', 'Filter Air', Droplets, 2)}
+                {renderSubMenuItem('maintenance_lampu_uv', 'Lampu Uv', Sun, 3)}
+              </>
+            ))}
+
+            {/* 7. LOST N FOUND STANDALONE MENU */}
             <div>
               {renderStandaloneMainButton('lost_and_found', 'Lost N Found', PackageSearch)}
             </div>

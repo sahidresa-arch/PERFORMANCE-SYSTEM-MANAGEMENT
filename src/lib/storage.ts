@@ -23,6 +23,9 @@ import {
   CashierProductItem,
   CashierMonthlyProductRecord,
   DailySectionSalesRecord,
+  MaintenanceCategory,
+  MaintenanceMonthEntry,
+  MaintenanceScheduleRecord,
 } from '../types';
 import {
   INITIAL_AREAS,
@@ -57,6 +60,7 @@ const KEYS = {
   CASHIER_PERFORMANCE_DAILY: 'cinema_xxi_cashier_performance_daily',
   CASHIER_MONTHLY_PRODUCTS: 'cinema_xxi_cashier_monthly_products',
   DAILY_SECTION_SALES: 'cinema_xxi_daily_section_sales',
+  MAINTENANCE: 'cinema_xxi_maintenance_records',
 };
 
 const RECENT_INSPECTIONS_KEY = 'cinema_xxi_recent_inspections_v2';
@@ -693,12 +697,15 @@ export const StorageService = {
 
   getUsersList(): User[] {
     const SYNC_VERSION_KEY = 'cinema_xxi_users_synced_v5_admin123';
+    const CLASS_V3_USER_KEY = 'cinema_xxi_users_class_v3_migrated';
     const isSynced = localStorage.getItem(SYNC_VERSION_KEY);
     if (!isSynced) {
       localStorage.setItem(SYNC_VERSION_KEY, 'true');
+      localStorage.setItem(CLASS_V3_USER_KEY, 'true');
       return this.resetUsersToDefault();
     }
 
+    const isClassV3Migrated = localStorage.getItem(CLASS_V3_USER_KEY) === 'true';
     const raw = localStorage.getItem(KEYS.USERS_LIST);
     const deletedRaw = localStorage.getItem('cinema_xxi_deleted_user_ids');
     const deletedIds: string[] = deletedRaw ? JSON.parse(deletedRaw) : [];
@@ -711,7 +718,7 @@ export const StorageService = {
         if (!seenIds.has(u.id) && !seenUsernames.has(u.username)) {
           seenIds.add(u.id);
           seenUsernames.add(u.username);
-          deduped.push({ ...u });
+          deduped.push({ ...u, classMigratedV3: true });
         }
       });
       return deduped;
@@ -720,6 +727,7 @@ export const StorageService = {
     if (!raw) {
       const initList = buildDedupedInitial();
       localStorage.setItem(KEYS.USERS_LIST, JSON.stringify(initList));
+      localStorage.setItem(CLASS_V3_USER_KEY, 'true');
       return initList;
     }
 
@@ -730,7 +738,7 @@ export const StorageService = {
       const cleanedList: User[] = [];
       let changed = false;
 
-      // 1. Process stored users and deduplicate + purge deleted + sync default passwords
+      // 1. Process stored users and deduplicate + purge deleted + sync default passwords & class v3
       parsed.forEach((u) => {
         if (!u.id || !u.username) {
           changed = true;
@@ -758,6 +766,22 @@ export const StorageService = {
             changed = true;
           }
 
+          const matchingOutletInit = u.outletId
+            ? INITIAL_OUTLETS.find((io) => io.id === u.outletId)
+            : undefined;
+          const defaultClass = matchingInit?.class || matchingOutletInit?.class;
+
+          if (!isClassV3Migrated || !u.classMigratedV3) {
+            if (defaultClass && u.class !== defaultClass) {
+              u.class = defaultClass;
+            }
+            u.classMigratedV3 = true;
+            changed = true;
+          } else if (!u.class && defaultClass) {
+            u.class = defaultClass;
+            changed = true;
+          }
+
           cleanedList.push(u);
         } else {
           changed = true; // found duplicate
@@ -774,19 +798,21 @@ export const StorageService = {
         ) {
           seenIds.add(initUser.id);
           seenUsernames.add(initUser.username);
-          cleanedList.push({ ...initUser });
+          cleanedList.push({ ...initUser, classMigratedV3: true });
           changed = true;
         }
       });
 
-      if (changed) {
+      if (changed || !isClassV3Migrated) {
         localStorage.setItem(KEYS.USERS_LIST, JSON.stringify(cleanedList));
+        localStorage.setItem(CLASS_V3_USER_KEY, 'true');
       }
 
       return cleanedList;
     } catch {
       const initList = buildDedupedInitial();
       localStorage.setItem(KEYS.USERS_LIST, JSON.stringify(initList));
+      localStorage.setItem(CLASS_V3_USER_KEY, 'true');
       return initList;
     }
   },
@@ -800,10 +826,12 @@ export const StorageService = {
       localStorage.setItem('cinema_xxi_deleted_user_ids', JSON.stringify(deletedIds));
     }
 
+    const nowIso = new Date().toISOString();
     const list = this.getUsersList();
     const updatedUser: User = {
       ...user,
-      ...({ updatedAt: new Date().toISOString() } as any),
+      classMigratedV3: true,
+      ...({ updatedAt: nowIso } as any),
     };
     const idx = list.findIndex((u) => u.id === user.id || u.username === user.username);
     if (idx >= 0) {
@@ -811,6 +839,42 @@ export const StorageService = {
     } else {
       list.push(updatedUser);
     }
+
+    // If user has an outletId and a class value, sync class across sibling users of that outlet and the outlet itself
+    if (updatedUser.outletId && updatedUser.class !== undefined) {
+      const cleanCls = updatedUser.class.trim();
+      list.forEach((u, i) => {
+        if (u.outletId === updatedUser.outletId && u.id !== updatedUser.id) {
+          list[i] = {
+            ...u,
+            class: cleanCls,
+            classMigratedV3: true,
+            ...({ updatedAt: nowIso } as any),
+          };
+        }
+      });
+
+      const outletsList = this.getOutlets();
+      const oIdx = outletsList.findIndex((o) => o.id === updatedUser.outletId);
+      if (oIdx >= 0 && outletsList[oIdx].class !== cleanCls) {
+        outletsList[oIdx] = {
+          ...outletsList[oIdx],
+          class: cleanCls,
+          classMigratedV3: true,
+          ...({ updatedAt: nowIso } as any),
+        };
+        localStorage.setItem(KEYS.OUTLETS, JSON.stringify(outletsList));
+        this.broadcastChange('outlets');
+        import('./supabase')
+          .then((m) => {
+            if (typeof (m as any).syncOutletsAndAreasToSupabase === 'function') {
+              (m as any).syncOutletsAndAreasToSupabase(outletsList, this.getAreas());
+            }
+          })
+          .catch(() => {});
+      }
+    }
+
     localStorage.setItem(KEYS.USERS_LIST, JSON.stringify(list));
     this.broadcastChange('users');
 
@@ -858,6 +922,7 @@ export const StorageService = {
   resetUsersToDefault(): User[] {
     localStorage.removeItem('cinema_xxi_deleted_user_ids');
     localStorage.setItem('cinema_xxi_users_synced_v5_admin123', 'true');
+    localStorage.setItem('cinema_xxi_users_class_v3_migrated', 'true');
     const seenIds = new Set<string>();
     const seenUsernames = new Set<string>();
     const deduped: User[] = [];
@@ -866,7 +931,11 @@ export const StorageService = {
       if (!seenIds.has(u.id) && !seenUsernames.has(u.username)) {
         seenIds.add(u.id);
         seenUsernames.add(u.username);
-        deduped.push({ ...u, password: 'admin123' });
+        deduped.push({
+          ...u,
+          password: u.id === 'user-admin' ? 'cinema2121' : 'admin123',
+          classMigratedV3: true,
+        });
       }
     });
 
@@ -938,18 +1007,26 @@ export const StorageService = {
   // Outlets
   getOutlets(): Outlet[] {
     const syncedOutletsV2 = localStorage.getItem('cinema_xxi_outlets_target_synced_v2_db');
+    const classMigratedV3 = localStorage.getItem('cinema_xxi_outlets_class_v3_migrated') === 'true';
     const raw = localStorage.getItem(KEYS.OUTLETS);
     if (!raw) {
-      localStorage.setItem(KEYS.OUTLETS, JSON.stringify(INITIAL_OUTLETS));
+      const seeded = INITIAL_OUTLETS.map((io) => ({ ...io, classMigratedV3: true }));
+      localStorage.setItem(KEYS.OUTLETS, JSON.stringify(seeded));
       localStorage.setItem('cinema_xxi_outlets_target_synced_v2_db', 'true');
-      return INITIAL_OUTLETS;
+      localStorage.setItem('cinema_xxi_outlets_class_v3_migrated', 'true');
+      return seeded;
     }
     try {
       const stored: Outlet[] = JSON.parse(raw);
-      // Synchronize studios, targetHead, and umr from INITIAL_OUTLETS while preserving user edits
+      let didMigrateClass = false;
+      // Synchronize studios, targetHead, umr, and class v3 from INITIAL_OUTLETS while preserving user edits
       const updatedList = stored.map((so) => {
         const init = INITIAL_OUTLETS.find((io) => io.id === so.id);
         if (init) {
+          const shouldResetClass = !classMigratedV3 || !so.classMigratedV3;
+          if (shouldResetClass) {
+            didMigrateClass = true;
+          }
           return {
             ...so,
             targetHead: !syncedOutletsV2
@@ -957,41 +1034,57 @@ export const StorageService = {
               : (so.targetHead !== undefined ? so.targetHead : init.targetHead),
             studios: init.studios || so.studios,
             umr: so.umr !== undefined && so.umr > 0 ? so.umr : init.umr,
+            class: shouldResetClass ? init.class : (so.class || init.class),
+            classMigratedV3: true,
           };
         }
-        return so;
+        return { ...so, classMigratedV3: true };
       });
       // Also ensure all standard outlets are included
       INITIAL_OUTLETS.forEach((io) => {
         if (!updatedList.some((o) => o.id === io.id)) {
-          updatedList.push(io);
+          updatedList.push({ ...io, classMigratedV3: true });
+          didMigrateClass = true;
         }
       });
       const finalOutlets = updatedList.filter(
         (o) =>
           !['premiere-cibinong-xxi', 'premiere-living-world-kota-wisata-xxi', 'premiere-aeon-sentul-xxi'].includes(o.id)
       );
-      if (!syncedOutletsV2 || finalOutlets.length !== stored.length) {
+      if (!syncedOutletsV2 || !classMigratedV3 || didMigrateClass || finalOutlets.length !== stored.length) {
         localStorage.setItem(KEYS.OUTLETS, JSON.stringify(finalOutlets));
         localStorage.setItem('cinema_xxi_outlets_target_synced_v2_db', 'true');
+        localStorage.setItem('cinema_xxi_outlets_class_v3_migrated', 'true');
+        if (didMigrateClass) {
+          import('./supabase')
+            .then((m) => {
+              if (typeof (m as any).syncOutletsAndAreasToSupabase === 'function') {
+                (m as any).syncOutletsAndAreasToSupabase(finalOutlets, this.getAreas());
+              }
+            })
+            .catch(() => {});
+        }
       }
       return finalOutlets;
     } catch {
       const cleanInit = INITIAL_OUTLETS.filter(
         (o) =>
           !['premiere-cibinong-xxi', 'premiere-living-world-kota-wisata-xxi', 'premiere-aeon-sentul-xxi'].includes(o.id)
-      );
+      ).map((io) => ({ ...io, classMigratedV3: true }));
       localStorage.setItem(KEYS.OUTLETS, JSON.stringify(cleanInit));
       localStorage.setItem('cinema_xxi_outlets_target_synced_v2_db', 'true');
+      localStorage.setItem('cinema_xxi_outlets_class_v3_migrated', 'true');
       return cleanInit;
     }
   },
 
   saveOutlet(outlet: Outlet): Outlet[] {
+    const nowIso = new Date().toISOString();
     const list = this.getOutlets();
     const updatedOutlet: Outlet = {
       ...outlet,
-      ...({ updatedAt: new Date().toISOString() } as any),
+      classMigratedV3: true,
+      ...({ updatedAt: nowIso } as any),
     };
     const idx = list.findIndex((o) => o.id === outlet.id);
     if (idx >= 0) {
@@ -1001,6 +1094,34 @@ export const StorageService = {
     }
     localStorage.setItem(KEYS.OUTLETS, JSON.stringify(list));
     this.broadcastChange('outlets');
+
+    // Sync class to any users assigned to this outlet
+    if (updatedOutlet.class !== undefined) {
+      const usersList = this.getUsersList();
+      let usersUpdated = false;
+      usersList.forEach((u, i) => {
+        if (u.outletId === updatedOutlet.id && u.class !== updatedOutlet.class) {
+          usersList[i] = {
+            ...u,
+            class: updatedOutlet.class,
+            classMigratedV3: true,
+            ...({ updatedAt: nowIso } as any),
+          };
+          usersUpdated = true;
+        }
+      });
+      if (usersUpdated) {
+        localStorage.setItem(KEYS.USERS_LIST, JSON.stringify(usersList));
+        this.broadcastChange('users');
+        import('./supabase')
+          .then((m) => {
+            if (typeof (m as any).syncAdditionalModulesToSupabase === 'function') {
+              (m as any).syncAdditionalModulesToSupabase(['users']);
+            }
+          })
+          .catch(() => {});
+      }
+    }
 
     import('./supabase')
       .then((m) => {
@@ -4044,6 +4165,130 @@ export const StorageService = {
       cashierBreakdowns: cashierBreakdowns.sort((a, b) => b.total - a.total),
     };
   },
+
+  // =========================================================
+  // MAINTENANCE SCHEDULE & SOP ALARM (KURSI, KARPET, FILTER AIR, LAMPU UV)
+  // =========================================================
+  getMaintenanceRecords(): MaintenanceScheduleRecord[] {
+    const raw = localStorage.getItem(KEYS.MAINTENANCE);
+    if (!raw) return [];
+    try {
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  },
+
+  getMaintenanceRecordByOutletCategoryYear(
+    outletId: string,
+    category: MaintenanceCategory,
+    year: number
+  ): MaintenanceScheduleRecord {
+    const all = this.getMaintenanceRecords();
+    const recordId = `${outletId}_${category}_${year}`;
+    const existing = all.find(
+      (r) =>
+        r.id === recordId ||
+        (r.outletId === outletId && r.category === category && r.year === year)
+    );
+    if (existing) {
+      return {
+        ...existing,
+        months: existing.months || {},
+      };
+    }
+    return {
+      id: recordId,
+      outletId,
+      category,
+      year,
+      months: {},
+      keterangan: '',
+    };
+  },
+
+  saveMaintenanceRecord(
+    record: MaintenanceScheduleRecord
+  ): MaintenanceScheduleRecord[] {
+    const all = this.getMaintenanceRecords();
+    const recordId =
+      record.id || `${record.outletId}_${record.category}_${record.year}`;
+    const updated: MaintenanceScheduleRecord = {
+      ...record,
+      id: recordId,
+      months: record.months || {},
+      updatedAt: new Date().toISOString(),
+    };
+
+    const idx = all.findIndex(
+      (r) =>
+        r.id === recordId ||
+        (r.outletId === record.outletId &&
+          r.category === record.category &&
+          r.year === record.year)
+    );
+    if (idx >= 0) {
+      all[idx] = updated;
+    } else {
+      all.unshift(updated);
+    }
+
+    localStorage.setItem(KEYS.MAINTENANCE, JSON.stringify(all));
+    this.broadcastChange('maintenance');
+
+    import('./supabase')
+      .then((m) => {
+        if (typeof (m as any).syncAdditionalModulesToSupabase === 'function') {
+          (m as any).syncAdditionalModulesToSupabase(['maintenance']);
+        }
+      })
+      .catch(() => {});
+
+    return all;
+  },
+
+  saveMaintenanceMonthEntry(
+    outletId: string,
+    category: MaintenanceCategory,
+    year: number,
+    month: number,
+    entry: MaintenanceMonthEntry | null
+  ): MaintenanceScheduleRecord[] {
+    const record = this.getMaintenanceRecordByOutletCategoryYear(
+      outletId,
+      category,
+      year
+    );
+    const nextMonths = { ...(record.months || {}) };
+    if (entry === null) {
+      delete nextMonths[month];
+    } else {
+      nextMonths[month] = {
+        ...entry,
+        updatedAt: new Date().toISOString(),
+      };
+    }
+    return this.saveMaintenanceRecord({
+      ...record,
+      months: nextMonths,
+    });
+  },
+
+  saveMaintenanceKeterangan(
+    outletId: string,
+    category: MaintenanceCategory,
+    year: number,
+    keterangan: string
+  ): MaintenanceScheduleRecord[] {
+    const record = this.getMaintenanceRecordByOutletCategoryYear(
+      outletId,
+      category,
+      year
+    );
+    return this.saveMaintenanceRecord({
+      ...record,
+      keterangan: keterangan.trim(),
+    });
+  },
 };
-
-

@@ -25,6 +25,7 @@ import { LostAndFoundView } from './components/lost_found/LostAndFoundView';
 import { CashierPerformanceInput } from './components/sdm/CashierPerformanceInput';
 import { CashierLeaderboard } from './components/sdm/CashierLeaderboard';
 import { CashierBeverageCategoryView } from './components/sdm/CashierBeverageCategoryView';
+import { MaintenanceScheduleView } from './components/maintenance/MaintenanceScheduleView';
 import { SettingsModal } from './components/settings/SettingsModal';
 
 function getTodayDateString(): string {
@@ -382,6 +383,14 @@ export default function App() {
                 <KpiKaryawanView
                   currentUser={currentUser}
                   selectedDate={selectedDate}
+                />
+              )}
+
+              {/* Maintenance Submenus */}
+              {activeMenu.startsWith('maintenance_') && (
+                <MaintenanceScheduleView
+                  currentUser={currentUser}
+                  activeMenu={activeMenu}
                 />
               )}
 

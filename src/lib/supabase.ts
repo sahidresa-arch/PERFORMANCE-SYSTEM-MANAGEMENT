@@ -2548,11 +2548,23 @@ export async function mergeRemoteOutletsAndAreasToLocal(): Promise<boolean> {
       localOutlets.forEach((o) => {
         if (o && o.id) map.set(o.id, o);
       });
+      let needsResyncClassV3 = false;
       remoteOutlets.forEach((ro: any) => {
         if (ro && ro.id) {
           const existing: any = map.get(ro.id);
-          if (!existing || (ro.updatedAt || '') >= (existing.updatedAt || '')) {
-            map.set(ro.id, { ...(existing || {}), ...ro });
+          if (!existing) {
+            map.set(ro.id, { ...ro, classMigratedV3: true });
+          } else if ((ro.updatedAt || '') >= (existing.updatedAt || '')) {
+            const keepLocalClass = existing.classMigratedV3 && !ro.classMigratedV3;
+            if (keepLocalClass && existing.class !== ro.class) {
+              needsResyncClassV3 = true;
+            }
+            map.set(ro.id, {
+              ...existing,
+              ...ro,
+              class: keepLocalClass ? existing.class : (ro.class ?? existing.class),
+              classMigratedV3: true,
+            });
           }
         }
       });
@@ -2562,8 +2574,12 @@ export async function mergeRemoteOutletsAndAreasToLocal(): Promise<boolean> {
       if (currentRaw !== mergedRaw) {
         localStorage.setItem('cinema_xxi_outlets', mergedRaw);
         localStorage.setItem('cinema_xxi_outlets_target_synced_v2_db', 'true');
+        localStorage.setItem('cinema_xxi_outlets_class_v3_migrated', 'true');
         StorageService.broadcastChange('outlets');
         updated = true;
+      }
+      if (needsResyncClassV3) {
+        syncOutletsAndAreasToSupabase(mergedOutlets, StorageService.getAreas()).catch(() => {});
       }
     }
 
@@ -2601,20 +2617,23 @@ export async function mergeRemoteOutletsAndAreasToLocal(): Promise<boolean> {
 
 let additionalModulesTimer: NodeJS.Timeout | null = null;
 const pendingAdditionalModules = new Set<
-  'users' | 'genres' | 'administration' | 'bopo' | 'lost_found' | 'warehouse'
+  'users' | 'genres' | 'administration' | 'bopo' | 'lost_found' | 'warehouse' | 'maintenance'
 >();
 
 /**
- * Sinkronisasi Modul Tambahan (Users, Genre Film, Administrasi, BOPO, Lost & Found, Gudang/Inventory) dengan Debounce
+ * Sinkronisasi Modul Tambahan (Users, Genre Film, Administrasi, BOPO, Lost & Found, Gudang/Inventory, Maintenance) dengan Debounce
  */
 export async function syncAdditionalModulesToSupabase(
-  modules: Array<'users' | 'genres' | 'administration' | 'bopo' | 'lost_found' | 'warehouse'> = [
+  modules: Array<
+    'users' | 'genres' | 'administration' | 'bopo' | 'lost_found' | 'warehouse' | 'maintenance'
+  > = [
     'users',
     'genres',
     'administration',
     'bopo',
     'lost_found',
     'warehouse',
+    'maintenance',
   ]
 ): Promise<boolean> {
   const client = getSupabase();
@@ -2637,7 +2656,9 @@ export async function syncAdditionalModulesToSupabase(
 }
 
 async function executeAdditionalModulesUpsert(
-  modules: Array<'users' | 'genres' | 'administration' | 'bopo' | 'lost_found' | 'warehouse'>
+  modules: Array<
+    'users' | 'genres' | 'administration' | 'bopo' | 'lost_found' | 'warehouse' | 'maintenance'
+  >
 ): Promise<boolean> {
   const client = getSupabase();
   if (!client) return false;
@@ -2728,6 +2749,18 @@ async function executeAdditionalModulesUpsert(
       });
     }
 
+    if (modules.includes('maintenance')) {
+      const maintenance = StorageService.getMaintenanceRecords();
+      recordSyncTimestamp('__SYSTEM_SYNC_MAINTENANCE__', nowIso, true);
+      rowsToUpsert.push({
+        id: '__SYSTEM_SYNC_MAINTENANCE__',
+        outlet_id: '__SYSTEM_SYNC__',
+        date: '2026-01-01',
+        shows: maintenance,
+        updated_at: nowIso,
+      });
+    }
+
     if (rowsToUpsert.length > 0) {
       await client.from('cinema_sales').upsert(rowsToUpsert, { onConflict: 'id' });
     }
@@ -2755,6 +2788,7 @@ export async function mergeRemoteAdditionalModulesToLocal(
             '__SYSTEM_SYNC_BOPO__',
             '__SYSTEM_SYNC_LOST_FOUND__',
             '__SYSTEM_SYNC_WAREHOUSE__',
+            '__SYSTEM_SYNC_MAINTENANCE__',
           ];
 
     const { data, error } = await client
@@ -2793,11 +2827,23 @@ export async function mergeRemoteAdditionalModulesToLocal(
             map.set(u.id, u);
           }
         });
+        let needsUsersResync = false;
         payload.users.forEach((ru: any) => {
           if (ru && ru.id && !delSet.has(ru.id) && !delSet.has(ru.username)) {
             const existing = map.get(ru.id);
-            if (!existing || (ru.updatedAt || '') >= (existing.updatedAt || '')) {
-              map.set(ru.id, { ...(existing || {}), ...ru });
+            if (!existing) {
+              map.set(ru.id, { ...ru, classMigratedV3: true });
+            } else if ((ru.updatedAt || '') >= (existing.updatedAt || '')) {
+              const keepLocalClass = existing.classMigratedV3 && !ru.classMigratedV3;
+              if (keepLocalClass && existing.class !== ru.class) {
+                needsUsersResync = true;
+              }
+              map.set(ru.id, {
+                ...existing,
+                ...ru,
+                class: keepLocalClass ? existing.class : (ru.class ?? existing.class),
+                classMigratedV3: true,
+              });
             }
           }
         });
@@ -2808,6 +2854,9 @@ export async function mergeRemoteAdditionalModulesToLocal(
           localStorage.setItem('cinema_xxi_users_list', nextRaw);
           StorageService.broadcastChange('users');
           updated = true;
+        }
+        if (needsUsersResync) {
+          syncAdditionalModulesToSupabase(['users']).catch(() => {});
         }
       }
     }
@@ -2908,6 +2957,32 @@ export async function mergeRemoteAdditionalModulesToLocal(
           StorageService.broadcastChange('stock-opname');
           updated = true;
         }
+      }
+    }
+
+    const maintRow = data.find((r: any) => r.id === '__SYSTEM_SYNC_MAINTENANCE__');
+    if (maintRow && Array.isArray(maintRow.shows)) {
+      const localMaint = StorageService.getMaintenanceRecords();
+      const map = new Map<string, any>();
+      localMaint.forEach((m) => {
+        if (m && m.id) map.set(m.id, m);
+      });
+      maintRow.shows.forEach((rm: any) => {
+        if (rm && rm.outletId && rm.category && rm.year !== undefined) {
+          const id = rm.id || `${rm.outletId}_${rm.category}_${rm.year}`;
+          const existing = map.get(id);
+          if (!existing || (rm.updatedAt || '') >= (existing.updatedAt || '')) {
+            map.set(id, { ...rm, id });
+          }
+        }
+      });
+      const mergedMaint = Array.from(map.values());
+      const curRaw = localStorage.getItem('cinema_xxi_maintenance_records') || '[]';
+      const nextRaw = JSON.stringify(mergedMaint);
+      if (curRaw !== nextRaw) {
+        localStorage.setItem('cinema_xxi_maintenance_records', nextRaw);
+        StorageService.broadcastChange('maintenance');
+        updated = true;
       }
     }
 
@@ -3013,6 +3088,7 @@ export async function pullAllRemoteToLocal(forceFull = false): Promise<void> {
       '__SYSTEM_SYNC_BOPO__',
       '__SYSTEM_SYNC_LOST_FOUND__',
       '__SYSTEM_SYNC_WAREHOUSE__',
+      '__SYSTEM_SYNC_MAINTENANCE__',
     ].filter((id) => changedIds.has(id));
 
     if (changedAdditional.length > 0) {
@@ -3207,6 +3283,16 @@ async function seedInternalServerFromLocalDevice(): Promise<void> {
         updated_at: getSeedTs('__SYSTEM_SYNC_DAILY_SECTION__'),
       });
     }
+    const maintRecords = StorageService.getMaintenanceRecords();
+    if (maintRecords.length > 0) {
+      batchRecords.push({
+        id: '__SYSTEM_SYNC_MAINTENANCE__',
+        outlet_id: '__SYSTEM_SYNC__',
+        date: '2026-01-01',
+        shows: maintRecords,
+        updated_at: getSeedTs('__SYSTEM_SYNC_MAINTENANCE__'),
+      });
+    }
 
     if (batchRecords.length > 0) {
       await callInternalSyncUpsert({
@@ -3236,7 +3322,8 @@ function handleRealtimeRowTrigger(rowId: string, incomingUpdatedAt?: string, sen
     rowId === '__SYSTEM_SYNC_ADMINISTRATION__' ||
     rowId === '__SYSTEM_SYNC_BOPO__' ||
     rowId === '__SYSTEM_SYNC_LOST_FOUND__' ||
-    rowId === '__SYSTEM_SYNC_WAREHOUSE__'
+    rowId === '__SYSTEM_SYNC_WAREHOUSE__' ||
+    rowId === '__SYSTEM_SYNC_MAINTENANCE__'
   ) {
     scheduleDebouncedRealtimeMerge(`add_${rowId}`, () => mergeRemoteAdditionalModulesToLocal([rowId]));
     return;

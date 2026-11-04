@@ -6,6 +6,8 @@ export interface User {
   outletId?: string; // If manager or cleaner, restricted to this outlet
   areaId?: string; // If area_manager, restricted to this area
   assignedAreas?: string[]; // Optional array of area IDs
+  class?: string;
+  classMigratedV3?: boolean;
   password?: string;
   isActive?: boolean;
 }
@@ -23,6 +25,7 @@ export interface Outlet {
   targetHead: number;
   umr?: number;
   class?: string;
+  classMigratedV3?: boolean;
   studios?: { name: string; capacity: number }[];
 }
 
@@ -321,5 +324,28 @@ export interface DailySectionSalesRecord {
   updatedAt?: string;
 }
 
+export type MaintenanceCategory =
+  | 'kursi_studio'
+  | 'karpet'
+  | 'filter_fluux'
+  | 'filter_sediment'
+  | 'lampu_uv';
 
+export interface MaintenanceMonthEntry {
+  date: string; // YYYY-MM-DD (Tanggal pencucian / pergantian)
+  quantity?: number; // Jumlah kursi / titik / unit (misal: 1420)
+  customExpiryDate?: string; // YYYY-MM-DD (Tanggal expired / jadwal berikutnya)
+  notes?: string;
+  updatedBy?: string;
+  updatedAt?: string;
+}
 
+export interface MaintenanceScheduleRecord {
+  id: string; // `${outletId}_${category}_${year}`
+  outletId: string;
+  category: MaintenanceCategory;
+  year: number;
+  months: { [month: number]: MaintenanceMonthEntry }; // 1 to 12
+  keterangan?: string;
+  updatedAt?: string;
+}

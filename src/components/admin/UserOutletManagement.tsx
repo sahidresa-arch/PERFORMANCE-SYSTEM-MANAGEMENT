@@ -51,14 +51,20 @@ export const UserOutletManagement: React.FC<UserOutletManagementProps> = ({
     return () => window.removeEventListener('cinema-xxi-storage-update', handleStorageUpdate);
   }, []);
 
-  // Edit Target Head and UMR state
+  // Edit Target Head, UMR, and Class state
   const [editingOutletId, setEditingOutletId] = useState<string | null>(null);
   const [tempTargetHead, setTempTargetHead] = useState<number>(0);
   const [tempUmr, setTempUmr] = useState<number>(4800000);
+  const [tempOutletClass, setTempOutletClass] = useState<string>('B');
+
+  // Inline Quick Edit Class in User Table
+  const [editingUserClassId, setEditingUserClassId] = useState<string | null>(null);
+  const [tempUserClassVal, setTempUserClassVal] = useState<string>('B');
 
   // New Outlet Form
   const [newOutletName, setNewOutletName] = useState('');
   const [newOutletAreaId, setNewOutletAreaId] = useState(areas[0]?.id || '');
+  const [newOutletClass, setNewOutletClass] = useState<string>('B');
   const [newOutletTargetHead, setNewOutletTargetHead] = useState<number>(25000);
   const [newOutletUmr, setNewOutletUmr] = useState<number>(4800000);
 
@@ -71,6 +77,7 @@ export const UserOutletManagement: React.FC<UserOutletManagementProps> = ({
   const [newUserName, setNewUserName] = useState('');
   const [newUserRole, setNewUserRole] = useState<'admin' | 'area_manager' | 'manager' | 'cleaner'>('manager');
   const [newUserOutletId, setNewUserOutletId] = useState(outlets[0]?.id || '');
+  const [newUserClass, setNewUserClass] = useState<string>(outlets[0]?.class || 'B');
   const [newUserAreaId, setNewUserAreaId] = useState(areas[0]?.id || '');
   const [newUserAreaIds, setNewUserAreaIds] = useState<string[]>(() => areas.map((a) => a.id));
   const [newUserPassword, setNewUserPassword] = useState('admin123');
@@ -89,6 +96,7 @@ export const UserOutletManagement: React.FC<UserOutletManagementProps> = ({
   const [editName, setEditName] = useState('');
   const [editRole, setEditRole] = useState<'admin' | 'area_manager' | 'manager' | 'cleaner'>('manager');
   const [editOutletId, setEditOutletId] = useState('');
+  const [editClass, setEditClass] = useState<string>('');
   const [editAreaId, setEditAreaId] = useState('');
   const [editAreaIds, setEditAreaIds] = useState<string[]>([]);
   const [editPassword, setEditPassword] = useState('');
@@ -106,23 +114,63 @@ export const UserOutletManagement: React.FC<UserOutletManagementProps> = ({
     setTimeout(() => setNotification(''), 3000);
   };
 
-  // Handle Edit Target Head
+  const resolveUserClass = (u: User): string => {
+    const assignedOutlet = outlets.find((o) => o.id === u.outletId);
+    if (u.class && u.class.trim()) return u.class.trim().toUpperCase();
+    if (assignedOutlet?.class && assignedOutlet.class.trim()) {
+      return assignedOutlet.class.trim().toUpperCase();
+    }
+    return '-';
+  };
+
+  function getClassBadgeStyle(cls: string) {
+    const clean = (cls || '-').toUpperCase().trim();
+    if (clean === 'A') {
+      return 'bg-emerald-100 text-emerald-900 border-emerald-300';
+    }
+    if (clean === 'B') {
+      return 'bg-blue-100 text-blue-900 border-blue-300';
+    }
+    if (clean === 'C') {
+      return 'bg-amber-100 text-amber-900 border-amber-300';
+    }
+    return 'bg-slate-100 text-slate-600 border-slate-200';
+  }
+
+  // Handle Inline Save Class for User
+  const handleSaveInlineUserClass = (u: User) => {
+    const cleanCls = tempUserClassVal === '-' ? '' : tempUserClassVal.trim().toUpperCase();
+    const updatedUser: User = {
+      ...u,
+      class: cleanCls,
+    };
+    const newUsers = StorageService.saveUser(updatedUser);
+    setUsers(newUsers);
+    setOutlets(StorageService.getOutlets());
+    setEditingUserClassId(null);
+    showToast(`Class untuk "${u.name}" berhasil disimpan menjadi Class ${cleanCls || '-'}!`);
+  };
+
+  // Handle Edit Target Head, UMR & Class
   const handleStartEditTarget = (outlet: Outlet) => {
     setEditingOutletId(outlet.id);
     setTempTargetHead(outlet.targetHead);
     setTempUmr(outlet.umr || 4800000);
+    setTempOutletClass(outlet.class || 'B');
   };
 
   const handleSaveTargetHead = (outlet: Outlet) => {
     const updated: Outlet = {
       ...outlet,
+      class: tempOutletClass.trim().toUpperCase() || 'B',
       targetHead: tempTargetHead,
       umr: tempUmr,
     };
     const newList = StorageService.saveOutlet(updated);
     setOutlets(newList);
+    setUsers(StorageService.getUsersList());
     setEditingOutletId(null);
-    showToast(`Target & UMR ${outlet.name} berhasil diperbarui!`);
+    showToast(`Class (${updated.class}), Target & UMR ${outlet.name} berhasil diperbarui!`);
   };
 
   // Handle Add Outlet
@@ -139,7 +187,7 @@ export const UserOutletManagement: React.FC<UserOutletManagementProps> = ({
       areaId: newOutletAreaId,
       targetHead: Number(newOutletTargetHead) || 0,
       umr: Number(newOutletUmr) || 4800000,
-      class: 'B',
+      class: newOutletClass || 'B',
       studios: [
         { name: 'Studio 1', capacity: 200 },
         { name: 'Studio 2', capacity: 180 },
@@ -150,7 +198,7 @@ export const UserOutletManagement: React.FC<UserOutletManagementProps> = ({
     const updated = StorageService.saveOutlet(newOutlet);
     setOutlets(updated);
     setNewOutletName('');
-    showToast(`Outlet baru ${newOutlet.name} berhasil ditambahkan!`);
+    showToast(`Outlet baru ${newOutlet.name} (Class ${newOutlet.class}) berhasil ditambahkan!`);
   };
 
   // Handle Add Area
@@ -191,6 +239,13 @@ export const UserOutletManagement: React.FC<UserOutletManagementProps> = ({
       assignedAreaId = assignedAreasList[0];
     }
 
+    const resolvedCls =
+      newUserClass && newUserClass !== '-'
+        ? newUserClass.trim().toUpperCase()
+        : assignedOutletId
+        ? targetOutlet?.class
+        : undefined;
+
     const newUser: User = {
       id: `user-${newUsername.toLowerCase().replace(/[^a-z0-9]/g, '')}`,
       username: newUsername.toLowerCase().trim(),
@@ -199,12 +254,14 @@ export const UserOutletManagement: React.FC<UserOutletManagementProps> = ({
       outletId: assignedOutletId,
       areaId: assignedAreaId,
       assignedAreas: assignedAreasList,
+      class: resolvedCls,
       password: newUserPassword.trim() || 'admin123',
       isActive: true,
     };
 
     const updated = StorageService.saveUser(newUser);
     setUsers(updated);
+    setOutlets(StorageService.getOutlets());
     setNewUsername('');
     setNewUserName('');
     setNewUserPassword('admin123');
@@ -213,11 +270,13 @@ export const UserOutletManagement: React.FC<UserOutletManagementProps> = ({
 
   // Open Edit User Modal
   const handleOpenEditUser = (user: User) => {
+    const currentCls = resolveUserClass(user);
     setEditingUser(user);
     setEditUsername(user.username);
     setEditName(user.name);
     setEditRole(user.role);
     setEditOutletId(user.outletId || outlets[0]?.id || '');
+    setEditClass(currentCls === '-' ? '-' : currentCls);
     setEditAreaId(user.areaId || areas[0]?.id || '');
     setEditAreaIds(
       user.assignedAreas && user.assignedAreas.length > 0
@@ -235,7 +294,6 @@ export const UserOutletManagement: React.FC<UserOutletManagementProps> = ({
     if (!editingUser || !editUsername.trim()) return;
 
     const targetOutlet = outlets.find((o) => o.id === editOutletId);
-    const targetArea = areas.find((a) => a.id === editAreaId);
 
     let assignedOutletId: string | undefined = undefined;
     let assignedAreaId: string | undefined = undefined;
@@ -249,6 +307,8 @@ export const UserOutletManagement: React.FC<UserOutletManagementProps> = ({
       assignedAreaId = assignedAreasList[0];
     }
 
+    const cleanClass = editClass === '-' ? '' : editClass.trim().toUpperCase();
+
     const updatedUser: User = {
       ...editingUser,
       username: editUsername.toLowerCase().trim(),
@@ -257,13 +317,15 @@ export const UserOutletManagement: React.FC<UserOutletManagementProps> = ({
       outletId: assignedOutletId,
       areaId: assignedAreaId,
       assignedAreas: assignedAreasList,
+      class: cleanClass,
       password: editPassword.trim() ? editPassword.trim() : editingUser.password,
     };
 
     const updatedList = StorageService.saveUser(updatedUser);
     setUsers(updatedList);
+    setOutlets(StorageService.getOutlets());
     setEditingUser(null);
-    showToast(`Data user "${updatedUser.username}" berhasil diperbarui!`);
+    showToast(`Data user "${updatedUser.username}" & Class (${cleanClass || '-'}) berhasil diperbarui!`);
   };
 
   // Handle Reset User Password
@@ -338,6 +400,7 @@ export const UserOutletManagement: React.FC<UserOutletManagementProps> = ({
         'NO': idx + 1,
         'USERNAME (LOGIN)': u.username,
         'NAMA PENGGUNA': u.name,
+        'CLASS': resolveUserClass(u),
         'ROLE / PERAN': getRoleLabel(u.role),
         'OUTLET PENUGASAN': scopeText,
         'AREA WILAYAH': areaText,
@@ -354,6 +417,7 @@ export const UserOutletManagement: React.FC<UserOutletManagementProps> = ({
       { wch: 6 },  // NO
       { wch: 32 }, // USERNAME
       { wch: 40 }, // NAMA PENGGUNA
+      { wch: 10 }, // CLASS
       { wch: 22 }, // ROLE
       { wch: 42 }, // OUTLET
       { wch: 30 }, // AREA
@@ -405,10 +469,13 @@ export const UserOutletManagement: React.FC<UserOutletManagementProps> = ({
   // Filter users by role and search query
   const filteredUsers = users.filter((u) => {
     const matchesRole = selectedRoleFilter === 'all' || u.role === selectedRoleFilter;
+    const cls = resolveUserClass(u).toLowerCase();
+    const q = userSearchQuery.toLowerCase();
     const matchesQuery =
-      u.username.toLowerCase().includes(userSearchQuery.toLowerCase()) ||
-      u.name.toLowerCase().includes(userSearchQuery.toLowerCase()) ||
-      u.role.toLowerCase().includes(userSearchQuery.toLowerCase());
+      u.username.toLowerCase().includes(q) ||
+      u.name.toLowerCase().includes(q) ||
+      u.role.toLowerCase().includes(q) ||
+      cls.includes(q);
     return matchesRole && matchesQuery;
   });
 
@@ -432,7 +499,7 @@ export const UserOutletManagement: React.FC<UserOutletManagementProps> = ({
             </h2>
           </div>
           <p className="text-xs text-slate-500 mt-1">
-            Hak akses penuh Administrator Cinema XXI — Atur role Area Manager, Manager Outlet, dan Cleaner, edit akun &amp; kata sandi, dan kelola target cabang.
+            Hak akses penuh Administrator Cinema XXI — Atur role Area Manager, Manager Outlet, dan Cleaner, edit Class, akun &amp; kata sandi, dan kelola target cabang.
           </p>
         </div>
 
@@ -520,21 +587,37 @@ export const UserOutletManagement: React.FC<UserOutletManagementProps> = ({
               />
             </div>
 
-            <div>
-              <label className="text-[10px] font-bold text-slate-600 uppercase block mb-1">
-                AREA WILAYAH
-              </label>
-              <select
-                value={newOutletAreaId}
-                onChange={(e) => setNewOutletAreaId(e.target.value)}
-                className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-[#faf9f6] text-slate-800 font-semibold focus:border-amber-400 focus:bg-white"
-              >
-                {areas.map((a) => (
-                  <option key={a.id} value={a.id}>
-                    {a.name}
-                  </option>
-                ))}
-              </select>
+            <div className="grid grid-cols-3 gap-2">
+              <div className="col-span-2">
+                <label className="text-[10px] font-bold text-slate-600 uppercase block mb-1">
+                  AREA WILAYAH
+                </label>
+                <select
+                  value={newOutletAreaId}
+                  onChange={(e) => setNewOutletAreaId(e.target.value)}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-[#faf9f6] text-slate-800 font-semibold focus:border-amber-400 focus:bg-white"
+                >
+                  {areas.map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {a.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="text-[10px] font-bold text-slate-600 uppercase block mb-1">
+                  CLASS
+                </label>
+                <select
+                  value={newOutletClass}
+                  onChange={(e) => setNewOutletClass(e.target.value)}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-[#faf9f6] text-slate-900 font-black focus:border-amber-400 focus:bg-white"
+                >
+                  <option value="A">Class A</option>
+                  <option value="B">Class B</option>
+                  <option value="C">Class C</option>
+                </select>
+              </div>
             </div>
 
             <div>
@@ -579,20 +662,46 @@ export const UserOutletManagement: React.FC<UserOutletManagementProps> = ({
           </h3>
 
           <form onSubmit={handleAddUser} className="space-y-3 text-xs">
-            <div>
-              <label className="text-[10px] font-bold text-slate-600 uppercase block mb-1">
-                ROLE / PERAN AKSES
-              </label>
-              <select
-                value={newUserRole}
-                onChange={(e) => setNewUserRole(e.target.value as any)}
-                className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-[#faf9f6] text-slate-800 font-semibold focus:border-purple-500 focus:bg-white"
-              >
-                <option value="manager">Manager (Akses Per Outlet)</option>
-                <option value="area_manager">Area Manager (Akses Per Area)</option>
-                <option value="cleaner">Cleaner (Akses Card Inspection)</option>
-                <option value="admin">Administrator (Akses Penuh System)</option>
-              </select>
+            <div className="grid grid-cols-3 gap-2">
+              <div className="col-span-2">
+                <label className="text-[10px] font-bold text-slate-600 uppercase block mb-1">
+                  ROLE / PERAN AKSES
+                </label>
+                <select
+                  value={newUserRole}
+                  onChange={(e) => {
+                    const r = e.target.value as any;
+                    setNewUserRole(r);
+                    if (r === 'admin' || r === 'area_manager') {
+                      setNewUserClass('-');
+                    } else {
+                      const o = outlets.find((item) => item.id === newUserOutletId);
+                      setNewUserClass(o?.class || 'B');
+                    }
+                  }}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-[#faf9f6] text-slate-800 font-semibold focus:border-purple-500 focus:bg-white"
+                >
+                  <option value="manager">Manager (Akses Per Outlet)</option>
+                  <option value="area_manager">Area Manager (Akses Per Area)</option>
+                  <option value="cleaner">Cleaner (Akses Card Inspection)</option>
+                  <option value="admin">Administrator (Akses Penuh System)</option>
+                </select>
+              </div>
+              <div>
+                <label className="text-[10px] font-bold text-slate-600 uppercase block mb-1">
+                  CLASS
+                </label>
+                <select
+                  value={newUserClass}
+                  onChange={(e) => setNewUserClass(e.target.value)}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-[#faf9f6] text-slate-900 font-black focus:border-purple-500 focus:bg-white"
+                >
+                  <option value="A">Class A</option>
+                  <option value="B">Class B</option>
+                  <option value="C">Class C</option>
+                  <option value="-">- (Non-Outlet)</option>
+                </select>
+              </div>
             </div>
 
             <div>
@@ -687,12 +796,19 @@ export const UserOutletManagement: React.FC<UserOutletManagementProps> = ({
                 </label>
                 <select
                   value={newUserOutletId}
-                  onChange={(e) => setNewUserOutletId(e.target.value)}
+                  onChange={(e) => {
+                    const oid = e.target.value;
+                    setNewUserOutletId(oid);
+                    const foundOutlet = outlets.find((item) => item.id === oid);
+                    if (foundOutlet?.class) {
+                      setNewUserClass(foundOutlet.class);
+                    }
+                  }}
                   className="w-full px-3 py-2 rounded-xl border border-emerald-200 bg-emerald-50/50 text-emerald-900 font-bold focus:border-emerald-500 focus:bg-white"
                 >
                   {outlets.map((o) => (
                     <option key={o.id} value={o.id}>
-                      {o.name}
+                      {o.name} {o.class ? `(Class ${o.class})` : ''}
                     </option>
                   ))}
                 </select>
@@ -782,7 +898,7 @@ export const UserOutletManagement: React.FC<UserOutletManagementProps> = ({
                 type="text"
                 value={userSearchQuery}
                 onChange={(e) => setUserSearchQuery(e.target.value)}
-                placeholder="Cari user / nama..."
+                placeholder="Cari user / nama / class..."
                 className="pl-8 pr-3 py-1.5 rounded-xl border border-slate-200 bg-slate-50 text-slate-800 text-xs font-medium focus:bg-white focus:border-purple-400"
               />
             </div>
@@ -876,6 +992,7 @@ export const UserOutletManagement: React.FC<UserOutletManagementProps> = ({
                 <th className="py-3 px-3">NO</th>
                 <th className="py-3 px-3">USERNAME</th>
                 <th className="py-3 px-3">NAMA PENGGUNA</th>
+                <th className="py-3 px-3 text-center">CLASS</th>
                 <th className="py-3 px-3">ROLE / PERAN</th>
                 <th className="py-3 px-3">AKSES PENUGASAN</th>
                 <th className="py-3 px-3 text-center">KATA SANDI</th>
@@ -886,15 +1003,16 @@ export const UserOutletManagement: React.FC<UserOutletManagementProps> = ({
             <tbody className="divide-y divide-slate-100 font-medium">
               {filteredUsers.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="py-8 text-center text-slate-400 font-bold">
+                  <td colSpan={9} className="py-8 text-center text-slate-400 font-bold">
                     Tidak ditemukan user untuk filter role / pencarian ini.
                   </td>
                 </tr>
               ) : (
                 filteredUsers.map((u, index) => {
                   const assignedOutlet = outlets.find((o) => o.id === u.outletId);
-                  const assignedArea = areas.find((a) => a.id === u.areaId);
                   const isResetting = resettingUserId === u.id;
+                  const isEditingInlineClass = editingUserClassId === u.id;
+                  const userClassVal = resolveUserClass(u);
 
                   let scopeText = 'Semua Outlet & Area (Full)';
                   if (u.role === 'area_manager') {
@@ -918,6 +1036,53 @@ export const UserOutletManagement: React.FC<UserOutletManagementProps> = ({
                       <td className="py-3 px-3 font-bold text-slate-400">{index + 1}</td>
                       <td className="py-3 px-3 font-bold text-purple-950 font-mono">{u.username}</td>
                       <td className="py-3 px-3 font-bold text-slate-900">{u.name}</td>
+                      <td className="py-3 px-3 text-center">
+                        {isEditingInlineClass ? (
+                          <div className="inline-flex items-center space-x-1">
+                            <select
+                              value={tempUserClassVal}
+                              onChange={(e) => setTempUserClassVal(e.target.value)}
+                              className="px-2 py-1 rounded-lg border border-purple-400 bg-white text-slate-900 font-black text-xs focus:outline-none"
+                            >
+                              <option value="A">A</option>
+                              <option value="B">B</option>
+                              <option value="C">C</option>
+                              <option value="-">-</option>
+                            </select>
+                            <button
+                              type="button"
+                              onClick={() => handleSaveInlineUserClass(u)}
+                              className="p-1 rounded-lg bg-emerald-600 text-white hover:bg-emerald-500 cursor-pointer"
+                              title="Simpan Class"
+                            >
+                              <Save className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setEditingUserClassId(null)}
+                              className="p-1 rounded-lg bg-slate-200 text-slate-700 hover:bg-slate-300 cursor-pointer"
+                              title="Batal"
+                            >
+                              <XCircle className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditingUserClassId(u.id);
+                              setTempUserClassVal(userClassVal === '-' ? '-' : userClassVal);
+                            }}
+                            className={`inline-flex items-center space-x-1 px-2.5 py-0.5 rounded-lg text-[11px] font-black uppercase border transition hover:opacity-80 cursor-pointer ${getClassBadgeStyle(
+                              userClassVal
+                            )}`}
+                            title="Klik untuk edit & simpan Class"
+                          >
+                            <span>{userClassVal}</span>
+                            <Edit2 className="w-2.5 h-2.5 opacity-60" />
+                          </button>
+                        )}
+                      </td>
                       <td className="py-3 px-3">
                         <span
                           className={`inline-block px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider border ${getRoleBadgeClass(
@@ -970,7 +1135,7 @@ export const UserOutletManagement: React.FC<UserOutletManagementProps> = ({
                             <button
                               onClick={() => handleOpenEditUser(u)}
                               className="px-2 py-1 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-[11px] font-bold inline-flex items-center space-x-1 transition cursor-pointer"
-                              title="Edit Username, Role & Password"
+                              title="Edit Username, Class, Role & Password"
                             >
                               <Edit2 className="w-3 h-3 text-amber-600" />
                               <span>Edit</span>
@@ -1048,17 +1213,34 @@ export const UserOutletManagement: React.FC<UserOutletManagementProps> = ({
                 />
               </div>
 
-              <div>
-                <label className="text-[10px] font-bold text-slate-600 uppercase block mb-1">
-                  NAMA LENGKAP PENGGUNA
-                </label>
-                <input
-                  type="text"
-                  value={editName}
-                  onChange={(e) => setEditName(e.target.value)}
-                  required
-                  className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-[#faf9f6] text-slate-900 font-semibold focus:border-purple-500 focus:bg-white"
-                />
+              <div className="grid grid-cols-3 gap-2">
+                <div className="col-span-2">
+                  <label className="text-[10px] font-bold text-slate-600 uppercase block mb-1">
+                    NAMA LENGKAP PENGGUNA
+                  </label>
+                  <input
+                    type="text"
+                    value={editName}
+                    onChange={(e) => setEditName(e.target.value)}
+                    required
+                    className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-[#faf9f6] text-slate-900 font-semibold focus:border-purple-500 focus:bg-white"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] font-bold text-slate-600 uppercase block mb-1">
+                    CLASS
+                  </label>
+                  <select
+                    value={editClass}
+                    onChange={(e) => setEditClass(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-[#faf9f6] text-slate-900 font-black focus:border-purple-500 focus:bg-white"
+                  >
+                    <option value="A">Class A</option>
+                    <option value="B">Class B</option>
+                    <option value="C">Class C</option>
+                    <option value="-">-</option>
+                  </select>
+                </div>
               </div>
 
               <div>
@@ -1141,12 +1323,19 @@ export const UserOutletManagement: React.FC<UserOutletManagementProps> = ({
                   </label>
                   <select
                     value={editOutletId}
-                    onChange={(e) => setEditOutletId(e.target.value)}
+                    onChange={(e) => {
+                      const oid = e.target.value;
+                      setEditOutletId(oid);
+                      const foundOutlet = outlets.find((item) => item.id === oid);
+                      if (foundOutlet?.class) {
+                        setEditClass(foundOutlet.class);
+                      }
+                    }}
                     className="w-full px-3 py-2 rounded-xl border border-emerald-200 bg-emerald-50/50 text-emerald-900 font-bold focus:border-emerald-500 focus:bg-white"
                   >
                     {outlets.map((o) => (
                       <option key={o.id} value={o.id}>
-                        {o.name}
+                        {o.name} {o.class ? `(Class ${o.class})` : ''}
                       </option>
                     ))}
                   </select>
@@ -1296,7 +1485,7 @@ export const UserOutletManagement: React.FC<UserOutletManagementProps> = ({
               <Target className="w-4 h-4" />
             </span>
             <h3 className="font-extrabold text-sm uppercase tracking-wider text-slate-900">
-              Daftar 24 Outlet &amp; Penyesuaian Target Head &amp; UMR
+              Daftar 24 Outlet &amp; Penyesuaian Class, Target Head &amp; UMR
             </h3>
           </div>
           <span className="text-xs font-bold text-amber-800 bg-amber-50 border border-amber-200 px-3 py-1 rounded-full">
@@ -1310,16 +1499,18 @@ export const UserOutletManagement: React.FC<UserOutletManagementProps> = ({
               <tr>
                 <th className="py-3 px-3">NO</th>
                 <th className="py-3 px-3">NAMA OUTLET BIOSKOP</th>
+                <th className="py-3 px-3 text-center">CLASS</th>
                 <th className="py-3 px-3">AREA WILAYAH</th>
                 <th className="py-3 px-3 text-right">TARGET SPH / HEAD</th>
                 <th className="py-3 px-3 text-right">UMR (DATABASE)</th>
-                <th className="py-3 px-3 text-center">AKSI TARGET</th>
+                <th className="py-3 px-3 text-center">AKSI TARGET &amp; CLASS</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 font-medium">
               {outlets.map((outlet, index) => {
                 const areaObj = areas.find((a) => a.id === outlet.areaId);
                 const isEditing = editingOutletId === outlet.id;
+                const outletClassVal = (outlet.class || 'B').toUpperCase();
 
                 return (
                   <tr
@@ -1328,6 +1519,31 @@ export const UserOutletManagement: React.FC<UserOutletManagementProps> = ({
                   >
                     <td className="py-3 px-3 font-bold text-slate-400">{index + 1}</td>
                     <td className="py-3 px-3 font-bold text-slate-900">{outlet.name}</td>
+                    <td className="py-3 px-3 text-center">
+                      {isEditing ? (
+                        <select
+                          value={tempOutletClass}
+                          onChange={(e) => setTempOutletClass(e.target.value)}
+                          className="px-2.5 py-1 rounded-lg border border-amber-400 bg-white text-slate-900 font-black text-xs focus:outline-none"
+                        >
+                          <option value="A">A</option>
+                          <option value="B">B</option>
+                          <option value="C">C</option>
+                        </select>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => handleStartEditTarget(outlet)}
+                          className={`inline-flex items-center space-x-1 px-2.5 py-0.5 rounded-lg text-[11px] font-black uppercase border transition hover:opacity-80 cursor-pointer ${getClassBadgeStyle(
+                            outletClassVal
+                          )}`}
+                          title="Klik untuk ubah Class"
+                        >
+                          <span>{outletClassVal}</span>
+                          <Edit2 className="w-2.5 h-2.5 opacity-60" />
+                        </button>
+                      )}
+                    </td>
                     <td className="py-3 px-3 text-slate-600 font-semibold">
                       {areaObj?.name || outlet.areaId}
                     </td>
@@ -1374,7 +1590,7 @@ export const UserOutletManagement: React.FC<UserOutletManagementProps> = ({
                             className="p-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600 cursor-pointer"
                             title="Batal"
                           >
-                            <Trash2 className="w-3.5 h-3.5" />
+                            <XCircle className="w-3.5 h-3.5" />
                           </button>
                         </div>
                       ) : (
@@ -1383,7 +1599,7 @@ export const UserOutletManagement: React.FC<UserOutletManagementProps> = ({
                           className="px-2.5 py-1 rounded-lg border border-amber-300 bg-amber-50 text-amber-900 hover:bg-amber-100 text-xs font-bold inline-flex items-center space-x-1 transition cursor-pointer"
                         >
                           <Edit2 className="w-3 h-3 text-amber-700" />
-                          <span>Ubah Target</span>
+                          <span>Edit &amp; Simpan</span>
                         </button>
                       )}
                     </td>
