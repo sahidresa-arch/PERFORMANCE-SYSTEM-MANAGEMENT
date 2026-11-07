@@ -110,10 +110,9 @@ export const BopoView: React.FC<BopoViewProps> = ({ currentUser, selectedDate })
         return s.date.startsWith(monthKey);
       })
       .forEach((rec) => {
-        rec.shows.forEach((sh) => {
-          sumCinema += sh.omsetCinema || 0;
-          sumFnB += sh.omsetFnB || 0;
-        });
+        const dayTotals = StorageService.getLatestShowTotals(rec.shows);
+        sumCinema += dayTotals.omsetCinema || 0;
+        sumFnB += dayTotals.omsetFnB || 0;
       });
 
     const foundBopo = bopoRecords.find(
