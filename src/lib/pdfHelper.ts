@@ -138,8 +138,8 @@ export const PdfHelper = {
             // Urutkan kolom dari kiri ke kanan
             lineItems.sort((a, b) => a.x - b.x);
 
-            // Gabungkan item yang berdekatan secara horizontal (gap < 5) ke dalam sel kolom yang sama
-            const cells: string[] = [];
+            // Gabungkan item yang berdekatan secara horizontal (gap < 8) ke dalam sel kolom yang sama
+            const rawCells: string[] = [];
             let currentCell = '';
             let lastEndX = -999;
 
@@ -147,12 +147,12 @@ export const PdfHelper = {
               if (lastEndX === -999) {
                 currentCell = li.text;
                 lastEndX = li.x + li.width;
-              } else if (li.x - lastEndX < 5) {
+              } else if (li.x - lastEndX < 8) {
                 currentCell += ' ' + li.text;
                 lastEndX = Math.max(lastEndX, li.x + li.width);
               } else {
                 if (currentCell.trim()) {
-                  cells.push(currentCell.trim());
+                  rawCells.push(currentCell.trim());
                 }
                 currentCell = li.text;
                 lastEndX = li.x + li.width;
@@ -160,7 +160,27 @@ export const PdfHelper = {
             });
 
             if (currentCell.trim()) {
-              cells.push(currentCell.trim());
+              rawCells.push(currentCell.trim());
+            }
+
+            // Satukan token 'X', '/', 'Y' yang terpisah spasi lebar menjadi satu sel 'X/Y'
+            const cells: string[] = [];
+            for (let i = 0; i < rawCells.length; i++) {
+              const cur = rawCells[i];
+              const next1 = rawCells[i + 1];
+              const next2 = rawCells[i + 2];
+              if (/^\d+$/.test(cur) && next1 === '/' && next2 && /^\d+$/.test(next2)) {
+                cells.push(`${cur}/${next2}`);
+                i += 2;
+              } else if (/^\d+\s*\/$/.test(cur) && next1 && /^\d+$/.test(next1)) {
+                cells.push(`${cur}${next1}`);
+                i += 1;
+              } else if (/^\d+$/.test(cur) && next1 && /^\/\s*\d+$/.test(next1)) {
+                cells.push(`${cur}${next1}`);
+                i += 1;
+              } else {
+                cells.push(cur);
+              }
             }
 
             if (cells.length > 0) {

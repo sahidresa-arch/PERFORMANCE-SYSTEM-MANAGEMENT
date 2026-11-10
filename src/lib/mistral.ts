@@ -234,16 +234,33 @@ export const MistralService = {
               shows[1] = totalAudienceColVal;
             }
 
-            // Fallback angka show berurutan jika header tidak dikenali
+            // Fallback angka show berurutan jika header tidak dikenali (tanpa menggeser posisi 0/0 ke kiri)
             const hasShowNow = Object.values(shows).some((v) => v > 0);
             if (!hasShowNow) {
-              let showIdx = 1;
-              for (const c of cells) {
-                if (c === studioName || c === filmTitle || StorageService.isGenreWord(c)) continue;
-                const parsedVal = StorageService.parseAudienceCount(c);
-                if (parsedVal > 0 && showIdx <= 7) {
-                  shows[showIdx] = parsedVal;
-                  showIdx++;
+              const slashCells = cells.filter((c) => /^\d+\s*\/\s*\d+$/.test(c.trim()));
+              if (slashCells.length >= 2) {
+                for (let sIdx = 0; sIdx < Math.min(7, slashCells.length); sIdx++) {
+                  const val = StorageService.parseAudienceCount(slashCells[sIdx]);
+                  shows[sIdx + 1] = val < 10000 ? val : 0;
+                }
+              } else {
+                let showIdx = 1;
+                for (const c of cells) {
+                  const trimmed = c.trim();
+                  if (
+                    c === studioName ||
+                    c === filmTitle ||
+                    StorageService.isGenreWord(c) ||
+                    /^(?:rp\b|\d{1,2}\+|su|bo|2d|3d|atmos|imax)/i.test(trimmed)
+                  ) {
+                    continue;
+                  }
+                  if (/^(?:\d+(?:\s*\/\s*\d+)?|-)$/.test(trimmed) && showIdx <= 7) {
+                    const parsedVal = StorageService.parseAudienceCount(trimmed);
+                    if (parsedVal >= 10000) continue; // lewati harga tiket
+                    shows[showIdx] = parsedVal;
+                    showIdx++;
+                  }
                 }
               }
             }

@@ -96,17 +96,42 @@ export const OcrService = {
     let pdfResult: PdfParseResult | null = null;
     let slideImages: string[] = [];
 
-    // TAHAP 1: Jika dokumen PDF, render halaman ke visual gambar & ekstrak teks digital
+    // TAHAP 1: Jika dokumen PDF, render halaman ke visual gambar & ekstrak teks digital berkoordinat presisi
     if (isPdf) {
       try {
         pdfResult = await PdfHelper.parsePdfDocument(base64Image, targetOutlet);
         slideImages = pdfResult.slideImages || [];
+
+        if (pdfResult && pdfResult.isNativeTextExtracted && pdfResult.extractedStudios.length > 0) {
+          const totalAudience = pdfResult.extractedStudios.reduce((acc, st) => {
+            return acc + Object.values(st.shows).reduce((sum, v) => sum + (v || 0), 0);
+          }, 0);
+          const hasValidTitles = pdfResult.extractedStudios.some(
+            (st) => st.filmTitle && st.filmTitle.trim().length > 1
+          );
+
+          if (totalAudience > 0 && hasValidTitles) {
+            return {
+              outletName: pdfResult.detectedOutlet || targetOutlet?.name || 'Cinema XXI',
+              outletId: targetOutlet?.id,
+              date: pdfResult.detectedDate,
+              detectedClass: pdfResult.detectedClass || targetOutlet?.class || 'A',
+              jumlahFilm: pdfResult.jumlahFilm,
+              studios: pdfResult.extractedStudios,
+              confidence: `Ekstraksi Tabel PDF Presisi (${pdfResult.pagesCount} Slide Terverifikasi)`,
+              detectedSummary: `Berhasil membaca ${pdfResult.extractedStudios.length} baris studio dari ${pdfResult.pagesCount} slide dengan total ${totalAudience.toLocaleString('id-ID')} penonton.`,
+              totalAudience,
+              totalPages: pdfResult.pagesCount,
+              slideImages,
+            };
+          }
+        }
       } catch (pdfErr) {
         console.warn('PdfHelper parsing failed or partial:', pdfErr);
       }
     }
 
-    // TAHAP 2: Mistral OCR (Otomatis diprioritaskan jika API Key Mistral tersedia)
+    // TAHAP 2: Mistral OCR (Untuk foto/gambar atau PDF hasil scan gambar tanpa text layer)
     if (effectiveMistralKey) {
       try {
         const mistralResult = await MistralService.processOccupancy(
