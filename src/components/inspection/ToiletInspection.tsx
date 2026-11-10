@@ -281,7 +281,6 @@ export const ToiletInspection: React.FC<ToiletInspectionProps> = ({
     import('../../lib/supabase')
       .then(async (m) => {
         try {
-          await m.pushLocalInspectionsForOutletDate(formOutletId || undefined, selectedDate);
           const changed = await m.mergeRemoteInspectionsToLocal(false);
           if (changed) reloadInspections();
         } finally {
@@ -307,7 +306,6 @@ export const ToiletInspection: React.FC<ToiletInspectionProps> = ({
       if (document.visibilityState !== 'visible') return;
       import('../../lib/supabase')
         .then(async (m) => {
-          await m.pushLocalInspectionsForOutletDate(formOutletId || undefined, selectedDate);
           const changed = await m.mergeRemoteInspectionsToLocal(false);
           if (changed) reloadInspections();
         })

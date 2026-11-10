@@ -227,6 +227,9 @@ function mergeSyncRowObjects(rowA: any, rowB: any): any {
         if (item.outletId && item.date && item.showNumber !== undefined && item.type) {
           return `${item.outletId}-${item.date}-show${Number(item.showNumber)}-${item.type}`;
         }
+        if (item.outletId && item.date && Array.isArray(item.shows) && !item.nik) {
+          return `${item.outletId}_${item.date}`;
+        }
         if (item.id) return String(item.id);
         if (item.outletId && item.year !== undefined && item.month !== undefined) {
           return `${item.outletId}_${item.year}_${item.month}`;
@@ -544,25 +547,73 @@ function createInternalTableQueryBuilder(table: string, rawSupabase: SupabaseCli
         clientId: DEVICE_CLIENT_ID,
       });
 
-      // 2. Secondary Background Mirror: Mirror additively-merged rows from Internal Server to Supabase Cloud
-      // so a device with partial local state never overwrites previous shows in Supabase JSONB
-      if (rawSupabase) {
-        const recordsToMirror =
-          internalRes.ok && Array.isArray(internalRes.data) && internalRes.data.length > 0
-            ? !Array.isArray(records) && internalRes.data.length === 1
-              ? internalRes.data[0]
-              : internalRes.data
-            : records;
-        Promise.resolve(rawSupabase.from(table).upsert(recordsToMirror, options)).catch(() => {});
-      }
-
       if (internalRes.ok) {
+        // 2. Secondary Background Mirror: Mirror additively-merged rows from Internal Server to Supabase Cloud
+        if (rawSupabase && Array.isArray(internalRes.data) && internalRes.data.length > 0) {
+          const recordsToMirror =
+            !Array.isArray(records) && internalRes.data.length === 1
+              ? internalRes.data[0]
+              : internalRes.data;
+          Promise.resolve(rawSupabase.from(table).upsert(recordsToMirror, options)).catch(() => {});
+        }
         return { data: internalRes.data, error: null };
       }
 
+      // 3. Static Worker / Direct Supabase Fallback:
+      // NEVER blindly overwrite __SYSTEM_SYNC_* rows in Supabase with partial device state!
+      // Always fetch the existing row from rawSupabase and merge additively first.
       if (rawSupabase) {
         try {
-          return await rawSupabase.from(table).upsert(records, options);
+          const incomingList = Array.isArray(records) ? records : [records];
+          const syncIds = incomingList
+            .filter(
+              (r) =>
+                r &&
+                typeof r.id === 'string' &&
+                r.id.startsWith('__SYSTEM_SYNC_') &&
+                Array.isArray(r.shows)
+            )
+            .map((r) => String(r.id));
+
+          let safeRecordsToUpsert = records;
+
+          if (table === 'cinema_sales' && syncIds.length > 0) {
+            const { data: existingRows, error: fetchErr } = await rawSupabase
+              .from('cinema_sales')
+              .select('id, shows, updated_at')
+              .in('id', syncIds);
+
+            if (fetchErr) {
+              // Abort master archive overwrite if we cannot read existing row on weak network
+              const nonMasterOnly = incomingList.filter(
+                (r) =>
+                  r?.id !== '__SYSTEM_SYNC_INSPECTIONS__' &&
+                  r?.id !== '__SYSTEM_SYNC_DAILY_SALES__'
+              );
+              if (nonMasterOnly.length === 0) {
+                return { data: null, error: null };
+              }
+              safeRecordsToUpsert = Array.isArray(records) ? nonMasterOnly : nonMasterOnly[0];
+            } else {
+              const existingMap = new Map<string, any>();
+              for (const ex of existingRows || []) {
+                if (ex && ex.id) existingMap.set(String(ex.id), ex);
+              }
+              const mergedList = incomingList.map((inc) => {
+                if (!inc || !inc.id || !String(inc.id).startsWith('__SYSTEM_SYNC_')) return inc;
+                const prev = existingMap.get(String(inc.id));
+                if (!prev) return inc;
+                const merged = mergeSyncRowObjects(prev, inc);
+                return {
+                  ...inc,
+                  shows: merged.shows,
+                };
+              });
+              safeRecordsToUpsert = Array.isArray(records) ? mergedList : mergedList[0];
+            }
+          }
+
+          return await rawSupabase.from(table).upsert(safeRecordsToUpsert, options);
         } catch (err: any) {
           return { data: null, error: null };
         }
