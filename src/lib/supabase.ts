@@ -390,10 +390,22 @@ function createInternalTableQueryBuilder(table: string, rawSupabase: SupabaseCli
         headOnly,
       });
 
+    // Fetch from Internal Server Sync Engine first; only poll Supabase Cloud for routine metadata checks once every 90s (or when Internal Server is empty) to keep Log Ingestion & Egress near 0
+    const isMetaHeartbeat = selectCols.replace(/\s+/g, '') === 'id,updated_at';
+    const internalRes = await fetchInternal();
+    const hasWarmInternalData =
+      internalRes?.data !== null &&
+      internalRes?.data !== undefined &&
+      (!Array.isArray(internalRes.data) || internalRes.data.length > 0);
+    const hasWarmInternalMeta =
+      isMetaHeartbeat && Array.isArray(internalRes?.data) && internalRes.data.length > 0;
+    const shouldSkipSupaMeta =
+      hasWarmInternalMeta && Date.now() - lastSupabaseMetaPollAt < 90000;
+
     const fetchSupa = async () => {
       if (!rawSupabase) return null;
-      if (Date.now() < supabaseQuotaBackoffUntil) {
-        // Circuit-breaker aktif saat kuota Supabase penuh/gangguan -> 100% jalan lewat Internal Server tanpa delay
+      // Only honor circuit-breaker backoff if Internal Server has warm data; on Static Workers (where internalRes is null), never lock out Supabase
+      if (hasWarmInternalData && Date.now() < supabaseQuotaBackoffUntil) {
         return null;
       }
       try {
@@ -416,29 +428,22 @@ function createInternalTableQueryBuilder(table: string, rawSupabase: SupabaseCli
         }
 
         const timeoutPromise = new Promise<null>((resolve) =>
-          setTimeout(() => resolve(null), 2500)
+          setTimeout(() => resolve(null), 15000)
         );
         const supaRes: any = await Promise.race([q, timeoutPromise]);
         if (supaRes && !supaRes.error) {
           return supaRes;
         }
-        if (!supaRes || supaRes.error) {
+        if ((!supaRes || supaRes.error) && hasWarmInternalData) {
           supabaseQuotaBackoffUntil = Date.now() + 45000;
         }
       } catch {
-        // Jika Supabase penuh/error, aktifkan circuit-breaker 45 detik agar aplikasi tetap 0ms cepat via Internal Server
-        supabaseQuotaBackoffUntil = Date.now() + 45000;
+        if (hasWarmInternalData) {
+          supabaseQuotaBackoffUntil = Date.now() + 45000;
+        }
       }
       return null;
     };
-
-    // Fetch from Internal Server Sync Engine first; only poll Supabase Cloud for routine metadata checks once every 90s (or when Internal Server is empty) to keep Log Ingestion & Egress near 0
-    const isMetaHeartbeat = selectCols.replace(/\s+/g, '') === 'id,updated_at';
-    const internalRes = await fetchInternal();
-    const hasWarmInternalMeta =
-      isMetaHeartbeat && Array.isArray(internalRes?.data) && internalRes.data.length > 0;
-    const shouldSkipSupaMeta =
-      hasWarmInternalMeta && Date.now() - lastSupabaseMetaPollAt < 90000;
 
     let supaRes: any = null;
     if (!shouldSkipSupaMeta) {
@@ -1649,6 +1654,25 @@ const lastAutoPushedInspectionMap = new Map<string, number>();
  * and continuously auto-pushes any recent local inspection (from Device A) that is missing or newer than the remote server.
  */
 export async function mergeRemoteInspectionsToLocal(deltaOnly = false): Promise<boolean> {
+  const initialLocal = StorageService.getInspections();
+  // Fast-track on New Browser (empty local storage): immediately pull lightweight DELTA (~80 KB) first so today's shows appear in <200ms
+  if (!deltaOnly && initialLocal.length === 0) {
+    try {
+      const fastDelta = await fetchInspectionsFromSupabase(undefined, undefined, true);
+      if (Array.isArray(fastDelta) && fastDelta.length > 0) {
+        const fastNorm = fastDelta
+          .map((r) => normalizeInspectionItem(r))
+          .filter(Boolean) as ToiletInspectionRecord[];
+        if (fastNorm.length > 0) {
+          StorageService.saveMergedInspectionsList(fastNorm);
+          StorageService.broadcastChange('inspection');
+        }
+      }
+    } catch {
+      // continue to full fetch
+    }
+  }
+
   const remoteInspections = await fetchInspectionsFromSupabase(undefined, undefined, deltaOnly);
   const currentLocal = StorageService.getInspections();
 
