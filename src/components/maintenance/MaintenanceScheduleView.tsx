@@ -283,10 +283,11 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
   // Filter outlets by user role and sort alphabetically by displayName (matching screenshot)
   const visibleOutlets = useMemo(() => {
     let list = outlets.filter((o) => {
-      if (currentUser.role === 'outlet' && currentUser.outletId) {
+      const roleStr = String(currentUser.role);
+      if ((roleStr === 'outlet' || roleStr === 'outlet_manager') && currentUser.outletId) {
         return o.id === currentUser.outletId;
       }
-      if (currentUser.role === 'area' && currentUser.areaId) {
+      if ((roleStr === 'area' || roleStr === 'area_manager') && currentUser.areaId) {
         return o.areaId === currentUser.areaId;
       }
       return true;

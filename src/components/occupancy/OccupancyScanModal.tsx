@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { Outlet } from '../../types';
 import { StorageService } from '../../lib/storage';
 import { OcrService } from '../../lib/ocrService';
@@ -486,8 +487,8 @@ export const OccupancyScanModal: React.FC<OccupancyScanModalProps> = ({
 
   if (!isOpen) return null;
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-200">
+  return createPortal(
+    <div className="fixed inset-0 z-[9999] flex items-center justify-center p-3 sm:p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-200">
       <div className="w-full max-w-5xl max-h-[94vh] flex flex-col rounded-3xl border border-amber-200/90 bg-white text-slate-800 shadow-2xl overflow-hidden transition">
         {/* Header */}
         <div className="p-4 border-b border-amber-200/80 flex items-center justify-between bg-amber-50/70 shrink-0">
@@ -1348,6 +1349,7 @@ export const OccupancyScanModal: React.FC<OccupancyScanModalProps> = ({
           )}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 };

@@ -530,7 +530,13 @@ export const ToiletInspection: React.FC<ToiletInspectionProps> = ({
           Number(i.showNumber) === showNum &&
           i.type === formToiletType
       );
-      return found ? isChecklistComplete(found.checklist) : false;
+      return found
+        ? found.status === 'Sudah Lapor' ||
+            CHECKLIST_ITEMS.every((ci) => {
+              const val = found.checklist?.[ci.key as keyof ToiletChecklist];
+              return val === 'B' || val === 'K' || val === 'R';
+            })
+        : false;
     };
 
     const nextIncomplete =

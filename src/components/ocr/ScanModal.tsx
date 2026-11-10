@@ -1,4 +1,5 @@
 import React, { useState, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { OcrService, ExtractedSalesData } from '../../lib/ocrService';
 import {
   Upload,
@@ -63,8 +64,8 @@ export const ScanModal: React.FC<ScanModalProps> = ({
     }
   };
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-200">
+  return createPortal(
+    <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-200">
       <div className="w-full max-w-lg rounded-3xl border border-amber-200/90 bg-white text-slate-800 shadow-2xl overflow-hidden transition">
         {/* Header */}
         <div className="p-4 border-b border-amber-200/80 flex items-center justify-between bg-amber-50/70">
@@ -218,6 +219,7 @@ export const ScanModal: React.FC<ScanModalProps> = ({
           )}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 };
