@@ -267,6 +267,14 @@ function mergeSyncRowObjects(rowA: any, rowB: any): any {
     }
   }
 
+  if (Array.isArray(older.rows) || Array.isArray(newer.rows)) {
+    const olderHasRows = Array.isArray(older.rows) && older.rows.length > 0;
+    const newerHasRows = Array.isArray(newer.rows) && newer.rows.length > 0;
+    if (!newerHasRows && olderHasRows) {
+      return older;
+    }
+  }
+
   return newer;
 }
 
@@ -458,15 +466,40 @@ function createInternalTableQueryBuilder(table: string, rawSupabase: SupabaseCli
       return { data: null, error: null, count };
     }
 
+    // Filter out corrupted empty cinema_occupancy rows from Supabase so they never overwrite valid studio data
+    const filterValidOccupancy = (input: any): any => {
+      if (table !== 'cinema_occupancy' || !input) return input;
+      if (Array.isArray(input)) {
+        return input.filter(
+          (r) =>
+            r &&
+            Array.isArray(r.rows) &&
+            r.rows.length > 0 &&
+            !/^20(0\d|1\d)-/.test(String(r.date || ''))
+        );
+      }
+      if (typeof input === 'object') {
+        return Array.isArray(input.rows) &&
+          input.rows.length > 0 &&
+          !/^20(0\d|1\d)-/.test(String(input.date || ''))
+          ? input
+          : null;
+      }
+      return input;
+    };
+
+    const validSupaData = filterValidOccupancy(supaRes?.data);
+    const validIntData = filterValidOccupancy(internalRes?.data);
+
     // Cache full rows from Supabase into Internal Server so Internal Server always stays warm
     if (
-      supaRes?.data &&
+      validSupaData &&
       (selectCols === '*' ||
         selectCols.includes('shows') ||
         selectCols.includes('rows') ||
         selectCols.includes('config'))
     ) {
-      const rowsToCache = Array.isArray(supaRes.data) ? supaRes.data : [supaRes.data];
+      const rowsToCache = Array.isArray(validSupaData) ? validSupaData : [validSupaData];
       if (rowsToCache.length > 0 && rowsToCache[0]?.id) {
         callInternalSyncUpsert({
           table,
@@ -478,8 +511,8 @@ function createInternalTableQueryBuilder(table: string, rawSupabase: SupabaseCli
     }
 
     if (singleMode === 'maybeSingle' || singleMode === 'single') {
-      const intRow = internalRes?.data || null;
-      const supRow = supaRes?.data || null;
+      const intRow = validIntData || null;
+      const supRow = validSupaData || null;
       const chosen = mergeSyncRowObjects(intRow, supRow);
       if (!chosen && singleMode === 'single') {
         return { data: null, error: { code: 'PGRST116', message: 'No rows found' } };
@@ -487,8 +520,8 @@ function createInternalTableQueryBuilder(table: string, rawSupabase: SupabaseCli
       return { data: chosen, error: null };
     }
 
-    const intList = Array.isArray(internalRes?.data) ? internalRes.data : [];
-    const supList = Array.isArray(supaRes?.data) ? supaRes.data : [];
+    const intList = Array.isArray(validIntData) ? validIntData : [];
+    const supList = Array.isArray(validSupaData) ? validSupaData : [];
 
     if (intList.length > 0 && supList.length > 0) {
       const mergedMap = new Map<string, any>();
@@ -545,86 +578,105 @@ function createInternalTableQueryBuilder(table: string, rawSupabase: SupabaseCli
       return executeSelect().then(onfulfilled, onrejected);
     },
     async upsert(records: any, options?: any) {
+      const upsertToRawSupabaseSafely = async () => {
+        if (!rawSupabase) return { data: null, error: null };
+        try {
+          const incomingList = (Array.isArray(records) ? records : [records]).filter(Boolean);
+          if (incomingList.length === 0) return { data: null, error: null };
+
+          if (table === 'cinema_occupancy') {
+            const validOccList = incomingList
+              .filter((r) => r && r.id && Array.isArray(r.rows) && r.rows.length > 0)
+              .map((r) => ({
+                id: r.id,
+                outlet_id: r.outlet_id,
+                date: r.date,
+                rows: r.rows,
+                updated_at: r.updated_at || new Date().toISOString(),
+              }));
+            if (validOccList.length === 0) return { data: null, error: null };
+            const payload = Array.isArray(records) ? validOccList : validOccList[0];
+            return await rawSupabase.from(table).upsert(payload, options);
+          }
+
+          if (table === 'cinema_sales') {
+            const syncIds = incomingList
+              .filter(
+                (r) =>
+                  r &&
+                  typeof r.id === 'string' &&
+                  r.id.startsWith('__SYSTEM_SYNC_') &&
+                  Array.isArray(r.shows)
+              )
+              .map((r) => String(r.id));
+
+            let listToSave = incomingList.map((r) => ({
+              id: r.id,
+              outlet_id: r.outlet_id,
+              date: r.date,
+              shows: r.shows,
+              updated_at: r.updated_at || new Date().toISOString(),
+            }));
+
+            if (syncIds.length > 0) {
+              const { data: existingRows, error: fetchErr } = await rawSupabase
+                .from('cinema_sales')
+                .select('id, shows, updated_at')
+                .in('id', syncIds);
+
+              if (fetchErr) {
+                listToSave = listToSave.filter(
+                  (r) =>
+                    r?.id !== '__SYSTEM_SYNC_INSPECTIONS__' &&
+                    r?.id !== '__SYSTEM_SYNC_DAILY_SALES__'
+                );
+                if (listToSave.length === 0) {
+                  return { data: null, error: null };
+                }
+              } else {
+                const existingMap = new Map<string, any>();
+                for (const ex of existingRows || []) {
+                  if (ex && ex.id) existingMap.set(String(ex.id), ex);
+                }
+                listToSave = listToSave.map((inc) => {
+                  if (!inc || !inc.id || !String(inc.id).startsWith('__SYSTEM_SYNC_')) return inc;
+                  const prev = existingMap.get(String(inc.id));
+                  if (!prev) return inc;
+                  const merged = mergeSyncRowObjects(prev, inc);
+                  return {
+                    ...inc,
+                    shows: merged.shows,
+                  };
+                });
+              }
+            }
+
+            const payload = Array.isArray(records) ? listToSave : listToSave[0];
+            return await rawSupabase.from(table).upsert(payload, options);
+          }
+
+          return await rawSupabase.from(table).upsert(records, options);
+        } catch {
+          return { data: null, error: null };
+        }
+      };
+
       // 1. Primary: Save to Internal Server Sync Engine + Cross-Worker Auto-Bridge (main <-> v2)
       const internalRes = await callInternalSyncUpsert({
         table,
         records,
         clientId: DEVICE_CLIENT_ID,
+        returnFull: table === 'cinema_occupancy',
       });
 
       if (internalRes.ok) {
-        // 2. Secondary Background Mirror: Mirror additively-merged rows from Internal Server to Supabase Cloud
-        if (rawSupabase && Array.isArray(internalRes.data) && internalRes.data.length > 0) {
-          const recordsToMirror =
-            !Array.isArray(records) && internalRes.data.length === 1
-              ? internalRes.data[0]
-              : internalRes.data;
-          Promise.resolve(rawSupabase.from(table).upsert(recordsToMirror, options)).catch(() => {});
-        }
+        // 2. Secondary Background Mirror: Mirror full valid records (including rows/shows) to Supabase Cloud
+        upsertToRawSupabaseSafely().catch(() => {});
         return { data: internalRes.data, error: null };
       }
 
-      // 3. Static Worker / Direct Supabase Fallback:
-      // NEVER blindly overwrite __SYSTEM_SYNC_* rows in Supabase with partial device state!
-      // Always fetch the existing row from rawSupabase and merge additively first.
-      if (rawSupabase) {
-        try {
-          const incomingList = Array.isArray(records) ? records : [records];
-          const syncIds = incomingList
-            .filter(
-              (r) =>
-                r &&
-                typeof r.id === 'string' &&
-                r.id.startsWith('__SYSTEM_SYNC_') &&
-                Array.isArray(r.shows)
-            )
-            .map((r) => String(r.id));
-
-          let safeRecordsToUpsert = records;
-
-          if (table === 'cinema_sales' && syncIds.length > 0) {
-            const { data: existingRows, error: fetchErr } = await rawSupabase
-              .from('cinema_sales')
-              .select('id, shows, updated_at')
-              .in('id', syncIds);
-
-            if (fetchErr) {
-              // Abort master archive overwrite if we cannot read existing row on weak network
-              const nonMasterOnly = incomingList.filter(
-                (r) =>
-                  r?.id !== '__SYSTEM_SYNC_INSPECTIONS__' &&
-                  r?.id !== '__SYSTEM_SYNC_DAILY_SALES__'
-              );
-              if (nonMasterOnly.length === 0) {
-                return { data: null, error: null };
-              }
-              safeRecordsToUpsert = Array.isArray(records) ? nonMasterOnly : nonMasterOnly[0];
-            } else {
-              const existingMap = new Map<string, any>();
-              for (const ex of existingRows || []) {
-                if (ex && ex.id) existingMap.set(String(ex.id), ex);
-              }
-              const mergedList = incomingList.map((inc) => {
-                if (!inc || !inc.id || !String(inc.id).startsWith('__SYSTEM_SYNC_')) return inc;
-                const prev = existingMap.get(String(inc.id));
-                if (!prev) return inc;
-                const merged = mergeSyncRowObjects(prev, inc);
-                return {
-                  ...inc,
-                  shows: merged.shows,
-                };
-              });
-              safeRecordsToUpsert = Array.isArray(records) ? mergedList : mergedList[0];
-            }
-          }
-
-          return await rawSupabase.from(table).upsert(safeRecordsToUpsert, options);
-        } catch (err: any) {
-          return { data: null, error: null };
-        }
-      }
-
-      return { data: null, error: null };
+      // 3. Direct Supabase Fallback
+      return await upsertToRawSupabaseSafely();
     },
   };
 
@@ -1077,12 +1129,14 @@ async function executeOccupancyUpsert(
   rows: any[],
   skipMetaPointer: boolean
 ): Promise<boolean> {
+  if (!outletId || !date || !Array.isArray(rows) || rows.length === 0) return false;
   const client = getSupabase();
   if (!client) return false;
 
   try {
     const nowIso = new Date().toISOString();
     const id = `${outletId}_${date}`;
+    recordSyncTimestamp(id, nowIso, true);
     recordSyncTimestamp('__SYSTEM_SYNC_OCCUPANCY__', nowIso, true);
 
     const { error } = await client.from('cinema_occupancy').upsert(
@@ -1139,7 +1193,15 @@ export async function fetchOccupancyFromSupabase(
     const { data, error } = await query;
     if (error || !data) return null;
 
-    return data;
+    return Array.isArray(data)
+      ? data.filter(
+          (r: any) =>
+            r &&
+            Array.isArray(r.rows) &&
+            r.rows.length > 0 &&
+            !/^20(0\d|1\d)-/.test(String(r.date || ''))
+        )
+      : null;
   } catch (e) {
     console.warn('Supabase fetch occupancy error:', e);
     return null;
@@ -1214,7 +1276,8 @@ export async function mergeRemoteSalesToLocal(deltaOnly = false): Promise<boolea
         'cinema_xxi_user_sales_overrides',
         JSON.stringify(Array.from(overrideMap.values()))
       );
-      localStorage.setItem('cinema_xxi_daily_sales', JSON.stringify(currentLocal));
+      const compactSales = currentLocal.filter((s) => !StorageService.isStaticUneditedSalesRecord(s));
+      localStorage.setItem('cinema_xxi_daily_sales', JSON.stringify(compactSales));
     } catch {
       // ignore
     }
@@ -1261,16 +1324,40 @@ export async function mergeRemoteOccupancyToLocal(
   let updated = false;
   remoteOcc.forEach((row: any) => {
     const outletId = row.outlet_id;
-    const date = row.date;
+    const date = StorageService.normalizeDateStr(row.date || '');
     const rows = Array.isArray(row.rows) ? row.rows : [];
-    if (outletId && date && rows.length > 0) {
+    if (outletId && date && rows.length > 0 && !/^20(0\d|1\d)-/.test(date)) {
+      try {
+        const localSaveTsRaw = localStorage.getItem(`cinema_xxi_occupancy_local_save_ts_${outletId}_${date}`);
+        if (localSaveTsRaw) {
+          const localSaveTs = Number(localSaveTsRaw);
+          const remoteTs = row.updated_at ? new Date(row.updated_at).getTime() : 0;
+          if (Date.now() - localSaveTs < 10000 && remoteTs < localSaveTs) {
+            return;
+          }
+        }
+      } catch {
+        // ignore
+      }
+
+      StorageService.cacheOccupancyInMemory(outletId, date, rows);
+
       const key1 = `cinema_xxi_occupancy_records_${outletId}_${date}`;
       const key2 = `cinema_xxi_occupancy_${outletId}_${date}`;
       const existingRaw = localStorage.getItem(key1) || localStorage.getItem(key2);
       const newRaw = JSON.stringify(rows);
       if (existingRaw !== newRaw) {
-        localStorage.setItem(key1, newRaw);
-        localStorage.setItem(key2, newRaw);
+        try {
+          localStorage.setItem(key1, newRaw);
+          localStorage.setItem(key2, newRaw);
+        } catch {
+          try {
+            localStorage.removeItem('cinema_xxi_daily_sales');
+            localStorage.setItem(key1, newRaw);
+          } catch {
+            // in-memory cache still holds rows
+          }
+        }
         try {
           const manRaw = localStorage.getItem('cinema_xxi_occupancy_manifest');
           const man = manRaw ? JSON.parse(manRaw) : {};
@@ -3377,6 +3464,95 @@ async function seedInternalServerFromLocalDevice(): Promise<void> {
         seedMode: true,
       });
     }
+
+    // 6. Self-Heal & Seed Occupancy Records from local manifest / localStorage
+    const occMap = new Map<string, { id: string; outlet_id: string; date: string; rows: any[]; updated_at: string }>();
+    try {
+      const manRaw = localStorage.getItem('cinema_xxi_occupancy_manifest');
+      if (manRaw) {
+        const man = JSON.parse(manRaw);
+        Object.values(man).forEach((entry: any) => {
+          if (entry && entry.outletId && entry.date) {
+            const normDate = StorageService.normalizeDateStr(String(entry.date));
+            if (/^20(0\d|1\d)-/.test(normDate)) return;
+            const rows = Array.isArray(entry.data)
+              ? entry.data
+              : Array.isArray(entry.rows)
+              ? entry.rows
+              : [];
+            if (rows.length > 0) {
+              const id = `${entry.outletId}_${normDate}`;
+              occMap.set(id, {
+                id,
+                outlet_id: entry.outletId,
+                date: normDate,
+                rows,
+                updated_at: entry.updatedAt || new Date().toISOString(),
+              });
+              // Restore primary localStorage key if it was previously wiped to "[]"
+              const key1 = `cinema_xxi_occupancy_records_${entry.outletId}_${normDate}`;
+              const curRaw = localStorage.getItem(key1);
+              if (!curRaw || curRaw === '[]') {
+                try {
+                  localStorage.setItem(key1, JSON.stringify(rows));
+                } catch {
+                  // ignore
+                }
+              }
+            }
+          }
+        });
+      }
+    } catch {
+      // ignore
+    }
+
+    try {
+      Object.keys(localStorage).forEach((k) => {
+        if (k.startsWith('cinema_xxi_occupancy_records_')) {
+          const keyBody = k.replace('cinema_xxi_occupancy_records_', '');
+          const underscoreIdx = keyBody.lastIndexOf('_');
+          if (underscoreIdx > 0) {
+            const outletId = keyBody.substring(0, underscoreIdx);
+            const normDate = StorageService.normalizeDateStr(keyBody.substring(underscoreIdx + 1));
+            if (/^20(0\d|1\d)-/.test(normDate)) return;
+            const id = `${outletId}_${normDate}`;
+            if (!occMap.has(id)) {
+              const raw = localStorage.getItem(k);
+              if (raw && raw !== '[]') {
+                try {
+                  const parsed = JSON.parse(raw);
+                  const rows = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.rows) ? parsed.rows : [];
+                  if (rows.length > 0) {
+                    occMap.set(id, {
+                      id,
+                      outlet_id: outletId,
+                      date: normDate,
+                      rows,
+                      updated_at: new Date().toISOString(),
+                    });
+                  }
+                } catch {
+                  // ignore
+                }
+              }
+            }
+          }
+        }
+      });
+    } catch {
+      // ignore
+    }
+
+    if (occMap.size > 0) {
+      const occList = Array.from(occMap.values());
+      const client = getSupabase();
+      if (client) {
+        await client.from('cinema_occupancy').upsert(occList, { onConflict: 'id' });
+      }
+      StorageService.broadcastChange('occupancy');
+      StorageService.broadcastChange('movies');
+    }
   } catch {
     // ignore
   }
@@ -3443,6 +3619,10 @@ function handleRealtimeRowTrigger(rowId: string, incomingUpdatedAt?: string, sen
     scheduleDebouncedRealtimeMerge('daily_sales', () => mergeRemoteSalesToLocal(false));
     return;
   }
+  if (rowId === '__SYSTEM_SYNC_OCCUPANCY__') {
+    scheduleDebouncedRealtimeMerge('occupancy', () => mergeRemoteOccupancyToLocal());
+    return;
+  }
 }
 
 /**
@@ -3466,6 +3646,51 @@ export function setupSupabaseRealtimeSync(): () => void {
   };
   document.addEventListener('visibilitychange', handleVisibility);
 
+  const applyRealtimeOccupancyUpdate = (outletIdRaw: string, dateRaw: string, rows: any[], updatedAt?: string) => {
+    if (!outletIdRaw || !dateRaw || !Array.isArray(rows) || rows.length === 0) return;
+    const outletId = String(outletIdRaw);
+    const date = StorageService.normalizeDateStr(String(dateRaw));
+    if (/^20(0\d|1\d)-/.test(date)) return;
+    if (isEchoFromOwnWrite(`${outletId}_${date}`, updatedAt)) return;
+
+    StorageService.cacheOccupancyInMemory(outletId, date, rows);
+
+    const key1 = `cinema_xxi_occupancy_records_${outletId}_${date}`;
+    const key2 = `cinema_xxi_occupancy_${outletId}_${date}`;
+    const serialized = JSON.stringify(rows);
+    try {
+      localStorage.setItem(key1, serialized);
+      localStorage.setItem(key2, serialized);
+    } catch {
+      try {
+        localStorage.removeItem('cinema_xxi_daily_sales');
+        localStorage.setItem(key1, serialized);
+      } catch {
+        // in-memory cache still holds rows
+      }
+    }
+    try {
+      const manRaw = localStorage.getItem('cinema_xxi_occupancy_manifest');
+      const man = manRaw ? JSON.parse(manRaw) : {};
+      if (!man[outletId] || !Array.isArray(man[outletId])) man[outletId] = [];
+      if (!man[outletId].includes(date)) {
+        man[outletId].push(date);
+      }
+      man[`${outletId}_${date}`] = {
+        outletId,
+        date,
+        data: rows,
+        updatedAt: updatedAt || new Date().toISOString(),
+      };
+      localStorage.setItem('cinema_xxi_occupancy_manifest', JSON.stringify(man));
+    } catch {
+      // ignore
+    }
+    StorageService.syncOccupancyToMovieHistory(outletId, date, rows);
+    StorageService.broadcastChange('occupancy');
+    StorageService.broadcastChange('movies');
+  };
+
   // 2. Internal Server Sync Engine Real-Time Stream (SSE: 0 Kuota Egress, Bebas Limit Log Ingestion)
   let eventSource: EventSource | null = null;
   try {
@@ -3486,27 +3711,7 @@ export function setupSupabaseRealtimeSync(): () => void {
         if (msg.table === 'cinema_sales' && msg.id) {
           handleRealtimeRowTrigger(String(msg.id), msg.updated_at, msg.clientId);
         } else if (msg.table === 'cinema_occupancy' && msg.outlet_id && msg.date) {
-          const outletId = msg.outlet_id;
-          const date = msg.date;
-          const rows = Array.isArray(msg.rows) ? msg.rows : [];
-          const key1 = `cinema_xxi_occupancy_records_${outletId}_${date}`;
-          const key2 = `cinema_xxi_occupancy_${outletId}_${date}`;
-          localStorage.setItem(key1, JSON.stringify(rows));
-          localStorage.setItem(key2, JSON.stringify(rows));
-          try {
-            const manRaw = localStorage.getItem('cinema_xxi_occupancy_manifest');
-            const man = manRaw ? JSON.parse(manRaw) : {};
-            if (!man[outletId]) man[outletId] = [];
-            if (!man[outletId].includes(date)) {
-              man[outletId].push(date);
-              localStorage.setItem('cinema_xxi_occupancy_manifest', JSON.stringify(man));
-            }
-          } catch {
-            // ignore
-          }
-          StorageService.syncOccupancyToMovieHistory(outletId, date, rows);
-          StorageService.broadcastChange('occupancy');
-          StorageService.broadcastChange('movies');
+          applyRealtimeOccupancyUpdate(msg.outlet_id, msg.date, msg.rows, msg.updated_at);
         }
       } catch {
         // ignore parse errors
@@ -3539,27 +3744,12 @@ export function setupSupabaseRealtimeSync(): () => void {
         { event: '*', schema: 'public', table: 'cinema_occupancy' },
         (payload: any) => {
           if (payload.new && payload.new.outlet_id && payload.new.date) {
-            const outletId = payload.new.outlet_id;
-            const date = payload.new.date;
-            const rows = Array.isArray(payload.new.rows) ? payload.new.rows : [];
-            const key1 = `cinema_xxi_occupancy_records_${outletId}_${date}`;
-            const key2 = `cinema_xxi_occupancy_${outletId}_${date}`;
-            localStorage.setItem(key1, JSON.stringify(rows));
-            localStorage.setItem(key2, JSON.stringify(rows));
-            try {
-              const manRaw = localStorage.getItem('cinema_xxi_occupancy_manifest');
-              const man = manRaw ? JSON.parse(manRaw) : {};
-              if (!man[outletId]) man[outletId] = [];
-              if (!man[outletId].includes(date)) {
-                man[outletId].push(date);
-                localStorage.setItem('cinema_xxi_occupancy_manifest', JSON.stringify(man));
-              }
-            } catch {
-              // ignore
-            }
-            StorageService.syncOccupancyToMovieHistory(outletId, date, rows);
-            StorageService.broadcastChange('occupancy');
-            StorageService.broadcastChange('movies');
+            applyRealtimeOccupancyUpdate(
+              payload.new.outlet_id,
+              payload.new.date,
+              payload.new.rows,
+              payload.new.updated_at
+            );
           }
         }
       )

@@ -223,8 +223,12 @@ function mergeStoreTables(target: SyncStoreData, incoming: any): void {
   if (incoming.cinema_occupancy && typeof incoming.cinema_occupancy === 'object') {
     for (const [id, incRow] of Object.entries<any>(incoming.cinema_occupancy)) {
       if (!incRow || !id) continue;
+      const incHasRows = Array.isArray(incRow.rows) && incRow.rows.length > 0;
       const existing = target.cinema_occupancy[id];
-      if (!existing || isNewerOrEqualIso(incRow.updated_at, existing.updated_at)) {
+      const existingHasRows = existing && Array.isArray(existing.rows) && existing.rows.length > 0;
+      if (!incHasRows && existingHasRows) continue;
+      if (!incHasRows && !existing) continue;
+      if (!existing || !existingHasRows || isNewerOrEqualIso(incRow.updated_at, existing.updated_at)) {
         target.cinema_occupancy[id] = incRow;
       }
     }
@@ -452,13 +456,24 @@ export default {
                   id: masterId,
                 });
               }
+            } else if (table === 'cinema_occupancy') {
+              const incHasRows = Array.isArray(normalized.rows) && normalized.rows.length > 0;
+              const existingHasRows = existing && Array.isArray(existing.rows) && existing.rows.length > 0;
+              if (!incHasRows && existingHasRows) {
+                targetTable[id] = existing;
+              } else if (incHasRows) {
+                targetTable[id] = normalized;
+              } else {
+                continue;
+              }
             } else {
               targetTable[id] = normalized;
             }
 
             const saved = targetTable[id];
+            if (!saved) continue;
             updatedMeta.push(
-              returnFull
+              returnFull || table === 'cinema_occupancy'
                 ? saved
                 : {
                     id: saved.id,

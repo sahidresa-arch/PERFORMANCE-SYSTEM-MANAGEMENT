@@ -277,33 +277,43 @@ export const PdfHelper = {
       des: '12', dec: '12', desember: '12', december: '12',
     };
 
-    const indonesianDateMatch = fullDocText.match(/(\d{1,2})[\s\-/\.]([A-Za-z]{3,10})[\s\-/\.](\d{2,4})/i);
+    const indonesianDateMatch = fullDocText.match(/\b(\d{1,2})[\s\-/\.]([A-Za-z]{3,10})[\s\-/\.](\d{2,4})\b/i);
     if (indonesianDateMatch) {
       const day = indonesianDateMatch[1].padStart(2, '0');
       const monthRaw = indonesianDateMatch[2].toLowerCase();
       let year = indonesianDateMatch[3];
       if (year.length === 2) year = '20' + year;
+      const yearNum = parseInt(year, 10);
       const foundKey = Object.keys(monthMap).find((k) => monthRaw.startsWith(k));
       const monthNum = foundKey ? monthMap[foundKey] : undefined;
-      if (monthNum) {
+      if (monthNum && yearNum >= 2020 && yearNum <= 2035) {
         detectedDate = `${year}-${monthNum}-${day}`;
       }
     }
 
     if (!detectedDate) {
-      const dateMatch = fullDocText.match(/(\d{1,2}[-/\.]\d{1,2}[-/\.]\d{2,4})/);
-      if (dateMatch) {
-        const parts = dateMatch[1].split(/[-/\.]/);
-        if (parts.length === 3) {
-          let day = parts[0].padStart(2, '0');
-          let month = parts[1].padStart(2, '0');
-          let year = parts[2];
-          if (year.length === 2) year = '20' + year;
-          if (parts[0].length === 4) {
-            detectedDate = `${parts[0]}-${parts[1].padStart(2, '0')}-${parts[2].padStart(2, '0')}`;
-          } else {
-            detectedDate = `${year}-${month}-${day}`;
-          }
+      // 1. Cek format YYYY-MM-DD atau YYYY/MM/DD terlebih dahulu agar "2026-10-10" tidak terpotong menjadi "26-10-10" (2010-10-26)
+      const isoDateMatch = fullDocText.match(/\b(20[2-3]\d)[-/\.](\d{1,2})[-/\.](\d{1,2})\b/);
+      if (isoDateMatch) {
+        const year = isoDateMatch[1];
+        const month = isoDateMatch[2].padStart(2, '0');
+        const day = isoDateMatch[3].padStart(2, '0');
+        if (parseInt(month, 10) >= 1 && parseInt(month, 10) <= 12 && parseInt(day, 10) >= 1 && parseInt(day, 10) <= 31) {
+          detectedDate = `${year}-${month}-${day}`;
+        }
+      }
+    }
+
+    if (!detectedDate) {
+      // 2. Cek format DD-MM-YYYY atau DD/MM/YY dengan word boundary penuh
+      const dmyDateMatch = fullDocText.match(/\b(\d{1,2})[-/\.](\d{1,2})[-/\.](20[2-3]\d|[2-3]\d)\b/);
+      if (dmyDateMatch) {
+        const day = dmyDateMatch[1].padStart(2, '0');
+        const month = dmyDateMatch[2].padStart(2, '0');
+        let year = dmyDateMatch[3];
+        if (year.length === 2) year = '20' + year;
+        if (parseInt(month, 10) >= 1 && parseInt(month, 10) <= 12 && parseInt(day, 10) >= 1 && parseInt(day, 10) <= 31) {
+          detectedDate = `${year}-${month}-${day}`;
         }
       }
     }

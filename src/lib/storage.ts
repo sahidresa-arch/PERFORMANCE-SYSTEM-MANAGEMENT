@@ -66,6 +66,7 @@ const KEYS = {
 const RECENT_INSPECTIONS_KEY = 'cinema_xxi_recent_inspections_v2';
 let cachedInspectionsList: ToiletInspectionRecord[] | null = null;
 const sessionSavedInspectionsMap = new Map<string, ToiletInspectionRecord>();
+const sessionSavedOccupancyMap = new Map<string, any[]>();
 
 if (typeof window !== 'undefined') {
   window.addEventListener('storage', (e) => {
@@ -1250,7 +1251,12 @@ export const StorageService = {
 
     const finalList = Array.from(existingMap.values());
     if (updated || !raw) {
-      localStorage.setItem(KEYS.SALES, JSON.stringify(finalList));
+      const compactList = finalList.filter((item) => !this.isStaticUneditedSalesRecord(item));
+      try {
+        localStorage.setItem(KEYS.SALES, JSON.stringify(compactList));
+      } catch {
+        // ignore quota errors
+      }
     }
 
     return finalList;
@@ -1319,7 +1325,12 @@ export const StorageService = {
       (s) => !(s.outletId === normalizedRecord.outletId && s.date === normalizedRecord.date)
     );
     list.push(normalizedRecord);
-    localStorage.setItem(KEYS.SALES, JSON.stringify(list));
+    const compactList = list.filter((item) => !this.isStaticUneditedSalesRecord(item));
+    try {
+      localStorage.setItem(KEYS.SALES, JSON.stringify(compactList));
+    } catch {
+      // ignore quota error since cinema_xxi_user_sales_overrides already holds the record
+    }
     this.broadcastChange('sales');
 
     // Asynchronous background sync ke Supabase jika terhubung
@@ -2412,7 +2423,17 @@ export const StorageService = {
     });
 
     const updatedList = [...newRecords, ...filteredList];
-    localStorage.setItem(KEYS.MOVIES, JSON.stringify(updatedList));
+    try {
+      localStorage.setItem(KEYS.MOVIES, JSON.stringify(updatedList));
+    } catch {
+      try {
+        // Free space by compacting KEYS.SALES if full
+        localStorage.removeItem(KEYS.SALES);
+        localStorage.setItem(KEYS.MOVIES, JSON.stringify(updatedList));
+      } catch {
+        // ignore quota error; getAllUploadedMovies reads directly from sessionSavedOccupancyMap and occupancy records
+      }
+    }
     this.broadcastChange('movies');
   },
 
@@ -2423,6 +2444,8 @@ export const StorageService = {
 
     const processRows = (outId: string, d: string, rows: any[]) => {
       const normD = this.normalizeDateStr(d);
+      // Skip corrupted historical years (e.g. 2009/2010/2011 from legacy date regex bug)
+      if (/^20(0\d|1\d)-/.test(normD)) return;
       handledDatesSet.add(`${outId}_${normD}`);
       handledDatesSet.add(`${outId}_${d}`);
 
@@ -2456,6 +2479,16 @@ export const StorageService = {
       });
     };
 
+    // 0. Scan dari in-memory sessionSavedOccupancyMap terlebih dahulu (100% kebal QuotaExceededError)
+    sessionSavedOccupancyMap.forEach((rows, key) => {
+      const underscoreIdx = key.lastIndexOf('_');
+      if (underscoreIdx > 0 && Array.isArray(rows) && rows.length > 0) {
+        const outletId = key.substring(0, underscoreIdx);
+        const date = key.substring(underscoreIdx + 1);
+        processRows(outletId, date, rows);
+      }
+    });
+
     // 1. Scan seluruh record okupansi di localStorage TERLEBIH DAHULU (data scan / edit TERBARU)
     try {
       const keys = Object.keys(localStorage);
@@ -2464,7 +2497,8 @@ export const StorageService = {
           k.startsWith('cinema_xxi_occupancy_records_') ||
           (k.startsWith('cinema_xxi_occupancy_') &&
             !k.startsWith('cinema_xxi_occupancy_manifest') &&
-            !k.startsWith('cinema_xxi_occupancy_records_'))
+            !k.startsWith('cinema_xxi_occupancy_records_') &&
+            !k.startsWith('cinema_xxi_occupancy_local_save_ts_'))
         ) {
           const prefix = k.startsWith('cinema_xxi_occupancy_records_')
             ? 'cinema_xxi_occupancy_records_'
@@ -2530,6 +2564,7 @@ export const StorageService = {
     fromMovies.forEach((m) => {
       const studioKey = (m.studioName || '').toLowerCase();
       const normD = this.normalizeDateStr(m.date);
+      if (/^20(0\d|1\d)-/.test(normD)) return;
       const cleanTitle = cleanTitleForCompare(m.movieTitle);
       const mapKey = `${m.outletId}_${normD}_${studioKey}_${cleanTitle}`;
       let exists = false;
@@ -2562,81 +2597,108 @@ export const StorageService = {
     notes: string;
   }> | null {
     const normTargetDate = this.normalizeDateStr(date);
-    let raw = localStorage.getItem(`${KEYS.OCCUPANCY}_${outletId}_${normTargetDate}`);
-    if (!raw) {
-      raw = localStorage.getItem(`${KEYS.OCCUPANCY}_${outletId}_${date}`);
-    }
-    // Check with older prefix if not found
-    if (!raw) {
-      raw = localStorage.getItem(`cinema_xxi_occupancy_${outletId}_${normTargetDate}`);
-      if (!raw) {
-        raw = localStorage.getItem(`cinema_xxi_occupancy_${outletId}_${date}`);
-      }
-    }
+    const sessionKey = `${outletId}_${normTargetDate}`;
 
-    // Check persistent manifest backup
-    if (!raw) {
+    // Helper untuk mengekstrak array studio yang valid (non-empty) dari JSON string atau object
+    const parseNonEmptyRows = (candidateRaw: string | null | undefined): any[] | null => {
+      if (!candidateRaw) return null;
       try {
-        const manifestRaw = localStorage.getItem('cinema_xxi_occupancy_manifest');
-        if (manifestRaw) {
-          const manifest = JSON.parse(manifestRaw);
-          const entry =
-            manifest[`${outletId}_${normTargetDate}`] ||
-            manifest[`${outletId}_${date}`];
-          if (entry && (entry.data || entry.rows)) {
-            raw = JSON.stringify(entry.data || entry.rows);
+        const parsed = JSON.parse(candidateRaw);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed;
+        }
+        if (parsed && Array.isArray(parsed.rows) && parsed.rows.length > 0) {
+          return parsed.rows;
+        }
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && !('rows' in parsed)) {
+          const entries = Object.entries(parsed);
+          if (entries.length > 0) {
+            return entries.map(([studioName, val]: [string, any], idx) => {
+              const t = val.notes || val.filmTitle || '';
+              return {
+                id: `${outletId}_${studioName}_${idx}`,
+                studioName,
+                filmTitle: t,
+                genre: this.resolveFilmGenre(t, val.genre),
+                shows: val.shows || { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0, 7: 0 },
+                notes: val.notes || '',
+              };
+            });
           }
         }
       } catch {
         // ignore
       }
+      return null;
+    };
+
+    // 0. Check in-memory session cache first (immune to localStorage quota or empty echo)
+    const inMem = sessionSavedOccupancyMap.get(sessionKey) || sessionSavedOccupancyMap.get(`${outletId}_${date}`);
+    if (Array.isArray(inMem) && inMem.length > 0) {
+      return inMem.map((s) => ({
+        ...s,
+        genre: this.resolveFilmGenre(s.filmTitle || s.notes || '', s.genre),
+      }));
     }
 
-    if (!raw) {
-      const migrated = MIGRATED_OCCUPANCY_RECORDS.find(
-        (m) =>
-          m.outletId === outletId &&
-          (m.date === date || this.normalizeDateStr(m.date) === normTargetDate)
-      );
-      if (migrated) {
-        return migrated.rows.map((s) => ({
+    // 1. Check primary and legacy localStorage keys (ignoring empty "[]" strings)
+    const candidateKeys = [
+      `${KEYS.OCCUPANCY}_${outletId}_${normTargetDate}`,
+      `${KEYS.OCCUPANCY}_${outletId}_${date}`,
+      `cinema_xxi_occupancy_${outletId}_${normTargetDate}`,
+      `cinema_xxi_occupancy_${outletId}_${date}`,
+    ];
+    for (const k of candidateKeys) {
+      const validRows = parseNonEmptyRows(localStorage.getItem(k));
+      if (validRows && validRows.length > 0) {
+        sessionSavedOccupancyMap.set(sessionKey, validRows);
+        return validRows.map((s) => ({
           ...s,
           genre: this.resolveFilmGenre(s.filmTitle || s.notes || '', s.genre),
         }));
       }
-      return null;
     }
+
+    // 2. Check persistent manifest backup (and self-heal primary key if it was wiped to "[]")
     try {
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) {
-        return parsed.map((s) => ({
-          ...s,
-          genre: this.resolveFilmGenre(s.filmTitle || s.notes || '', s.genre),
-        }));
+      const manifestRaw = localStorage.getItem('cinema_xxi_occupancy_manifest');
+      if (manifestRaw) {
+        const manifest = JSON.parse(manifestRaw);
+        const entry =
+          manifest[`${outletId}_${normTargetDate}`] ||
+          manifest[`${outletId}_${date}`];
+        const manRows = entry && (Array.isArray(entry.data) ? entry.data : Array.isArray(entry.rows) ? entry.rows : null);
+        if (manRows && manRows.length > 0) {
+          sessionSavedOccupancyMap.set(sessionKey, manRows);
+          try {
+            localStorage.setItem(`${KEYS.OCCUPANCY}_${outletId}_${normTargetDate}`, JSON.stringify(manRows));
+          } catch {
+            // ignore
+          }
+          return manRows.map((s: any) => ({
+            ...s,
+            genre: this.resolveFilmGenre(s.filmTitle || s.notes || '', s.genre),
+          }));
+        }
       }
-      if (parsed && Array.isArray(parsed.rows)) {
-        return parsed.rows.map((s: any) => ({
-          ...s,
-          genre: this.resolveFilmGenre(s.filmTitle || s.notes || '', s.genre),
-        }));
-      }
-      if (parsed && typeof parsed === 'object') {
-        return Object.entries(parsed).map(([studioName, val]: [string, any], idx) => {
-          const t = val.notes || val.filmTitle || '';
-          return {
-            id: `${outletId}_${studioName}_${idx}`,
-            studioName,
-            filmTitle: t,
-            genre: this.resolveFilmGenre(t, val.genre),
-            shows: val.shows || { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0, 7: 0 },
-            notes: val.notes || '',
-          };
-        });
-      }
-      return null;
     } catch {
-      return null;
+      // ignore
     }
+
+    // 3. Fallback to static migrated occupancy records
+    const migrated = MIGRATED_OCCUPANCY_RECORDS.find(
+      (m) =>
+        m.outletId === outletId &&
+        (m.date === date || this.normalizeDateStr(m.date) === normTargetDate)
+    );
+    if (migrated && Array.isArray(migrated.rows) && migrated.rows.length > 0) {
+      return migrated.rows.map((s) => ({
+        ...s,
+        genre: this.resolveFilmGenre(s.filmTitle || s.notes || '', s.genre),
+      }));
+    }
+
+    return null;
   },
 
   normalizeDateStr(d: string): string {
@@ -2651,6 +2713,15 @@ export const StorageService = {
       }
     }
     return clean;
+  },
+
+  cacheOccupancyInMemory(outletId: string, date: string, rows: any[]) {
+    if (!outletId || !date || !Array.isArray(rows) || rows.length === 0) return;
+    const normDate = this.normalizeDateStr(date);
+    sessionSavedOccupancyMap.set(`${outletId}_${normDate}`, rows);
+    if (normDate !== date) {
+      sessionSavedOccupancyMap.set(`${outletId}_${date}`, rows);
+    }
   },
 
   saveOccupancyRecord(
@@ -2674,25 +2745,59 @@ export const StorageService = {
         }))
       : data;
 
-    // Save with primary normalized key
-    localStorage.setItem(`${KEYS.OCCUPANCY}_${outletId}_${normDate}`, JSON.stringify(resolvedData));
-    if (normDate !== date) {
-      localStorage.setItem(`${KEYS.OCCUPANCY}_${outletId}_${date}`, JSON.stringify(resolvedData));
+    if (Array.isArray(resolvedData) && resolvedData.length > 0) {
+      this.cacheOccupancyInMemory(outletId, normDate, resolvedData);
     }
-    // Also save legacy key for compatibility
-    localStorage.setItem(`cinema_xxi_occupancy_${outletId}_${normDate}`, JSON.stringify(resolvedData));
+
+    const serialized = JSON.stringify(resolvedData);
+    const safeSetItem = (key: string, val: string) => {
+      try {
+        localStorage.setItem(key, val);
+      } catch {
+        try {
+          // Free space from redundant static sales cache & legacy duplicate occupancy keys
+          localStorage.removeItem(KEYS.SALES);
+          Object.keys(localStorage).forEach((k) => {
+            if (
+              k.startsWith('cinema_xxi_occupancy_') &&
+              !k.startsWith('cinema_xxi_occupancy_records_') &&
+              !k.startsWith('cinema_xxi_occupancy_manifest') &&
+              !k.startsWith('cinema_xxi_occupancy_local_save_ts_')
+            ) {
+              localStorage.removeItem(k);
+            }
+          });
+          localStorage.setItem(key, val);
+        } catch {
+          // In-memory sessionSavedOccupancyMap still guarantees immediate availability
+        }
+      }
+    };
+
+    safeSetItem(`cinema_xxi_occupancy_local_save_ts_${outletId}_${normDate}`, String(Date.now()));
+    safeSetItem(`${KEYS.OCCUPANCY}_${outletId}_${normDate}`, serialized);
+    if (normDate !== date) {
+      safeSetItem(`${KEYS.OCCUPANCY}_${outletId}_${date}`, serialized);
+    }
+    safeSetItem(`cinema_xxi_occupancy_${outletId}_${normDate}`, serialized);
 
     // Save to persistent manifest catalog to ensure it never gets lost
     try {
       const manifestRaw = localStorage.getItem('cinema_xxi_occupancy_manifest');
       const manifest = manifestRaw ? JSON.parse(manifestRaw) : {};
+      if (!manifest[outletId] || !Array.isArray(manifest[outletId])) {
+        manifest[outletId] = [];
+      }
+      if (!manifest[outletId].includes(normDate)) {
+        manifest[outletId].push(normDate);
+      }
       manifest[`${outletId}_${normDate}`] = {
         outletId,
         date: normDate,
         data: resolvedData,
         updatedAt: new Date().toISOString(),
       };
-      localStorage.setItem('cinema_xxi_occupancy_manifest', JSON.stringify(manifest));
+      safeSetItem('cinema_xxi_occupancy_manifest', JSON.stringify(manifest));
     } catch {
       // ignore
     }
@@ -2700,14 +2805,16 @@ export const StorageService = {
     this.broadcastChange('occupancy');
 
     // Auto-sync into movie history records
-    if (Array.isArray(resolvedData)) {
+    if (Array.isArray(resolvedData) && resolvedData.length > 0) {
       this.syncOccupancyToMovieHistory(outletId, normDate, resolvedData);
     }
 
     // Asynchronous background sync ke Supabase jika terhubung
-    import('./supabase')
-      .then((m) => m.syncOccupancyToSupabase(outletId, normDate, Array.isArray(data) ? data : []))
-      .catch(() => {});
+    if (Array.isArray(resolvedData) && resolvedData.length > 0) {
+      import('./supabase')
+        .then((m) => m.syncOccupancyToSupabase(outletId, normDate, resolvedData))
+        .catch(() => {});
+    }
   },
 
   // Broadcast & Sync (Asynchronous to prevent React setState-in-render collisions)

@@ -328,9 +328,12 @@ async function hydrateStoreFromLiveWorkers(force = false): Promise<void> {
           const occRows = Array.isArray(occJson?.data) ? occJson.data : [];
           for (const incRow of occRows) {
             if (!incRow || !incRow.id) continue;
+            const incHasRows = Array.isArray(incRow.rows) && incRow.rows.length > 0;
+            if (!incHasRows) continue;
             const id = String(incRow.id);
             const existing = syncStore.cinema_occupancy[id];
-            if (!existing) {
+            const existingHasRows = existing && Array.isArray(existing.rows) && existing.rows.length > 0;
+            if (!existing || !existingHasRows) {
               syncStore.cinema_occupancy[id] = incRow;
               changed = true;
             } else if (
@@ -501,13 +504,24 @@ async function startServer() {
             });
             updatedRows.push(targetTable[masterId]);
           }
+        } else if (table === 'cinema_occupancy') {
+          const incHasRows = Array.isArray(normalized.rows) && normalized.rows.length > 0;
+          const existingHasRows = existing && Array.isArray(existing.rows) && existing.rows.length > 0;
+          if (!incHasRows && existingHasRows) {
+            targetTable[id] = existing;
+          } else if (incHasRows) {
+            targetTable[id] = normalized;
+          } else {
+            continue;
+          }
         } else {
           targetTable[id] = normalized;
         }
         const savedRow = targetTable[id];
+        if (!savedRow) continue;
         updatedRows.push(savedRow);
         responseMeta.push(
-          returnFull
+          returnFull || table === 'cinema_occupancy'
             ? savedRow
             : {
                 id: savedRow.id,
