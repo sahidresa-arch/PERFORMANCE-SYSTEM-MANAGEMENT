@@ -256,6 +256,101 @@ export const MarketIntelligence: React.FC<MarketIntelligenceProps> = ({
   const recommendedMediumGenres = useMemo(() => genres.slice(2, 4), [genres]);
   const recommendedLowGenres = useMemo(() => genres.slice(4), [genres]);
 
+  // Year Selector & Monthly Top Genre Bar Chart (Januari - Desember) for "Semua Periode"
+  const availableChartYears = useMemo(() => {
+    const yearSet = new Set<number>([new Date().getFullYear(), 2026, 2025]);
+    allMovies.forEach((m) => {
+      if (m.date && m.date.length >= 4) {
+        const y = parseInt(m.date.slice(0, 4), 10);
+        if (!isNaN(y) && y >= 2024 && y <= 2035) {
+          yearSet.add(y);
+        }
+      }
+    });
+    return Array.from(yearSet).sort((a, b) => b - a);
+  }, [allMovies]);
+
+  const [chartYear, setChartYear] = useState<number>(() => new Date().getFullYear());
+
+  const MONTH_LABELS = [
+    { num: '01', short: 'Jan', full: 'Januari' },
+    { num: '02', short: 'Feb', full: 'Februari' },
+    { num: '03', short: 'Mar', full: 'Maret' },
+    { num: '04', short: 'Apr', full: 'April' },
+    { num: '05', short: 'Mei', full: 'Mei' },
+    { num: '06', short: 'Jun', full: 'Juni' },
+    { num: '07', short: 'Jul', full: 'Juli' },
+    { num: '08', short: 'Agu', full: 'Agustus' },
+    { num: '09', short: 'Sep', full: 'September' },
+    { num: '10', short: 'Okt', full: 'Oktober' },
+    { num: '11', short: 'Nov', full: 'November' },
+    { num: '12', short: 'Des', full: 'Desember' },
+  ];
+
+  const monthlyTopGenres = useMemo(() => {
+    const yearPrefix = `${chartYear}-`;
+    const buckets: { [monthNum: string]: { [genre: string]: number } } = {};
+    MONTH_LABELS.forEach((m) => {
+      buckets[m.num] = {};
+    });
+
+    allMovies.forEach((m) => {
+      if (!m.date || !m.date.startsWith(yearPrefix)) return;
+      if (selectedOutletId && selectedOutletId !== 'all' && m.outletId !== selectedOutletId) {
+        return;
+      }
+      const title = (m.movieTitle || '').trim();
+      if (!title) return;
+      const monthNum = m.date.slice(5, 7);
+      if (!buckets[monthNum]) return;
+
+      const sumAudience = Object.values(m.shows || {}).reduce(
+        (acc, v) => acc + (Number(v) || 0),
+        0
+      );
+      if (sumAudience <= 0) return;
+
+      const g = m.genre || StorageService.resolveFilmGenre(title, m.genre);
+      buckets[monthNum][g] = (buckets[monthNum][g] || 0) + sumAudience;
+    });
+
+    return MONTH_LABELS.map((mInfo) => {
+      const genreCounts = buckets[mInfo.num] || {};
+      const entries = Object.entries(genreCounts).sort((a, b) => b[1] - a[1]);
+      const monthTotalAudience = entries.reduce((acc, [, count]) => acc + count, 0);
+      const topEntry = entries[0] || null;
+      const runnerUpEntry = entries[1] || null;
+      const topGenreName = topEntry ? topEntry[0] : null;
+      const topAudience = topEntry ? topEntry[1] : 0;
+      const sharePercent =
+        monthTotalAudience > 0 ? (topAudience / monthTotalAudience) * 100 : 0;
+
+      return {
+        monthNum: mInfo.num,
+        shortLabel: mInfo.short,
+        fullLabel: mInfo.full,
+        topGenre: topGenreName,
+        topAudience,
+        monthTotalAudience,
+        sharePercent,
+        runnerUpGenre: runnerUpEntry ? runnerUpEntry[0] : null,
+        runnerUpAudience: runnerUpEntry ? runnerUpEntry[1] : 0,
+        hexColor: topGenreName ? GENRE_HEX_COLORS[topGenreName] || '#f59e0b' : '#cbd5e1',
+        barColor: topGenreName ? GENRE_COLORS[topGenreName] || 'bg-amber-500' : 'bg-slate-200',
+      };
+    });
+  }, [allMovies, selectedOutletId, chartYear]);
+
+  const maxMonthlyTopAudience = useMemo(() => {
+    const maxVal = Math.max(...monthlyTopGenres.map((m) => m.topAudience), 0);
+    return maxVal > 0 ? maxVal : 1;
+  }, [monthlyTopGenres]);
+
+  const activeMonthsWithData = useMemo(
+    () => monthlyTopGenres.filter((m) => m.topAudience > 0),
+    [monthlyTopGenres]
+  );
+
   return (
     <div className="space-y-6">
       {/* Top Banner */}
@@ -579,6 +674,198 @@ export const MarketIntelligence: React.FC<MarketIntelligenceProps> = ({
           )}
         </div>
       </div>
+
+      {/* GRAFIK BATANG GENRE PENONTON TERBANYAK BULANAN (JANUARI - DESEMBER) SAAT FILTER SEMUA PERIODE */}
+      {period === 'all' && (
+        <div className="p-6 rounded-3xl border border-amber-200/90 bg-white shadow-xs space-y-5">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-4">
+            <div>
+              <div className="flex items-center space-x-2">
+                <span className="px-2.5 py-0.5 rounded-md bg-amber-500 text-slate-950 font-black text-[10px] uppercase">
+                  TREN BULANAN JANUARI – DESEMBER
+                </span>
+                <span className="text-[10px] px-2 py-0.5 rounded-md bg-amber-50 text-amber-900 font-bold border border-amber-200">
+                  Top #1 Genre Penonton Terbanyak per Bulan
+                </span>
+              </div>
+              <h3 className="text-lg font-black uppercase tracking-tight text-slate-900 mt-1.5">
+                📊 GRAFIK BATANG GENRE TERBANYAK PER BULAN (JANUARI – DESEMBER {chartYear})
+              </h3>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Menampilkan <strong>1 Genre Juara (#1)</strong> dengan serapan jumlah penonton terbanyak pada masing-masing bulan di <strong>{selectedOutlet.name}</strong>.
+              </p>
+            </div>
+
+            {/* Pilihan Tahun */}
+            <div className="flex items-center space-x-2 bg-amber-50/80 px-3 py-2 rounded-2xl border border-amber-200">
+              <Calendar className="w-4 h-4 text-amber-600 shrink-0" />
+              <label className="text-xs font-black text-amber-950 uppercase whitespace-nowrap">
+                PILIH TAHUN:
+              </label>
+              <select
+                value={chartYear}
+                onChange={(e) => setChartYear(Number(e.target.value))}
+                className="text-xs font-black px-3 py-1 rounded-xl border border-amber-300 bg-white text-slate-900 shadow-2xs focus:border-amber-500 cursor-pointer"
+              >
+                {availableChartYears.map((yr) => (
+                  <option key={yr} value={yr}>
+                    Tahun {yr}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          {activeMonthsWithData.length === 0 ? (
+            <div className="py-12 px-4 text-center rounded-2xl bg-slate-50 border border-dashed border-slate-200">
+              <TrendingUp className="w-8 h-8 text-slate-400 mx-auto mb-2" />
+              <p className="text-xs font-bold text-slate-700">
+                Belum Ada Data Penonton di Tahun {chartYear}
+              </p>
+              <p className="text-[11px] text-slate-500 mt-1 max-w-md mx-auto">
+                Grafik batang genre terbanyak bulanan (Januari – Desember {chartYear}) untuk {selectedOutlet.name} akan otomatis tampil begitu ada laporan okupansi pada tahun tersebut.
+              </p>
+            </div>
+          ) : (
+            <>
+              {/* 12-Month Vertical Bar Chart */}
+              <div className="overflow-x-auto pb-2">
+                <div className="min-w-[760px] pt-4 pb-2 px-2">
+                  <div className="grid grid-cols-12 gap-2.5 items-end h-64 pt-12 pb-2 px-2 rounded-2xl bg-gradient-to-b from-slate-50/70 to-white border border-slate-200/80">
+                    {monthlyTopGenres.map((item) => {
+                      const hasData = item.topAudience > 0 && Boolean(item.topGenre);
+                      const heightPct = hasData
+                        ? Math.max(16, Math.round((item.topAudience / maxMonthlyTopAudience) * 100))
+                        : 6;
+
+                      return (
+                        <div
+                          key={item.monthNum}
+                          className="group relative flex flex-col items-center justify-end h-full"
+                        >
+                          {/* Hover Tooltip Detail */}
+                          {hasData && (
+                            <div className="pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity duration-200 absolute -top-11 left-1/2 -translate-x-1/2 z-20 w-48 p-2.5 rounded-xl bg-slate-900 text-white text-[10px] shadow-lg border border-slate-700">
+                              <div className="font-black text-amber-400 uppercase border-b border-slate-700 pb-1 mb-1 flex justify-between">
+                                <span>{item.fullLabel} {chartYear}</span>
+                                <span>#{1}</span>
+                              </div>
+                              <div className="flex justify-between font-bold">
+                                <span className="text-slate-300">Genre Terbanyak:</span>
+                                <span className="text-white font-black">{item.topGenre}</span>
+                              </div>
+                              <div className="flex justify-between mt-0.5">
+                                <span className="text-slate-300">Penonton {item.topGenre}:</span>
+                                <span className="text-amber-300 font-black">
+                                  {item.topAudience.toLocaleString('id-ID')}
+                                </span>
+                              </div>
+                              <div className="flex justify-between mt-0.5">
+                                <span className="text-slate-300">Dominasi Bulan Ini:</span>
+                                <span className="text-emerald-400 font-black">
+                                  {item.sharePercent.toFixed(1)}%
+                                </span>
+                              </div>
+                              <div className="flex justify-between mt-0.5 pt-1 border-t border-slate-800 text-[9px] text-slate-400">
+                                <span>Total Semua Genre:</span>
+                                <span>{item.monthTotalAudience.toLocaleString('id-ID')}</span>
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Top Label Above Bar: Genre Badge + Audience Count */}
+                          <div className="mb-1.5 flex flex-col items-center text-center">
+                            {hasData ? (
+                              <>
+                                <span
+                                  className="px-2 py-0.5 rounded-md text-[10px] font-black text-white shadow-2xs truncate max-w-[64px]"
+                                  style={{ backgroundColor: item.hexColor }}
+                                  title={item.topGenre || ''}
+                                >
+                                  {item.topGenre}
+                                </span>
+                                <span className="text-[10px] font-black text-slate-900 mt-0.5 leading-tight">
+                                  {item.topAudience.toLocaleString('id-ID')}
+                                </span>
+                                <span className="text-[9px] font-bold text-slate-500 leading-none">
+                                  ({item.sharePercent.toFixed(0)}%)
+                                </span>
+                              </>
+                            ) : (
+                              <span className="text-[10px] font-bold text-slate-300">-</span>
+                            )}
+                          </div>
+
+                          {/* Vertical Bar Track */}
+                          <div className="w-full max-w-[44px] flex-1 flex items-end justify-center">
+                            <div
+                              style={{
+                                height: `${heightPct}%`,
+                                backgroundColor: hasData ? item.hexColor : '#e2e8f0',
+                              }}
+                              className={`w-full rounded-t-xl transition-all duration-500 relative overflow-hidden ${
+                                hasData
+                                  ? 'shadow-xs group-hover:brightness-110 ring-1 ring-black/5'
+                                  : 'opacity-50'
+                              }`}
+                            >
+                              {hasData && (
+                                <div className="absolute inset-x-0 top-0 h-2 bg-white/25 rounded-t-xl" />
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* X-Axis Month Labels (Jan - Des) */}
+                  <div className="grid grid-cols-12 gap-2.5 px-2 pt-2.5">
+                    {monthlyTopGenres.map((item) => {
+                      const hasData = item.topAudience > 0;
+                      return (
+                        <div key={item.monthNum} className="text-center">
+                          <span
+                            className={`text-[11px] font-black uppercase block ${
+                              hasData ? 'text-slate-900' : 'text-slate-400'
+                            }`}
+                          >
+                            {item.shortLabel}
+                          </span>
+                          <span className="text-[9px] font-semibold text-slate-400 block">
+                            {hasData ? item.topGenre : 'Kosong'}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+
+              {/* Legend Warna Genre */}
+              <div className="pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2 text-xs">
+                <div className="flex flex-wrap items-center gap-3">
+                  <span className="text-[10px] font-black text-slate-500 uppercase">
+                    Keterangan Warna Genre:
+                  </span>
+                  {Object.entries(GENRE_HEX_COLORS).map(([genreName, hex]) => (
+                    <div key={genreName} className="flex items-center space-x-1.5">
+                      <span
+                        className="w-2.5 h-2.5 rounded-full inline-block"
+                        style={{ backgroundColor: hex }}
+                      />
+                      <span className="text-[11px] font-bold text-slate-700">{genreName}</span>
+                    </div>
+                  ))}
+                </div>
+                <span className="text-[11px] font-bold text-amber-900 bg-amber-50 px-2.5 py-1 rounded-lg border border-amber-200">
+                  {activeMonthsWithData.length} dari 12 Bulan Terisi di Tahun {chartYear}
+                </span>
+              </div>
+            </>
+          )}
+        </div>
+      )}
 
       {/* 3. REKOMENDASI GENRE FILM UNTUK OUTLET TERTENTU (HANYA GENRE, TANPA DETAIL FILM) */}
       <div className="p-6 rounded-3xl border border-amber-200/90 bg-white shadow-xs space-y-5">
