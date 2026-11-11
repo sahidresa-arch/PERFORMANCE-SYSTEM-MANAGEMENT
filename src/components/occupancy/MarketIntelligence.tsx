@@ -69,9 +69,22 @@ export const MarketIntelligence: React.FC<MarketIntelligenceProps> = ({
   );
 
   useEffect(() => {
-    const handleStorageUpdate = () => {
+    const handleStorageUpdate = (e: Event) => {
+      const customType = (e as CustomEvent)?.detail?.type;
+      if (
+        customType &&
+        customType !== 'occupancy' &&
+        customType !== 'movies' &&
+        customType !== 'genre-updated' &&
+        customType !== 'outlets' &&
+        customType !== 'all-reset'
+      ) {
+        return;
+      }
       setAllMovies(StorageService.getAllUploadedMovies());
-      setSyncTick((t) => t + 1);
+      if (!customType || customType === 'outlets' || customType === 'all-reset') {
+        setSyncTick((t) => t + 1);
+      }
     };
     window.addEventListener('cinema-xxi-storage-update', handleStorageUpdate);
     window.addEventListener('storage', handleStorageUpdate);

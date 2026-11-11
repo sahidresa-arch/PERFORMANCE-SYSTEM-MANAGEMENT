@@ -20,11 +20,16 @@ interface HistoryRekapFilmProps {
 export const HistoryRekapFilm: React.FC<HistoryRekapFilmProps> = ({
   currentUser,
 }) => {
-  const rawOutlets = StorageService.getOutlets();
+  const [syncTick, setSyncTick] = useState(0);
+  const rawOutlets = useMemo(() => StorageService.getOutlets(), [syncTick]);
   const isManagerOrCleaner = (currentUser?.role === 'manager' || currentUser?.role === 'cleaner') && currentUser?.outletId;
-  const outlets = isManagerOrCleaner
-    ? rawOutlets.filter((o) => o.id === currentUser.outletId)
-    : rawOutlets;
+  const outlets = useMemo(
+    () =>
+      isManagerOrCleaner
+        ? rawOutlets.filter((o) => o.id === currentUser.outletId)
+        : rawOutlets,
+    [rawOutlets, isManagerOrCleaner, currentUser?.outletId]
+  );
   const isAdmin = currentUser?.role === 'admin' || currentUser?.role === 'area_manager';
   const defaultOutletId = isManagerOrCleaner ? currentUser.outletId! : '';
   const [selectedOutletId, setSelectedOutletId] = useState<string>(defaultOutletId);
@@ -53,12 +58,28 @@ export const HistoryRekapFilm: React.FC<HistoryRekapFilmProps> = ({
   );
 
   useEffect(() => {
-    const handleStorageUpdate = () => {
+    const handleStorageUpdate = (e: Event) => {
+      const customType = (e as CustomEvent)?.detail?.type;
+      if (
+        customType &&
+        customType !== 'occupancy' &&
+        customType !== 'movies' &&
+        customType !== 'genre-updated' &&
+        customType !== 'outlets' &&
+        customType !== 'all-reset'
+      ) {
+        return;
+      }
       setMovies(StorageService.getAllUploadedMovies());
+      if (!customType || customType === 'outlets' || customType === 'all-reset') {
+        setSyncTick((t) => t + 1);
+      }
     };
     window.addEventListener('cinema-xxi-storage-update', handleStorageUpdate);
+    window.addEventListener('storage', handleStorageUpdate);
     return () => {
       window.removeEventListener('cinema-xxi-storage-update', handleStorageUpdate);
+      window.removeEventListener('storage', handleStorageUpdate);
     };
   }, []);
 

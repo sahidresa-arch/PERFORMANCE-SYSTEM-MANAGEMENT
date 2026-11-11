@@ -1322,6 +1322,10 @@ export async function mergeRemoteOccupancyToLocal(
   if (!remoteOcc || remoteOcc.length === 0) return false;
 
   let updated = false;
+  let man: any = null;
+  let manLoaded = false;
+  const movieSyncBatch: Array<{ outletId: string; date: string; rows: any[] }> = [];
+
   remoteOcc.forEach((row: any) => {
     const outletId = row.outlet_id;
     const date = StorageService.normalizeDateStr(row.date || '');
@@ -1358,9 +1362,16 @@ export async function mergeRemoteOccupancyToLocal(
             // in-memory cache still holds rows
           }
         }
-        try {
-          const manRaw = localStorage.getItem('cinema_xxi_occupancy_manifest');
-          const man = manRaw ? JSON.parse(manRaw) : {};
+        if (!manLoaded) {
+          manLoaded = true;
+          try {
+            const manRaw = localStorage.getItem('cinema_xxi_occupancy_manifest');
+            man = manRaw ? JSON.parse(manRaw) : {};
+          } catch {
+            man = {};
+          }
+        }
+        if (man) {
           if (!man[outletId] || !Array.isArray(man[outletId])) man[outletId] = [];
           if (!man[outletId].includes(date)) {
             man[outletId].push(date);
@@ -1371,17 +1382,24 @@ export async function mergeRemoteOccupancyToLocal(
             data: rows,
             updatedAt: row.updated_at || new Date().toISOString(),
           };
-          localStorage.setItem('cinema_xxi_occupancy_manifest', JSON.stringify(man));
-        } catch {
-          // ignore
         }
-        StorageService.syncOccupancyToMovieHistory(outletId, date, rows);
+        movieSyncBatch.push({ outletId, date, rows });
         updated = true;
       }
     }
   });
 
   if (updated) {
+    if (man) {
+      try {
+        localStorage.setItem('cinema_xxi_occupancy_manifest', JSON.stringify(man));
+      } catch {
+        // ignore
+      }
+    }
+    if (movieSyncBatch.length > 0) {
+      StorageService.syncOccupancyBatchToMovieHistory(movieSyncBatch, true);
+    }
     StorageService.broadcastChange('occupancy');
     StorageService.broadcastChange('movies');
   }

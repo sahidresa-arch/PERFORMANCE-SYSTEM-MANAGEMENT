@@ -67,6 +67,11 @@ const RECENT_INSPECTIONS_KEY = 'cinema_xxi_recent_inspections_v2';
 let cachedInspectionsList: ToiletInspectionRecord[] | null = null;
 const sessionSavedInspectionsMap = new Map<string, ToiletInspectionRecord>();
 const sessionSavedOccupancyMap = new Map<string, any[]>();
+let cachedAllUploadedMovies: MovieScreeningRecord[] | null = null;
+let cachedGenreRegistry: Record<string, any> | null = null;
+const resolvedGenreMemo = new Map<string, any>();
+const cleanTitleCache = new Map<string, string>();
+const pendingBroadcastTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
 if (typeof window !== 'undefined') {
   window.addEventListener('storage', (e) => {
@@ -78,6 +83,18 @@ if (typeof window !== 'undefined') {
     ) {
       cachedInspectionsList = null;
     }
+    if (
+      !e.key ||
+      e.key === KEYS.MOVIES ||
+      e.key === KEYS.GENRE_REGISTRY ||
+      e.key.startsWith('cinema_xxi_occupancy_')
+    ) {
+      cachedAllUploadedMovies = null;
+      if (!e.key || e.key === KEYS.GENRE_REGISTRY) {
+        cachedGenreRegistry = null;
+        resolvedGenreMemo.clear();
+      }
+    }
   });
 }
 
@@ -87,7 +104,10 @@ export function escapeRegex(s: string): string {
 }
 
 export function cleanTitleForCompare(t: string): string {
-  return (t || '')
+  if (!t) return '';
+  const cached = cleanTitleCache.get(t);
+  if (cached !== undefined) return cached;
+  const cleaned = t
     .toUpperCase()
     .replace(/\[\s*(?:\d{1,2}\+|SU|BO|PG|R|D\d*)\s*\]/gi, '')
     .replace(/\(\s*(?:\d{1,2}\+|SU|BO|PG|R|D\d*)\s*\)/gi, '')
@@ -95,6 +115,9 @@ export function cleanTitleForCompare(t: string): string {
     .replace(/[^A-Z0-9\s]/gi, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+  if (cleanTitleCache.size > 5000) cleanTitleCache.clear();
+  cleanTitleCache.set(t, cleaned);
+  return cleaned;
 }
 
 // Katalog Terverifikasi Resmi Film Bioskop Cinema XXI (Box Office 2024-2025)
@@ -2165,12 +2188,18 @@ export const StorageService = {
   getFilmGenreRegistry(): {
     [cleanTitle: string]: 'Action' | 'Drama' | 'Horror' | 'Comedy' | 'Family' | 'Religion' | 'Animation' | 'Thriller' | 'Romance' | 'Sci-Fi' | 'Adventure' | 'Fantasy' | 'Biography';
   } {
+    if (cachedGenreRegistry) return cachedGenreRegistry;
     const raw = localStorage.getItem(KEYS.GENRE_REGISTRY);
-    if (!raw) return {};
+    if (!raw) {
+      cachedGenreRegistry = {};
+      return cachedGenreRegistry;
+    }
     try {
-      return JSON.parse(raw);
+      cachedGenreRegistry = JSON.parse(raw) || {};
+      return cachedGenreRegistry!;
     } catch {
-      return {};
+      cachedGenreRegistry = {};
+      return cachedGenreRegistry;
     }
   },
 
@@ -2183,9 +2212,15 @@ export const StorageService = {
     const normalized = this.normalizeGenre(genre);
 
     // 1. Simpan ke registry global
-    const registry = this.getFilmGenreRegistry();
-    registry[clean] = normalized;
-    localStorage.setItem(KEYS.GENRE_REGISTRY, JSON.stringify(registry));
+    const registry = { ...this.getFilmGenreRegistry(), [clean]: normalized };
+    cachedGenreRegistry = registry;
+    resolvedGenreMemo.clear();
+    cachedAllUploadedMovies = null;
+    try {
+      localStorage.setItem(KEYS.GENRE_REGISTRY, JSON.stringify(registry));
+    } catch {
+      // ignore
+    }
 
     // 2. Perbarui seluruh data okupansi di localStorage yang memuat film ini
     try {
@@ -2240,7 +2275,9 @@ export const StorageService = {
       }
     });
     if (moviesChanged) {
-      localStorage.setItem(KEYS.MOVIES, JSON.stringify(movies));
+      try {
+        localStorage.setItem(KEYS.MOVIES, JSON.stringify(movies));
+      } catch {}
     }
 
     this.broadcastChange('genre-updated');
@@ -2279,95 +2316,109 @@ export const StorageService = {
     return 0;
   },
 
-  // Resolusi genre film presisi tinggi: Mencegah salah alokasi genre film
+  // Resolusi genre film presisi tinggi dengan O(1) In-Memory Memoization (Bebas Lag / Stutter)
   resolveFilmGenre(
     title: string,
     existingGenre?: string
   ): 'Action' | 'Drama' | 'Horror' | 'Comedy' | 'Family' | 'Religion' | 'Animation' | 'Thriller' | 'Romance' | 'Sci-Fi' | 'Adventure' | 'Fantasy' | 'Biography' {
-    // 0. Prioritas Utama: Jika ada existingGenre valid yang dibaca dari dokumen / OCR / LLM
-    if (existingGenre && existingGenre.trim() && this.isGenreWord(existingGenre)) {
-      const norm = this.normalizeGenre(existingGenre);
-      if (norm) return norm;
-    }
-
     const raw = (title || '').trim();
-    if (!raw) {
-      return existingGenre ? this.normalizeGenre(existingGenre) : 'Action';
-    }
+    const ext = (existingGenre || '').trim();
+    const memoKey = `${raw}___${ext}`;
+    const memoHit = resolvedGenreMemo.get(memoKey);
+    if (memoHit) return memoHit;
 
-    // 1. Cek tag genre eksplisit di dalam teks judul: [HORROR], (COMEDY), GENRE: ANIMATION, dsb
-    const tagMatch =
-      raw.match(
-        /[\[\(]\s*(HORROR|HOROR|COMEDY|KOMEDI|ANIMATION|ANIMASI|DRAMA|FAMILY|KELUARGA|RELIGION|RELIGI|ACTION|AKSI|THRILLER|ROMANCE)\s*[\]\)]/i
-      ) ||
-      raw.match(
-        /\b(?:GENRE|KATEGORI|JENIS)\s*[:=]\s*(HORROR|HOROR|COMEDY|KOMEDI|ANIMATION|ANIMASI|DRAMA|FAMILY|KELUARGA|RELIGION|RELIGI|ACTION|AKSI|THRILLER|ROMANCE)\b/i
-      );
-    if (tagMatch) {
-      return this.normalizeGenre(tagMatch[1]);
-    }
-
-    const clean = cleanTitleForCompare(raw);
-    if (!clean) {
-      return existingGenre ? this.normalizeGenre(existingGenre) : 'Action';
-    }
-
-    // 2. Mapping custom yang pernah disimpan oleh user di registry (manual selection override)
-    const userRegistry = this.getFilmGenreRegistry();
-    if (userRegistry[clean]) {
-      return userRegistry[clean];
-    }
-    for (const [savedTitle, savedGenre] of Object.entries(userRegistry)) {
-      const cleanSaved = cleanTitleForCompare(savedTitle);
-      if (cleanSaved === clean) return savedGenre;
-      if (cleanSaved.length >= 3 && clean.length >= 3) {
-        if (clean.includes(cleanSaved) || cleanSaved.includes(clean)) {
-          return savedGenre;
-        }
+    const computeGenre = () => {
+      // 0. Prioritas Utama: Jika ada existingGenre valid yang dibaca dari dokumen / OCR / LLM
+      if (ext && this.isGenreWord(ext)) {
+        const norm = this.normalizeGenre(ext);
+        if (norm) return norm;
       }
-    }
 
-    // 3. Katalog terverifikasi KNOWN_FILM_GENRES (Box Office XXI) dengan pencocokan kata & frasa
-    if (KNOWN_FILM_GENRES[clean]) {
-      return KNOWN_FILM_GENRES[clean];
-    }
-    for (const [knownKey, knownGenre] of Object.entries(KNOWN_FILM_GENRES)) {
-      const cleanKey = cleanTitleForCompare(knownKey);
-      if (cleanKey === clean) {
-        return knownGenre;
+      if (!raw) {
+        return ext ? this.normalizeGenre(ext) : 'Action';
       }
-      if (clean.length >= 3 && cleanKey.length >= 3) {
-        if (clean.includes(cleanKey) || cleanKey.includes(clean)) {
-          return knownGenre;
+
+      // 1. Cek tag genre eksplisit di dalam teks judul: [HORROR], (COMEDY), GENRE: ANIMATION, dsb
+      const tagMatch =
+        raw.match(
+          /[\[\(]\s*(HORROR|HOROR|COMEDY|KOMEDI|ANIMATION|ANIMASI|DRAMA|FAMILY|KELUARGA|RELIGION|RELIGI|ACTION|AKSI|THRILLER|ROMANCE)\s*[\]\)]/i
+        ) ||
+        raw.match(
+          /\b(?:GENRE|KATEGORI|JENIS)\s*[:=]\s*(HORROR|HOROR|COMEDY|KOMEDI|ANIMATION|ANIMASI|DRAMA|FAMILY|KELUARGA|RELIGION|RELIGI|ACTION|AKSI|THRILLER|ROMANCE)\b/i
+        );
+      if (tagMatch) {
+        return this.normalizeGenre(tagMatch[1]);
+      }
+
+      const clean = cleanTitleForCompare(raw);
+      if (!clean) {
+        return ext ? this.normalizeGenre(ext) : 'Action';
+      }
+
+      // 2. Mapping custom yang pernah disimpan oleh user di registry (manual selection override)
+      const userRegistry = this.getFilmGenreRegistry();
+      if (userRegistry[clean]) {
+        return userRegistry[clean];
+      }
+      for (const [savedTitle, savedGenre] of Object.entries(userRegistry)) {
+        const cleanSaved = cleanTitleForCompare(savedTitle);
+        if (cleanSaved === clean) return savedGenre;
+        if (cleanSaved.length >= 3 && clean.length >= 3) {
+          if (clean.includes(cleanSaved) || cleanSaved.includes(clean)) {
+            return savedGenre;
+          }
         }
       }
 
-      // Pencocokan kata-kata signifikan (token matching)
+      // 3. Katalog terverifikasi KNOWN_FILM_GENRES (Box Office XXI) dengan pencocokan kata & frasa
+      if (KNOWN_FILM_GENRES[clean]) {
+        return KNOWN_FILM_GENRES[clean];
+      }
       const cleanWords = clean.split(' ').filter((w) => w.length >= 3);
-      const knownWords = cleanKey.split(' ').filter((w) => w.length >= 3);
-      if (cleanWords.length > 0 && knownWords.length > 0) {
-        const commonWords = cleanWords.filter((w) => knownWords.includes(w));
-        if (
-          commonWords.length >= Math.min(cleanWords.length, knownWords.length) &&
-          commonWords.length >= 1
-        ) {
+      for (const [knownKey, knownGenre] of Object.entries(KNOWN_FILM_GENRES)) {
+        const cleanKey = cleanTitleForCompare(knownKey);
+        if (cleanKey === clean) {
           return knownGenre;
         }
+        if (clean.length >= 3 && cleanKey.length >= 3) {
+          if (clean.includes(cleanKey) || cleanKey.includes(clean)) {
+            return knownGenre;
+          }
+        }
+
+        // Pencocokan kata-kata signifikan (token matching)
+        if (cleanWords.length > 0) {
+          const knownWords = cleanKey.split(' ').filter((w) => w.length >= 3);
+          if (knownWords.length > 0) {
+            const commonWords = cleanWords.filter((w) => knownWords.includes(w));
+            if (
+              commonWords.length >= Math.min(cleanWords.length, knownWords.length) &&
+              commonWords.length >= 1
+            ) {
+              return knownGenre;
+            }
+          }
+        }
       }
-    }
 
-    // 4. Deteksi cerdas berdasarkan kata kunci judul film XXI
-    const detectedFromTitle = this.detectGenre(clean);
-    if (detectedFromTitle && detectedFromTitle !== 'Action') {
-      return detectedFromTitle;
-    }
+      // 4. Deteksi cerdas berdasarkan kata kunci judul film XXI
+      const detectedFromTitle = this.detectGenre(clean);
+      if (detectedFromTitle && detectedFromTitle !== 'Action') {
+        return detectedFromTitle;
+      }
 
-    // 5. Fallback jika ada existingGenre apapun
-    if (existingGenre && existingGenre.trim()) {
-      return this.normalizeGenre(existingGenre);
-    }
+      // 5. Fallback jika ada existingGenre apapun
+      if (ext) {
+        return this.normalizeGenre(ext);
+      }
 
-    return detectedFromTitle || 'Action';
+      return detectedFromTitle || 'Action';
+    };
+
+    const result = computeGenre();
+    if (resolvedGenreMemo.size > 5000) resolvedGenreMemo.clear();
+    resolvedGenreMemo.set(memoKey, result);
+    return result;
   },
 
   // Synchronize scanned / occupancy rows into movie history records
@@ -2382,71 +2433,109 @@ export const StorageService = {
       capacity?: number;
       shows: { [showNum: number]: number };
       notes?: string;
-    }>
+    }>,
+    silent = false
   ) {
     if (!Array.isArray(rows) || rows.length === 0) return;
-    const normDate = this.normalizeDateStr(date);
+    this.syncOccupancyBatchToMovieHistory([{ outletId, date, rows }], silent);
+  },
+
+  // Batch synchronize multiple occupancy records into movie history in a single pass (prevents UI lag during cloud sync)
+  syncOccupancyBatchToMovieHistory(
+    batch: Array<{
+      outletId: string;
+      date: string;
+      rows: Array<{
+        id?: string;
+        studioName: string;
+        filmTitle?: string;
+        genre?: string;
+        capacity?: number;
+        shows: { [showNum: number]: number };
+        notes?: string;
+      }>;
+    }>,
+    silent = false
+  ) {
+    if (!Array.isArray(batch) || batch.length === 0) return;
+    cachedAllUploadedMovies = null;
+
     const existingList = this.getMovieHistory();
-
-    // Hapus data lama untuk outlet & tanggal ini agar jika di-upload/scan 2x dalam 1 tanggal,
-    // tetap pakai data TERBARU saja (mencegah duplikat/double)
-    const filteredList = existingList.filter(
-      (m) => !(m.outletId === outletId && (m.date === date || m.date === normDate))
-    );
-
+    const targetOutletDates = new Set<string>();
     const newRecords: MovieScreeningRecord[] = [];
 
-    rows.forEach((row, idx) => {
-      const rawTitle = (row.filmTitle || row.notes || '').trim();
-      const title = rawTitle || (row.studioName ? `${row.studioName}` : `Studio ${idx + 1}`);
+    batch.forEach(({ outletId, date, rows }) => {
+      if (!outletId || !date || !Array.isArray(rows) || rows.length === 0) return;
+      const normDate = this.normalizeDateStr(date);
+      targetOutletDates.add(`${outletId}_${normDate}`);
+      targetOutletDates.add(`${outletId}_${date}`);
 
-      const titles = title.includes(';')
-        ? title.split(';').map((t: string) => t.trim()).filter(Boolean)
-        : [title];
+      rows.forEach((row, idx) => {
+        const rawTitle = (row.filmTitle || row.notes || '').trim();
+        const title = rawTitle || (row.studioName ? `${row.studioName}` : `Studio ${idx + 1}`);
 
-      titles.forEach((singleTitle, tIdx) => {
-        const recordId = `rec_${outletId}_${normDate}_${(row.studioName || `studio_${idx}`).replace(/\s+/g, '_')}_${idx}_${tIdx}`;
-        const genre = this.resolveFilmGenre(singleTitle, row.genre);
-        const capacity = row.capacity || 200;
+        const titles = title.includes(';')
+          ? title.split(';').map((t: string) => t.trim()).filter(Boolean)
+          : [title];
 
-        newRecords.push({
-          id: recordId,
-          outletId,
-          date: normDate,
-          studioName: row.studioName || `Studio ${idx + 1}`,
-          movieTitle: singleTitle,
-          genre,
-          capacity,
-          shows: tIdx === 0 ? (row.shows || {}) : { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0, 7: 0 },
+        titles.forEach((singleTitle, tIdx) => {
+          const recordId = `rec_${outletId}_${normDate}_${(row.studioName || `studio_${idx}`).replace(/\s+/g, '_')}_${idx}_${tIdx}`;
+          const genre = this.resolveFilmGenre(singleTitle, row.genre);
+          const capacity = row.capacity || 200;
+
+          newRecords.push({
+            id: recordId,
+            outletId,
+            date: normDate,
+            studioName: row.studioName || `Studio ${idx + 1}`,
+            movieTitle: singleTitle,
+            genre,
+            capacity,
+            shows: tIdx === 0 ? (row.shows || {}) : { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0, 7: 0 },
+          });
         });
       });
     });
+
+    if (newRecords.length === 0) return;
+
+    const filteredList = existingList.filter(
+      (m) => !targetOutletDates.has(`${m.outletId}_${m.date}`) && !targetOutletDates.has(`${m.outletId}_${this.normalizeDateStr(m.date)}`)
+    );
 
     const updatedList = [...newRecords, ...filteredList];
     try {
       localStorage.setItem(KEYS.MOVIES, JSON.stringify(updatedList));
     } catch {
       try {
-        // Free space by compacting KEYS.SALES if full
         localStorage.removeItem(KEYS.SALES);
         localStorage.setItem(KEYS.MOVIES, JSON.stringify(updatedList));
       } catch {
         // ignore quota error; getAllUploadedMovies reads directly from sessionSavedOccupancyMap and occupancy records
       }
     }
-    this.broadcastChange('movies');
+    if (!silent) {
+      this.broadcastChange('movies');
+    }
   },
 
-  // Get all uploaded movies ever across all scans and occupancy records (tanpa duplikat)
+  // Get all uploaded movies ever across all scans and occupancy records (tanpa duplikat, O(N) & In-Memory Cached)
   getAllUploadedMovies(): MovieScreeningRecord[] {
+    if (cachedAllUploadedMovies) {
+      return cachedAllUploadedMovies;
+    }
+
     const movieMap = new Map<string, MovieScreeningRecord>();
+    const seenMoviePrefixSet = new Set<string>();
     const handledDatesSet = new Set<string>();
 
     const processRows = (outId: string, d: string, rows: any[]) => {
       const normD = this.normalizeDateStr(d);
       // Skip corrupted historical years (e.g. 2009/2010/2011 from legacy date regex bug)
       if (/^20(0\d|1\d)-/.test(normD)) return;
-      handledDatesSet.add(`${outId}_${normD}`);
+      const dateKey = `${outId}_${normD}`;
+      if (handledDatesSet.has(dateKey)) return;
+      handledDatesSet.add(dateKey);
       handledDatesSet.add(`${outId}_${d}`);
 
       rows.forEach((r, idx) => {
@@ -2461,8 +2550,10 @@ export const StorageService = {
         titles.forEach((singleTitle: string, tIdx: number) => {
           const studioKey = (r.studioName || `Studio_${idx}`).toLowerCase();
           const cleanTitle = cleanTitleForCompare(singleTitle);
+          const prefixKey = `${outId}_${normD}_${studioKey}_${cleanTitle}`;
+          seenMoviePrefixSet.add(prefixKey);
           // Map key unik per outlet, tanggal, studio, dan judul film
-          const mapKey = `${outId}_${normD}_${studioKey}_${cleanTitle}_${idx}_${tIdx}`;
+          const mapKey = `${prefixKey}_${idx}_${tIdx}`;
           if (!movieMap.has(mapKey)) {
             movieMap.set(mapKey, {
               id: `agg_${outId}_${normD}_${idx}_${tIdx}`,
@@ -2492,6 +2583,7 @@ export const StorageService = {
     // 1. Scan seluruh record okupansi di localStorage TERLEBIH DAHULU (data scan / edit TERBARU)
     try {
       const keys = Object.keys(localStorage);
+      // Prioritaskan cinema_xxi_occupancy_records_ terlebih dahulu agar tidak parse kunci legacy duplikat
       keys.forEach((k) => {
         if (
           k.startsWith('cinema_xxi_occupancy_records_') ||
@@ -2508,14 +2600,17 @@ export const StorageService = {
           if (underscoreIdx > 0) {
             const outletId = keyBody.substring(0, underscoreIdx);
             const date = keyBody.substring(underscoreIdx + 1);
+            const normD = this.normalizeDateStr(date);
+            // Skip JSON.parse jika outlet+tanggal ini sudah diproses!
+            if (handledDatesSet.has(`${outletId}_${normD}`)) return;
 
             const raw = localStorage.getItem(k);
-            if (raw) {
+            if (raw && raw !== '[]') {
               try {
                 const parsed = JSON.parse(raw);
                 const rows: any[] = Array.isArray(parsed) ? parsed : parsed?.rows || [];
                 if (rows.length > 0) {
-                  processRows(outletId, date, rows);
+                  processRows(outletId, normD, rows);
                 }
               } catch {
                 // ignore
@@ -2528,20 +2623,22 @@ export const StorageService = {
       // ignore
     }
 
-    // 2. Scan dari persistent manifest catalog
+    // 2. Scan dari persistent manifest catalog (hanya untuk tanggal yang belum terproses di Step 0/1)
     try {
       const manifestRaw = localStorage.getItem('cinema_xxi_occupancy_manifest');
       if (manifestRaw) {
         const manifest = JSON.parse(manifestRaw);
         Object.values(manifest).forEach((entry: any) => {
           if (entry && entry.outletId && entry.date) {
+            const normD = this.normalizeDateStr(entry.date);
+            if (handledDatesSet.has(`${entry.outletId}_${normD}`)) return;
             const rows: any[] = Array.isArray(entry.data)
               ? entry.data
               : Array.isArray(entry.rows)
               ? entry.rows
               : [];
             if (rows.length > 0) {
-              processRows(entry.outletId, entry.date, rows);
+              processRows(entry.outletId, normD, rows);
             }
           }
         });
@@ -2553,29 +2650,23 @@ export const StorageService = {
     // 3. Tambahkan dari MIGRATED_OCCUPANCY_RECORDS untuk outlet & date yang belum tersimpan di localStorage
     MIGRATED_OCCUPANCY_RECORDS.forEach((migrated) => {
       const normD = this.normalizeDateStr(migrated.date);
-      const handledKey = `${migrated.outletId}_${normD}`;
-      if (!handledDatesSet.has(handledKey) && !handledDatesSet.has(`${migrated.outletId}_${migrated.date}`)) {
-        processRows(migrated.outletId, migrated.date, migrated.rows);
+      if (!handledDatesSet.has(`${migrated.outletId}_${normD}`)) {
+        processRows(migrated.outletId, normD, migrated.rows);
       }
     });
 
-    // 4. Tambahkan dari getMovieHistory() HANYA jika tanggal+outlet+studio+title tersebut belum ada
+    // 4. Tambahkan dari getMovieHistory() HANYA jika tanggal+outlet+studio+title tersebut belum ada (O(1) Set lookup!)
     const fromMovies = this.getMovieHistory();
     fromMovies.forEach((m) => {
-      const studioKey = (m.studioName || '').toLowerCase();
       const normD = this.normalizeDateStr(m.date);
+      if (handledDatesSet.has(`${m.outletId}_${normD}`)) return;
       if (/^20(0\d|1\d)-/.test(normD)) return;
+      const studioKey = (m.studioName || '').toLowerCase();
       const cleanTitle = cleanTitleForCompare(m.movieTitle);
-      const mapKey = `${m.outletId}_${normD}_${studioKey}_${cleanTitle}`;
-      let exists = false;
-      for (const key of movieMap.keys()) {
-        if (key.startsWith(`${m.outletId}_${normD}_${studioKey}_${cleanTitle}`)) {
-          exists = true;
-          break;
-        }
-      }
-      if (!exists) {
-        movieMap.set(mapKey, {
+      const prefixKey = `${m.outletId}_${normD}_${studioKey}_${cleanTitle}`;
+      if (!seenMoviePrefixSet.has(prefixKey)) {
+        seenMoviePrefixSet.add(prefixKey);
+        movieMap.set(prefixKey, {
           ...m,
           date: normD,
           genre: this.resolveFilmGenre(m.movieTitle, m.genre),
@@ -2583,7 +2674,8 @@ export const StorageService = {
       }
     });
 
-    return Array.from(movieMap.values()).sort((a, b) => b.date.localeCompare(a.date));
+    cachedAllUploadedMovies = Array.from(movieMap.values()).sort((a, b) => b.date.localeCompare(a.date));
+    return cachedAllUploadedMovies;
   },
 
   // Studio Occupancy Records
@@ -2722,6 +2814,7 @@ export const StorageService = {
     if (normDate !== date) {
       sessionSavedOccupancyMap.set(`${outletId}_${date}`, rows);
     }
+    cachedAllUploadedMovies = null;
   },
 
   saveOccupancyRecord(
@@ -2817,25 +2910,47 @@ export const StorageService = {
     }
   },
 
-  // Broadcast & Sync (Asynchronous to prevent React setState-in-render collisions)
+  // Broadcast & Sync (Coalesced per event type to prevent event storms & UI lag)
   broadcastChange(type: string) {
     if (type === 'inspection' || type === 'all-reset') {
-      // Keep cache if saveInspection just updated it, or clear on external/reset
       if (type === 'all-reset') {
         cachedInspectionsList = null;
       }
     }
-    setTimeout(() => {
+    if (
+      type === 'occupancy' ||
+      type === 'movies' ||
+      type === 'genre-updated' ||
+      type === 'all-reset'
+    ) {
+      cachedAllUploadedMovies = null;
+      if (type === 'genre-updated' || type === 'all-reset') {
+        cachedGenreRegistry = null;
+        resolvedGenreMemo.clear();
+      }
+    }
+
+    const existingTimer = pendingBroadcastTimers.get(type);
+    if (existingTimer) {
+      clearTimeout(existingTimer);
+    }
+    const timer = setTimeout(() => {
+      pendingBroadcastTimers.delete(type);
       window.dispatchEvent(
         new CustomEvent('cinema-xxi-storage-update', { detail: { type, key: type } })
       );
-    }, 0);
+    }, 16);
+    pendingBroadcastTimers.set(type, timer);
   },
 
   // Reset all to fresh initial state
   resetAllData() {
     cachedInspectionsList = null;
+    cachedAllUploadedMovies = null;
+    cachedGenreRegistry = null;
+    resolvedGenreMemo.clear();
     sessionSavedInspectionsMap.clear();
+    sessionSavedOccupancyMap.clear();
     localStorage.removeItem(KEYS.SALES);
     localStorage.removeItem(KEYS.BAKING);
     localStorage.removeItem(KEYS.INSPECTION);

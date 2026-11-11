@@ -55,7 +55,13 @@ export const RekapOkupansi: React.FC<RekapOkupansiProps> = ({
 }) => {
   const [syncTick, setSyncTick] = useState(0);
   useEffect(() => {
-    const handleOutletsUpdate = () => setSyncTick((t) => t + 1);
+    const handleOutletsUpdate = (e: Event) => {
+      const customType = (e as CustomEvent)?.detail?.type;
+      if (customType && customType !== 'outlets' && customType !== 'areas' && customType !== 'all-reset') {
+        return;
+      }
+      setSyncTick((t) => t + 1);
+    };
     window.addEventListener('cinema-xxi-storage-update', handleOutletsUpdate);
     window.addEventListener('storage', handleOutletsUpdate);
     return () => {
@@ -217,9 +223,17 @@ export const RekapOkupansi: React.FC<RekapOkupansiProps> = ({
 
     loadRecords();
 
-    window.addEventListener('cinema-xxi-storage-update', loadRecords);
+    const handleOccupancyStorageUpdate = (e: Event) => {
+      const customType = (e as CustomEvent)?.detail?.type;
+      if (customType && customType !== 'occupancy' && customType !== 'genre-updated' && customType !== 'all-reset') {
+        return;
+      }
+      loadRecords();
+    };
+
+    window.addEventListener('cinema-xxi-storage-update', handleOccupancyStorageUpdate);
     return () => {
-      window.removeEventListener('cinema-xxi-storage-update', loadRecords);
+      window.removeEventListener('cinema-xxi-storage-update', handleOccupancyStorageUpdate);
     };
   }, [selectedDate, outlets]);
 
