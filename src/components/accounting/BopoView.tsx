@@ -92,6 +92,8 @@ export const BopoView: React.FC<BopoViewProps> = ({ currentUser, selectedDate })
   const dailySales = StorageService.getDailySales();
   const bopoRecords = StorageService.getBopoRecords();
 
+  const [gabunganMode, setGabunganMode] = useState<'sum' | 'avg'>('sum');
+
   // Calculate stats per month
   const monthlyData = MONTHS.map((m) => {
     const monthKey = `2026-${m.id}`;
@@ -129,6 +131,16 @@ export const BopoView: React.FC<BopoViewProps> = ({ currentUser, selectedDate })
     const prodCinema = gajiCinema > 0 ? omsetCinema / gajiCinema : 0;
     const prodFnb = gajiFnb > 0 ? omsetFnb / gajiFnb : 0;
 
+    const staffCostGabungan =
+      gabunganMode === 'sum'
+        ? staffCostCinema + staffCostFnb
+        : (staffCostCinema + staffCostFnb) / 2;
+
+    const prodGabungan =
+      gabunganMode === 'sum'
+        ? prodCinema + prodFnb
+        : (prodCinema + prodFnb) / 2;
+
     return {
       monthName: m.name,
       monthKey,
@@ -138,6 +150,8 @@ export const BopoView: React.FC<BopoViewProps> = ({ currentUser, selectedDate })
       staffCostFnb,
       prodCinema,
       prodFnb,
+      staffCostGabungan,
+      prodGabungan,
     };
   });
 
@@ -244,12 +258,37 @@ export const BopoView: React.FC<BopoViewProps> = ({ currentUser, selectedDate })
 
       {/* LEMBAR ANALISIS BOPO TABLE CARD (12 MONTHS) */}
       <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
-        <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50">
+        <div className="px-6 py-4 border-b border-slate-100 flex flex-wrap items-center justify-between gap-3 bg-slate-50">
           <div>
             <h2 className="font-black text-slate-900 text-base">LEMBAR ANALISIS BOPO (TAHUN 2026)</h2>
             <p className="text-xs text-slate-500 mt-0.5">
               Outlet: <span className="font-bold text-purple-700">{currentOutletObj?.name || selectedOutletId}</span> (Menampilkan data per bulan otomatis)
             </p>
+          </div>
+
+          <div className="inline-flex items-center gap-1 p-1 bg-slate-200/70 rounded-xl">
+            <button
+              type="button"
+              onClick={() => setGabunganMode('sum')}
+              className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
+                gabunganMode === 'sum'
+                  ? 'bg-white text-purple-800 shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              Gabungan: Cinema + F&B
+            </button>
+            <button
+              type="button"
+              onClick={() => setGabunganMode('avg')}
+              className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
+                gabunganMode === 'avg'
+                  ? 'bg-white text-purple-800 shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              Gabungan: Rata-Rata (/2)
+            </button>
           </div>
         </div>
 
@@ -266,12 +305,21 @@ export const BopoView: React.FC<BopoViewProps> = ({ currentUser, selectedDate })
                 <th colSpan={2} className="border border-slate-300 px-4 py-2 text-center">
                   Productivity
                 </th>
+                <th colSpan={2} className="border border-slate-300 px-4 py-2 text-center bg-amber-50/80 text-amber-900">
+                  Gabungan (Cinema &amp; F&amp;B)
+                </th>
               </tr>
               <tr className="bg-slate-50 text-slate-600 text-xs font-bold">
                 <th className="border border-slate-300 px-4 py-2 text-center">Cinema</th>
-                <th className="border border-slate-300 px-4 py-2 text-center">F&B</th>
+                <th className="border border-slate-300 px-4 py-2 text-center">F&amp;B</th>
                 <th className="border border-slate-300 px-4 py-2 text-center">Cinema</th>
-                <th className="border border-slate-300 px-4 py-2 text-center">F&B</th>
+                <th className="border border-slate-300 px-4 py-2 text-center">F&amp;B</th>
+                <th className="border border-slate-300 px-4 py-2 text-center bg-amber-50/50 text-amber-900">
+                  Staff Cost Gabungan
+                </th>
+                <th className="border border-slate-300 px-4 py-2 text-center bg-amber-50/50 text-amber-900">
+                  Productivity Gabungan
+                </th>
               </tr>
             </thead>
             <tbody className="text-sm font-semibold text-slate-800">
@@ -280,17 +328,23 @@ export const BopoView: React.FC<BopoViewProps> = ({ currentUser, selectedDate })
                   <td className="border border-slate-300 px-4 py-3 font-bold text-slate-900">
                     {row.monthName} 2026
                   </td>
-                  <td className="border border-slate-300 px-4 py-3 text-center text-slate-700 font-bold">
+                  <td className="border border-slate-300 px-4 py-3 text-center text-slate-700 font-bold tabular-nums">
                     {row.staffCostCinema.toFixed(2)}%
                   </td>
-                  <td className="border border-slate-300 px-4 py-3 text-center text-slate-700 font-bold">
+                  <td className="border border-slate-300 px-4 py-3 text-center text-slate-700 font-bold tabular-nums">
                     {row.staffCostFnb.toFixed(2)}%
                   </td>
-                  <td className="border border-slate-300 px-4 py-3 text-center text-purple-700 font-bold">
+                  <td className="border border-slate-300 px-4 py-3 text-center text-purple-700 font-bold tabular-nums">
                     {row.prodCinema.toFixed(2)}
                   </td>
-                  <td className="border border-slate-300 px-4 py-3 text-center text-purple-700 font-bold">
+                  <td className="border border-slate-300 px-4 py-3 text-center text-purple-700 font-bold tabular-nums">
                     {row.prodFnb.toFixed(2)}
+                  </td>
+                  <td className="border border-slate-300 px-4 py-3 text-center bg-amber-50/20 text-emerald-700 font-extrabold tabular-nums">
+                    {row.staffCostGabungan.toFixed(2)}%
+                  </td>
+                  <td className="border border-slate-300 px-4 py-3 text-center bg-amber-50/20 text-indigo-700 font-extrabold tabular-nums">
+                    {row.prodGabungan.toFixed(2)}
                   </td>
                 </tr>
               ))}
@@ -307,10 +361,13 @@ export const BopoView: React.FC<BopoViewProps> = ({ currentUser, selectedDate })
         </div>
         <ol className="list-decimal list-inside text-xs space-y-1.5 pl-2 font-medium text-amber-900/90">
           <li>
-            <strong>Staff Cost (Cinema / F&B):</strong> (Total Gaji Divisi / Omset Divisi) &times; 100%. Gaji dihitung otomatis dari jumlah karyawan &times; UMR outlet.
+            <strong>Staff Cost (Cinema / F&amp;B):</strong> (Total Gaji Divisi / Omset Divisi) &times; 100%. Gaji dihitung otomatis dari jumlah karyawan &times; UMR outlet.
           </li>
           <li>
-            <strong>Productivity (Cinema / F&B):</strong> Omset Divisi / Total Gaji Divisi (Rasio).
+            <strong>Productivity (Cinema / F&amp;B):</strong> Omset Divisi / Total Gaji Divisi (Rasio).
+          </li>
+          <li>
+            <strong>Staff Cost &amp; Productivity Gabungan:</strong> Menghitung gabungan nilai Cinema &amp; F&amp;B ({gabunganMode === 'sum' ? 'Penjumlahan langsung Cinema + F&B' : 'Rata-rata (Cinema + F&B) / 2'}).
           </li>
           <li>
             <strong>Kasus Gabungan (Cafe + HS / Premiere):</strong> Omset dan jumlah karyawan digabungkan secara otomatis sesuai wilayah penugasan outlet.
