@@ -92,7 +92,7 @@ export const BopoView: React.FC<BopoViewProps> = ({ currentUser, selectedDate })
   const dailySales = StorageService.getDailySales();
   const bopoRecords = StorageService.getBopoRecords();
 
-  const [gabunganMode, setGabunganMode] = useState<'sum' | 'avg'>('sum');
+  const totalGajiGabungan = gajiCinema + gajiFnb;
 
   // Calculate stats per month
   const monthlyData = MONTHS.map((m) => {
@@ -124,6 +124,7 @@ export const BopoView: React.FC<BopoViewProps> = ({ currentUser, selectedDate })
     // Only use actual daily sales or saved bopo record, otherwise 0
     const omsetCinema = sumCinema > 0 ? sumCinema : (foundBopo?.pendapatanTiket || 0);
     const omsetFnb = sumFnB > 0 ? sumFnB : (foundBopo?.pendapatanFnb || 0);
+    const totalOmsetGabungan = omsetCinema + omsetFnb;
 
     const staffCostCinema = omsetCinema > 0 ? (gajiCinema / omsetCinema) * 100 : 0;
     const staffCostFnb = omsetFnb > 0 ? (gajiFnb / omsetFnb) * 100 : 0;
@@ -131,21 +132,18 @@ export const BopoView: React.FC<BopoViewProps> = ({ currentUser, selectedDate })
     const prodCinema = gajiCinema > 0 ? omsetCinema / gajiCinema : 0;
     const prodFnb = gajiFnb > 0 ? omsetFnb / gajiFnb : 0;
 
+    // Gabungan: (Gaji Cinema + Gaji F&B) dibanding (Omset Cinema + Omset F&B)
     const staffCostGabungan =
-      gabunganMode === 'sum'
-        ? staffCostCinema + staffCostFnb
-        : (staffCostCinema + staffCostFnb) / 2;
-
+      totalOmsetGabungan > 0 ? (totalGajiGabungan / totalOmsetGabungan) * 100 : 0;
     const prodGabungan =
-      gabunganMode === 'sum'
-        ? prodCinema + prodFnb
-        : (prodCinema + prodFnb) / 2;
+      totalGajiGabungan > 0 ? totalOmsetGabungan / totalGajiGabungan : 0;
 
     return {
       monthName: m.name,
       monthKey,
       omsetCinema,
       omsetFnb,
+      totalOmsetGabungan,
       staffCostCinema,
       staffCostFnb,
       prodCinema,
@@ -251,7 +249,7 @@ export const BopoView: React.FC<BopoViewProps> = ({ currentUser, selectedDate })
           <Calculator className="w-8 h-8 text-indigo-600 shrink-0" />
           <div>
             <div className="text-[10px] font-bold uppercase text-slate-500">Total Biaya Gaji / Bln</div>
-            <div className="text-sm font-black text-emerald-600">Rp {(gajiCinema + gajiFnb).toLocaleString('id-ID')}</div>
+            <div className="text-sm font-black text-emerald-600">Rp {totalGajiGabungan.toLocaleString('id-ID')}</div>
           </div>
         </div>
       </div>
@@ -264,31 +262,6 @@ export const BopoView: React.FC<BopoViewProps> = ({ currentUser, selectedDate })
             <p className="text-xs text-slate-500 mt-0.5">
               Outlet: <span className="font-bold text-purple-700">{currentOutletObj?.name || selectedOutletId}</span> (Menampilkan data per bulan otomatis)
             </p>
-          </div>
-
-          <div className="inline-flex items-center gap-1 p-1 bg-slate-200/70 rounded-xl">
-            <button
-              type="button"
-              onClick={() => setGabunganMode('sum')}
-              className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
-                gabunganMode === 'sum'
-                  ? 'bg-white text-purple-800 shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              Gabungan: Cinema + F&B
-            </button>
-            <button
-              type="button"
-              onClick={() => setGabunganMode('avg')}
-              className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
-                gabunganMode === 'avg'
-                  ? 'bg-white text-purple-800 shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              Gabungan: Rata-Rata (/2)
-            </button>
           </div>
         </div>
 
@@ -306,7 +279,7 @@ export const BopoView: React.FC<BopoViewProps> = ({ currentUser, selectedDate })
                   Productivity
                 </th>
                 <th colSpan={2} className="border border-slate-300 px-4 py-2 text-center bg-amber-50/80 text-amber-900">
-                  Gabungan (Cinema &amp; F&amp;B)
+                  Gabungan (Cinema + F&amp;B)
                 </th>
               </tr>
               <tr className="bg-slate-50 text-slate-600 text-xs font-bold">
@@ -367,7 +340,10 @@ export const BopoView: React.FC<BopoViewProps> = ({ currentUser, selectedDate })
             <strong>Productivity (Cinema / F&amp;B):</strong> Omset Divisi / Total Gaji Divisi (Rasio).
           </li>
           <li>
-            <strong>Staff Cost &amp; Productivity Gabungan:</strong> Menghitung gabungan nilai Cinema &amp; F&amp;B ({gabunganMode === 'sum' ? 'Penjumlahan langsung Cinema + F&B' : 'Rata-rata (Cinema + F&B) / 2'}).
+            <strong>Staff Cost Gabungan:</strong> ((Gaji Cinema + Gaji F&amp;B) / (Omset Cinema + Omset F&amp;B)) &times; 100%.
+          </li>
+          <li>
+            <strong>Productivity Gabungan:</strong> (Omset Cinema + Omset F&amp;B) / (Gaji Cinema + Gaji F&amp;B).
           </li>
           <li>
             <strong>Kasus Gabungan (Cafe + HS / Premiere):</strong> Omset dan jumlah karyawan digabungkan secara otomatis sesuai wilayah penugasan outlet.
