@@ -20,6 +20,7 @@ import {
   User,
   Outlet,
   MaintenanceCategory,
+  CarpetAreaEntry,
   MaintenanceMonthEntry,
   MaintenanceScheduleRecord,
 } from '../../types';
@@ -174,6 +175,8 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
 
   const [formDate, setFormDate] = useState('');
   const [formQty, setFormQty] = useState('');
+  const [selectedStudios, setSelectedStudios] = useState<string[]>([]);
+  const [carpetAreas, setCarpetAreas] = useState<CarpetAreaEntry[]>([]);
   const [formExpDate, setFormExpDate] = useState('');
   const [formNotes, setFormNotes] = useState('');
 
@@ -237,8 +240,8 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
           actionOverdue: 'PERLU CUCI!',
           actionWarning: 'SEGERA CUCI!',
           unitIcon: '🧹',
-          qtyLabel: 'Jumlah Studio / Area Karpet (Opsional)',
-          qtyPlaceholder: 'Contoh: 6',
+          qtyLabel: 'Total Luas Karpet Dicuci (m²)',
+          qtyPlaceholder: 'Contoh: 350',
           isWashType: true,
         };
       case 'filter_fluux':
@@ -458,6 +461,93 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
   const startIndex = (safePage - 1) * pageSize;
   const paginatedRows = filteredRows.slice(startIndex, startIndex + pageSize);
 
+  // Helper to infer checked studios for existing entries
+  const resolveInitialSelectedStudios = (
+    outlet: Outlet,
+    existingEntry: MaintenanceMonthEntry | null
+  ): string[] => {
+    const studios = outlet.studios || [];
+    if (studios.length === 0) return [];
+    if (existingEntry && Array.isArray(existingEntry.selectedStudios)) {
+      return existingEntry.selectedStudios.filter((name) =>
+        studios.some((s) => s.name === name)
+      );
+    }
+    if (existingEntry && existingEntry.quantity && existingEntry.quantity > 0) {
+      const target = existingEntry.quantity;
+      const totalAll = getOutletTotalChairs(outlet);
+      if (target === totalAll) {
+        return studios.map((s) => s.name);
+      }
+      // Try finding exact subset sum match for legacy entries without selectedStudios
+      let matched: string[] | null = null;
+      const n = studios.length;
+      const dfs = (idx: number, currentSum: number, chosen: string[]) => {
+        if (matched) return;
+        if (currentSum === target) {
+          matched = [...chosen];
+          return;
+        }
+        if (idx >= n || currentSum > target) return;
+        dfs(idx + 1, currentSum + (Number(studios[idx].capacity) || 0), [
+          ...chosen,
+          studios[idx].name,
+        ]);
+        dfs(idx + 1, currentSum, chosen);
+      };
+      dfs(0, 0, []);
+      if (matched) return matched;
+    }
+    return [];
+  };
+
+  const resolveInitialCarpetAreas = (
+    existingEntry: MaintenanceMonthEntry | null
+  ): CarpetAreaEntry[] => {
+    const standardBase: CarpetAreaEntry[] = [
+      { id: 'karpet_studio', name: 'Karpet Studio', checked: false, areaSqm: 0, isCustom: false },
+      { id: 'karpet_lobi', name: 'Karpet Lobi', checked: false, areaSqm: 0, isCustom: false },
+      { id: 'karpet_koridor', name: 'Karpet Koridor', checked: false, areaSqm: 0, isCustom: false },
+    ];
+
+    if (existingEntry && Array.isArray(existingEntry.carpetAreas) && existingEntry.carpetAreas.length > 0) {
+      const mergedStandard = standardBase.map((std) => {
+        const found = existingEntry.carpetAreas!.find(
+          (c) => c.id === std.id || c.name.toLowerCase() === std.name.toLowerCase()
+        );
+        return found
+          ? { ...std, checked: Boolean(found.checked), areaSqm: Number(found.areaSqm) || 0 }
+          : std;
+      });
+      const customItems = existingEntry.carpetAreas
+        .filter(
+          (c) =>
+            c.isCustom ||
+            !standardBase.some(
+              (std) => std.id === c.id || std.name.toLowerCase() === c.name.toLowerCase()
+            )
+        )
+        .map((c) => ({
+          id: c.id || `custom_${Math.random().toString(36).slice(2, 8)}`,
+          name: c.name || '',
+          checked: Boolean(c.checked),
+          areaSqm: Number(c.areaSqm) || 0,
+          isCustom: true,
+        }));
+      return [...mergedStandard, ...customItems];
+    }
+
+    if (existingEntry && existingEntry.quantity && existingEntry.quantity > 0) {
+      return standardBase.map((std, idx) =>
+        idx === 0
+          ? { ...std, checked: true, areaSqm: Number(existingEntry.quantity) || 0 }
+          : std
+      );
+    }
+
+    return standardBase;
+  };
+
   // Open cell modal
   const handleOpenCellModal = (
     outlet: Outlet,
@@ -472,17 +562,43 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
       existingEntry?.date || `${selectedYear}-${defaultMonthStr}-01`;
     const defaultExp =
       existingEntry?.customExpiryDate || addDaysToDateString(defaultDate, sopDays);
-    const defaultChairs =
-      activeCategory === 'kursi_studio' ? getOutletTotalChairs(outlet) : 0;
 
     setFormDate(defaultDate);
-    setFormQty(
-      existingEntry?.quantity !== undefined && existingEntry.quantity > 0
-        ? String(existingEntry.quantity)
-        : defaultChairs > 0
-        ? String(defaultChairs)
-        : ''
-    );
+
+    if (activeCategory === 'kursi_studio') {
+      const initStudios = resolveInitialSelectedStudios(outlet, existingEntry);
+      setSelectedStudios(initStudios);
+      setCarpetAreas([]);
+      const studioList = outlet.studios || [];
+      const sumSelected = studioList
+        .filter((s) => initStudios.includes(s.name))
+        .reduce((acc, s) => acc + (Number(s.capacity) || 0), 0);
+
+      if (initStudios.length > 0) {
+        setFormQty(String(sumSelected));
+      } else if (existingEntry?.quantity !== undefined && existingEntry.quantity > 0) {
+        setFormQty(String(existingEntry.quantity));
+      } else {
+        setFormQty('0');
+      }
+    } else if (activeCategory === 'karpet') {
+      setSelectedStudios([]);
+      const initCarpet = resolveInitialCarpetAreas(existingEntry);
+      setCarpetAreas(initCarpet);
+      const totalSqm = initCarpet
+        .filter((c) => c.checked)
+        .reduce((sum, c) => sum + (Number(c.areaSqm) || 0), 0);
+      setFormQty(String(totalSqm));
+    } else {
+      setSelectedStudios([]);
+      setCarpetAreas([]);
+      setFormQty(
+        existingEntry?.quantity !== undefined && existingEntry.quantity > 0
+          ? String(existingEntry.quantity)
+          : ''
+      );
+    }
+
     setFormExpDate(defaultExp);
     setFormNotes(existingEntry?.notes || '');
     setActiveCellModal({
@@ -492,6 +608,91 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
       month,
       existingEntry,
     });
+  };
+
+  const handleToggleStudio = (studioName: string) => {
+    if (!activeCellModal) return;
+    const studios = activeCellModal.outlet.studios || [];
+    setSelectedStudios((prev) => {
+      const exists = prev.includes(studioName);
+      const next = exists
+        ? prev.filter((name) => name !== studioName)
+        : [...prev, studioName];
+      const totalChairs = studios
+        .filter((s) => next.includes(s.name))
+        .reduce((sum, s) => sum + (Number(s.capacity) || 0), 0);
+      setFormQty(String(totalChairs));
+      return next;
+    });
+  };
+
+  const handleToggleAllStudios = () => {
+    if (!activeCellModal) return;
+    const studios = activeCellModal.outlet.studios || [];
+    if (selectedStudios.length === studios.length) {
+      setSelectedStudios([]);
+      setFormQty('0');
+    } else {
+      const allNames = studios.map((s) => s.name);
+      const totalChairs = studios.reduce(
+        (sum, s) => sum + (Number(s.capacity) || 0),
+        0
+      );
+      setSelectedStudios(allNames);
+      setFormQty(String(totalChairs));
+    }
+  };
+
+  const syncCarpetAreasAndQty = (nextAreas: CarpetAreaEntry[]) => {
+    setCarpetAreas(nextAreas);
+    const totalSqm = nextAreas
+      .filter((c) => c.checked)
+      .reduce((sum, c) => sum + (Number(c.areaSqm) || 0), 0);
+    const rounded = Math.round(totalSqm * 100) / 100;
+    setFormQty(String(rounded));
+  };
+
+  const handleToggleCarpetArea = (id: string) => {
+    const next = carpetAreas.map((item) =>
+      item.id === id ? { ...item, checked: !item.checked } : item
+    );
+    syncCarpetAreasAndQty(next);
+  };
+
+  const handleChangeCarpetAreaSqm = (id: string, valStr: string) => {
+    const num = valStr.trim() === '' ? 0 : Math.max(0, Number(valStr));
+    const safeNum = isNaN(num) ? 0 : num;
+    const next = carpetAreas.map((item) => {
+      if (item.id !== id) return item;
+      return {
+        ...item,
+        areaSqm: safeNum,
+        checked: safeNum > 0 ? true : item.checked,
+      };
+    });
+    syncCarpetAreasAndQty(next);
+  };
+
+  const handleChangeCarpetAreaName = (id: string, newName: string) => {
+    setCarpetAreas((prev) =>
+      prev.map((item) => (item.id === id ? { ...item, name: newName } : item))
+    );
+  };
+
+  const handleAddCustomCarpetRoom = () => {
+    const newRoom: CarpetAreaEntry = {
+      id: `custom_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      name: '',
+      checked: true,
+      areaSqm: 0,
+      isCustom: true,
+    };
+    syncCarpetAreasAndQty([...carpetAreas, newRoom]);
+  };
+
+  const handleRemoveCustomCarpetRoom = (id: string) => {
+    const next = carpetAreas.filter((item) => item.id !== id);
+    syncCarpetAreasAndQty(next);
   };
 
   // Auto-update Expired Date when Execution Date changes in modal
@@ -508,9 +709,20 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
     if (!activeCellModal || !formDate) return;
 
     const parsedQty = formQty.trim() ? Number(formQty.trim()) : undefined;
+    const cleanedCarpetAreas =
+      activeCategory === 'karpet'
+        ? carpetAreas.map((c) => ({
+            ...c,
+            name: c.name.trim() || 'Ruangan Tambahan',
+          }))
+        : undefined;
+
     const entry: MaintenanceMonthEntry = {
       date: formDate,
       quantity: parsedQty && !isNaN(parsedQty) && parsedQty > 0 ? parsedQty : undefined,
+      selectedStudios:
+        activeCategory === 'kursi_studio' ? selectedStudios : undefined,
+      carpetAreas: cleanedCarpetAreas,
       customExpiryDate: formExpDate.trim() || undefined,
       notes: formNotes.trim() || undefined,
       updatedBy: currentUser.name,
@@ -1022,6 +1234,7 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
                                       <span>{categoryMeta.unitIcon}</span>
                                       <span className="tabular-nums">
                                         {cellEntry.quantity}
+                                        {activeCategory === 'karpet' ? ' m²' : ''}
                                       </span>
                                     </span>
                                   )}
@@ -1176,8 +1389,8 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
       {/* Modal Input / Edit Tanggal Maintenance Bulanan */}
       {activeCellModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-4">
-          <div className="bg-white rounded-2xl border border-slate-200 shadow-xl w-full max-w-md overflow-hidden animate-in fade-in zoom-in-95 duration-150">
-            <div className="px-5 py-4 bg-slate-900 text-white flex items-center justify-between">
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-xl w-full max-w-md max-h-[92vh] flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+            <div className="px-5 py-4 bg-slate-900 text-white flex items-center justify-between shrink-0">
               <div>
                 <div className="flex items-center gap-2">
                   <span className="px-2 py-0.5 rounded text-[10px] font-extrabold bg-amber-400 text-slate-950 uppercase">
@@ -1200,7 +1413,7 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
               </button>
             </div>
 
-            <form onSubmit={handleSaveCellEntry} className="p-5 space-y-4">
+            <form onSubmit={handleSaveCellEntry} className="p-5 space-y-4 overflow-y-auto">
               <div className="p-3 rounded-xl bg-amber-50/80 border border-amber-200/80 flex items-start gap-2.5 text-[11px] text-amber-900">
                 <Info className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
                 <div>
@@ -1242,19 +1455,217 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
                 </p>
               </div>
 
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
-                  {categoryMeta.qtyLabel}
-                </label>
-                <input
-                  type="number"
-                  min={0}
-                  value={formQty}
-                  onChange={(e) => setFormQty(e.target.value)}
-                  placeholder={categoryMeta.qtyPlaceholder}
-                  className="w-full px-3 py-2 text-xs font-semibold border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500"
-                />
-              </div>
+              {activeCategory === 'kursi_studio' ? (
+                <div className="space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700">
+                        Pilih Studio yang Dicuci
+                      </label>
+                      <span className="text-[10px] text-slate-500 font-medium">
+                        {selectedStudios.length} dari {(activeCellModal.outlet.studios || []).length} studio dipilih
+                      </span>
+                    </div>
+                    {(activeCellModal.outlet.studios || []).length > 0 && (
+                      <button
+                        type="button"
+                        onClick={handleToggleAllStudios}
+                        className="text-[11px] font-bold text-amber-600 hover:text-amber-700 underline underline-offset-2 cursor-pointer"
+                      >
+                        {selectedStudios.length === (activeCellModal.outlet.studios || []).length
+                          ? 'Reset Pilihan'
+                          : 'Pilih Semua Studio'}
+                      </button>
+                    )}
+                  </div>
+
+                  {(activeCellModal.outlet.studios || []).length > 0 ? (
+                    <div className="grid grid-cols-2 gap-2 p-2.5 rounded-xl bg-slate-50 border border-slate-200/90 max-h-48 overflow-y-auto">
+                      {(activeCellModal.outlet.studios || []).map((studio) => {
+                        const isChecked = selectedStudios.includes(studio.name);
+                        return (
+                          <label
+                            key={studio.name}
+                            className={`flex items-center justify-between gap-2 px-2.5 py-2 rounded-lg border text-xs transition-colors cursor-pointer select-none ${
+                              isChecked
+                                ? 'bg-amber-50/90 border-amber-400 text-slate-900 font-bold shadow-2xs'
+                                : 'bg-white border-slate-200 text-slate-700 hover:border-slate-300 font-medium'
+                            }`}
+                          >
+                            <div className="flex items-center gap-2 min-w-0">
+                              <input
+                                type="checkbox"
+                                checked={isChecked}
+                                onChange={() => handleToggleStudio(studio.name)}
+                                className="w-3.5 h-3.5 rounded border-slate-300 text-amber-500 focus:ring-amber-500/30 cursor-pointer shrink-0 accent-amber-500"
+                              />
+                              <span className="truncate">{studio.name}</span>
+                            </div>
+                            <span
+                              className={`text-[11px] tabular-nums shrink-0 ${
+                                isChecked ? 'text-amber-800 font-extrabold' : 'text-slate-500'
+                              }`}
+                            >
+                              {studio.capacity}
+                            </span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-500 text-center">
+                      Data daftar studio belum tersedia untuk outlet ini.
+                    </div>
+                  )}
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">
+                      {categoryMeta.qtyLabel}
+                    </label>
+                    <div className="relative flex items-center">
+                      <input
+                        type="number"
+                        readOnly
+                        value={formQty}
+                        className="w-full px-3 py-2 pr-14 text-xs font-extrabold text-slate-800 bg-slate-100 border border-slate-300 rounded-xl tabular-nums cursor-not-allowed focus:outline-none"
+                      />
+                      <span className="absolute right-3 text-[11px] font-bold text-slate-500 pointer-events-none">
+                        Kursi
+                      </span>
+                    </div>
+                    <p className="text-[10px] text-slate-400 mt-1">
+                      Otomatis menjumlahkan kapasitas kursi dari studio yang diceklis di atas.
+                    </p>
+                  </div>
+                </div>
+              ) : activeCategory === 'karpet' ? (
+                <div className="space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700">
+                        Pilih Area / Ruangan Karpet
+                      </label>
+                      <span className="text-[10px] text-slate-500 font-medium">
+                        Ceklis area & isi luas meter persegi (m²)
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleAddCustomCarpetRoom}
+                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-bold text-amber-700 bg-amber-50 hover:bg-amber-100 border border-amber-300 transition-colors cursor-pointer"
+                      title="Tambah Ruangan Karpet"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>Tambah Ruangan</span>
+                    </button>
+                  </div>
+
+                  <div className="space-y-2 p-2.5 rounded-xl bg-slate-50 border border-slate-200/90 max-h-52 overflow-y-auto">
+                    {carpetAreas.map((area) => (
+                      <div
+                        key={area.id}
+                        className={`flex items-center justify-between gap-2 px-2.5 py-2 rounded-lg border text-xs transition-colors ${
+                          area.checked
+                            ? 'bg-amber-50/90 border-amber-400 text-slate-900 shadow-2xs'
+                            : 'bg-white border-slate-200 text-slate-700'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2 min-w-0 flex-1">
+                          <input
+                            type="checkbox"
+                            checked={area.checked}
+                            onChange={() => handleToggleCarpetArea(area.id)}
+                            className="w-3.5 h-3.5 rounded border-slate-300 text-amber-500 focus:ring-amber-500/30 cursor-pointer shrink-0 accent-amber-500"
+                          />
+                          {area.isCustom ? (
+                            <input
+                              type="text"
+                              value={area.name}
+                              onChange={(e) =>
+                                handleChangeCarpetAreaName(area.id, e.target.value)
+                              }
+                              placeholder="Nama ruangan (misal: Mushola)..."
+                              className="w-full px-2 py-1 text-xs font-semibold bg-white border border-slate-300 rounded-md focus:outline-none focus:border-amber-500"
+                            />
+                          ) : (
+                            <span
+                              onClick={() => handleToggleCarpetArea(area.id)}
+                              className={`truncate cursor-pointer select-none ${
+                                area.checked ? 'font-bold text-slate-900' : 'font-medium text-slate-700'
+                              }`}
+                            >
+                              {area.name}
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <div className="relative flex items-center w-24">
+                            <input
+                              type="number"
+                              min={0}
+                              step="any"
+                              value={area.areaSqm > 0 ? area.areaSqm : ''}
+                              onChange={(e) =>
+                                handleChangeCarpetAreaSqm(area.id, e.target.value)
+                              }
+                              placeholder="0"
+                              className="w-full pl-2.5 pr-7 py-1 text-xs font-bold text-right bg-white border border-slate-300 rounded-md tabular-nums focus:outline-none focus:border-amber-500"
+                            />
+                            <span className="absolute right-2 text-[10px] font-bold text-slate-400 pointer-events-none">
+                              m²
+                            </span>
+                          </div>
+                          {area.isCustom && (
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveCustomCarpetRoom(area.id)}
+                              className="p-1 rounded-md text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+                              title="Hapus ruangan"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">
+                      {categoryMeta.qtyLabel}
+                    </label>
+                    <div className="relative flex items-center">
+                      <input
+                        type="number"
+                        readOnly
+                        value={formQty}
+                        className="w-full px-3 py-2 pr-12 text-xs font-extrabold text-slate-800 bg-slate-100 border border-slate-300 rounded-xl tabular-nums cursor-not-allowed focus:outline-none"
+                      />
+                      <span className="absolute right-3 text-[11px] font-bold text-slate-500 pointer-events-none">
+                        m²
+                      </span>
+                    </div>
+                    <p className="text-[10px] text-slate-400 mt-1">
+                      Otomatis menjumlahkan total luas (m²) dari area karpet yang diceklis di atas.
+                    </p>
+                  </div>
+                </div>
+              ) : (
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    {categoryMeta.qtyLabel}
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    value={formQty}
+                    onChange={(e) => setFormQty(e.target.value)}
+                    placeholder={categoryMeta.qtyPlaceholder}
+                    className="w-full px-3 py-2 text-xs font-semibold border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500"
+                  />
+                </div>
+              )}
 
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1">

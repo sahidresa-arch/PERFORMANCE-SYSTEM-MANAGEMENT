@@ -331,9 +331,19 @@ export type MaintenanceCategory =
   | 'filter_sediment'
   | 'lampu_uv';
 
+export interface CarpetAreaEntry {
+  id: string;
+  name: string;
+  checked: boolean;
+  areaSqm: number; // Luas dalam meter persegi (m²)
+  isCustom?: boolean;
+}
+
 export interface MaintenanceMonthEntry {
   date: string; // YYYY-MM-DD (Tanggal pencucian / pergantian)
-  quantity?: number; // Jumlah kursi / titik / unit (misal: 1420)
+  quantity?: number; // Jumlah kursi / luas m² / titik / unit (misal: 1420)
+  selectedStudios?: string[]; // Daftar nama studio yang diceklis (khusus kursi_studio)
+  carpetAreas?: CarpetAreaEntry[]; // Rincian area karpet & luas m² (khusus karpet)
   customExpiryDate?: string; // YYYY-MM-DD (Tanggal expired / jadwal berikutnya)
   notes?: string;
   updatedBy?: string;
