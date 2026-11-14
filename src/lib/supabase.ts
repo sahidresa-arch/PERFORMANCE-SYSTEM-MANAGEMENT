@@ -2797,15 +2797,29 @@ export async function mergeRemoteOutletsAndAreasToLocal(): Promise<boolean> {
 
 let additionalModulesTimer: NodeJS.Timeout | null = null;
 const pendingAdditionalModules = new Set<
-  'users' | 'genres' | 'administration' | 'bopo' | 'lost_found' | 'warehouse' | 'maintenance'
+  | 'users'
+  | 'genres'
+  | 'administration'
+  | 'bopo'
+  | 'lost_found'
+  | 'warehouse'
+  | 'maintenance'
+  | 'daily_quotes'
 >();
 
 /**
- * Sinkronisasi Modul Tambahan (Users, Genre Film, Administrasi, BOPO, Lost & Found, Gudang/Inventory, Maintenance) dengan Debounce
+ * Sinkronisasi Modul Tambahan (Users, Genre Film, Administrasi, BOPO, Lost & Found, Gudang/Inventory, Maintenance, Kata-kata Hari Ini) dengan Debounce
  */
 export async function syncAdditionalModulesToSupabase(
   modules: Array<
-    'users' | 'genres' | 'administration' | 'bopo' | 'lost_found' | 'warehouse' | 'maintenance'
+    | 'users'
+    | 'genres'
+    | 'administration'
+    | 'bopo'
+    | 'lost_found'
+    | 'warehouse'
+    | 'maintenance'
+    | 'daily_quotes'
   > = [
     'users',
     'genres',
@@ -2814,6 +2828,7 @@ export async function syncAdditionalModulesToSupabase(
     'lost_found',
     'warehouse',
     'maintenance',
+    'daily_quotes',
   ]
 ): Promise<boolean> {
   const client = getSupabase();
@@ -2837,7 +2852,14 @@ export async function syncAdditionalModulesToSupabase(
 
 async function executeAdditionalModulesUpsert(
   modules: Array<
-    'users' | 'genres' | 'administration' | 'bopo' | 'lost_found' | 'warehouse' | 'maintenance'
+    | 'users'
+    | 'genres'
+    | 'administration'
+    | 'bopo'
+    | 'lost_found'
+    | 'warehouse'
+    | 'maintenance'
+    | 'daily_quotes'
   >
 ): Promise<boolean> {
   const client = getSupabase();
@@ -2941,6 +2963,18 @@ async function executeAdditionalModulesUpsert(
       });
     }
 
+    if (modules.includes('daily_quotes')) {
+      const quotes = StorageService.getDailyQuotes();
+      recordSyncTimestamp('__SYSTEM_SYNC_DAILY_QUOTES__', nowIso, true);
+      rowsToUpsert.push({
+        id: '__SYSTEM_SYNC_DAILY_QUOTES__',
+        outlet_id: '__SYSTEM_SYNC__',
+        date: '2026-01-01',
+        shows: quotes,
+        updated_at: nowIso,
+      });
+    }
+
     if (rowsToUpsert.length > 0) {
       await client.from('cinema_sales').upsert(rowsToUpsert, { onConflict: 'id' });
     }
@@ -2969,6 +3003,7 @@ export async function mergeRemoteAdditionalModulesToLocal(
             '__SYSTEM_SYNC_LOST_FOUND__',
             '__SYSTEM_SYNC_WAREHOUSE__',
             '__SYSTEM_SYNC_MAINTENANCE__',
+            '__SYSTEM_SYNC_DAILY_QUOTES__',
           ];
 
     const { data, error } = await client
@@ -3166,6 +3201,32 @@ export async function mergeRemoteAdditionalModulesToLocal(
       }
     }
 
+    const quotesRow = data.find((r: any) => r.id === '__SYSTEM_SYNC_DAILY_QUOTES__');
+    if (quotesRow && Array.isArray(quotesRow.shows)) {
+      const localQuotes = StorageService.getDailyQuotes();
+      const map = new Map<string, any>();
+      localQuotes.forEach((q) => {
+        if (q && q.id) map.set(q.id, q);
+      });
+      quotesRow.shows.forEach((rq: any) => {
+        if (rq && rq.outletId && rq.date) {
+          const id = rq.id || `${rq.outletId}_${rq.date}`;
+          const existing = map.get(id);
+          if (!existing || (rq.updatedAt || '') >= (existing.updatedAt || '')) {
+            map.set(id, { ...rq, id });
+          }
+        }
+      });
+      const mergedQuotes = Array.from(map.values());
+      const curRaw = localStorage.getItem('cinema_xxi_daily_quotes') || '[]';
+      const nextRaw = JSON.stringify(mergedQuotes);
+      if (curRaw !== nextRaw) {
+        localStorage.setItem('cinema_xxi_daily_quotes', nextRaw);
+        StorageService.broadcastChange('daily-quotes');
+        updated = true;
+      }
+    }
+
     return updated;
   } catch {
     return false;
@@ -3269,6 +3330,7 @@ export async function pullAllRemoteToLocal(forceFull = false): Promise<void> {
       '__SYSTEM_SYNC_LOST_FOUND__',
       '__SYSTEM_SYNC_WAREHOUSE__',
       '__SYSTEM_SYNC_MAINTENANCE__',
+      '__SYSTEM_SYNC_DAILY_QUOTES__',
     ].filter((id) => changedIds.has(id));
 
     if (changedAdditional.length > 0) {
@@ -3592,7 +3654,8 @@ function handleRealtimeRowTrigger(rowId: string, incomingUpdatedAt?: string, sen
     rowId === '__SYSTEM_SYNC_BOPO__' ||
     rowId === '__SYSTEM_SYNC_LOST_FOUND__' ||
     rowId === '__SYSTEM_SYNC_WAREHOUSE__' ||
-    rowId === '__SYSTEM_SYNC_MAINTENANCE__'
+    rowId === '__SYSTEM_SYNC_MAINTENANCE__' ||
+    rowId === '__SYSTEM_SYNC_DAILY_QUOTES__'
   ) {
     scheduleDebouncedRealtimeMerge(`add_${rowId}`, () => mergeRemoteAdditionalModulesToLocal([rowId]));
     return;

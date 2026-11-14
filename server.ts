@@ -84,6 +84,7 @@ const MERGE_BY_ID_ROWS = new Set([
   '__SYSTEM_SYNC_BOPO__',
   '__SYSTEM_SYNC_LOST_FOUND__',
   '__SYSTEM_SYNC_MAINTENANCE__',
+  '__SYSTEM_SYNC_DAILY_QUOTES__',
 ]);
 
 const MERGE_BY_OUTLET_DATE_ROWS = new Set([
@@ -388,6 +389,139 @@ async function startServer() {
       occupancyKeys: Object.keys(syncStore.cinema_occupancy).length,
       timestamp: new Date().toISOString(),
     });
+  });
+
+  // 1b. Runtime Google Maps Platform config endpoint
+  app.get('/api/maps-config', (_req, res) => {
+    res.json({
+      apiKey: process.env.VITE_GOOGLE_MAPS_API_KEY || process.env.GOOGLE_MAPS_API_KEY || '',
+    });
+  });
+
+  // 1c. Server-side Places API (New) proxy for rich Google Maps Place card + reviews + photo
+  app.get('/api/maps-place', async (req, res) => {
+    const query = String(req.query.q || '').trim();
+    const apiKey = process.env.VITE_GOOGLE_MAPS_API_KEY || process.env.GOOGLE_MAPS_API_KEY || '';
+    if (!query) {
+      res.status(400).json({ error: 'Missing query parameter q' });
+      return;
+    }
+    if (!apiKey) {
+      res.status(503).json({ error: 'Maps API key not configured' });
+      return;
+    }
+    try {
+      const upstream = await fetch('https://places.googleapis.com/v1/places:searchText', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Goog-Api-Key': apiKey,
+          'X-Goog-FieldMask': [
+            'places.id',
+            'places.displayName',
+            'places.formattedAddress',
+            'places.location',
+            'places.rating',
+            'places.userRatingCount',
+            'places.googleMapsUri',
+            'places.websiteUri',
+            'places.nationalPhoneNumber',
+            'places.primaryTypeDisplayName',
+            'places.regularOpeningHours',
+            'places.photos',
+            'places.reviews',
+          ].join(','),
+        },
+        body: JSON.stringify({
+          textQuery: query,
+          languageCode: 'id',
+          regionCode: 'ID',
+          pageSize: 1,
+        }),
+        signal: AbortSignal.timeout(8000),
+      });
+
+      const payload: any = await upstream.json();
+      if (!upstream.ok) {
+        const errStatus = payload?.error?.status || '';
+        res.status(upstream.status).json({
+          error: payload?.error?.message || 'Places API request failed',
+          status: errStatus,
+          quotaExceeded: upstream.status === 429 || errStatus === 'RESOURCE_EXHAUSTED',
+        });
+        return;
+      }
+
+      const p = payload?.places?.[0];
+      if (!p) {
+        res.json({ place: null });
+        return;
+      }
+
+      const photoName = p.photos?.[0]?.name || null;
+      const reviews = Array.isArray(p.reviews)
+        ? p.reviews.map((r: any) => ({
+            authorName: r?.authorAttribution?.displayName || 'Pengguna Google',
+            authorPhotoUrl: r?.authorAttribution?.photoUri || undefined,
+            authorUri: r?.authorAttribution?.uri || undefined,
+            rating: typeof r?.rating === 'number' ? r.rating : 0,
+            relativeTime: r?.relativePublishTimeDescription || '',
+            text: r?.text?.text || r?.originalText?.text || '',
+          }))
+        : [];
+
+      res.json({
+        place: {
+          id: p.id,
+          displayName: p.displayName?.text || query,
+          formattedAddress: p.formattedAddress || '',
+          location: p.location
+            ? { lat: Number(p.location.latitude), lng: Number(p.location.longitude) }
+            : null,
+          rating: typeof p.rating === 'number' ? p.rating : undefined,
+          userRatingCount: typeof p.userRatingCount === 'number' ? p.userRatingCount : undefined,
+          googleMapsURI: p.googleMapsUri || undefined,
+          websiteURI: p.websiteUri || undefined,
+          nationalPhoneNumber: p.nationalPhoneNumber || undefined,
+          primaryTypeDisplayName: p.primaryTypeDisplayName?.text || undefined,
+          weekdayDescriptions: Array.isArray(p.regularOpeningHours?.weekdayDescriptions)
+            ? p.regularOpeningHours.weekdayDescriptions
+            : undefined,
+          openNow:
+            typeof p.regularOpeningHours?.openNow === 'boolean'
+              ? p.regularOpeningHours.openNow
+              : undefined,
+          photoUrl: photoName ? `/api/maps-place-photo?name=${encodeURIComponent(photoName)}` : undefined,
+          reviews,
+        },
+      });
+    } catch (err: any) {
+      res.status(502).json({ error: err?.message || 'Failed to query Places API' });
+    }
+  });
+
+  app.get('/api/maps-place-photo', async (req, res) => {
+    const name = String(req.query.name || '').trim();
+    const apiKey = process.env.VITE_GOOGLE_MAPS_API_KEY || process.env.GOOGLE_MAPS_API_KEY || '';
+    if (!name || !name.startsWith('places/') || !apiKey) {
+      res.status(400).end();
+      return;
+    }
+    try {
+      const mediaUrl = `https://places.googleapis.com/v1/${name}/media?maxWidthPx=800&key=${encodeURIComponent(apiKey)}`;
+      const upstream = await fetch(mediaUrl, { signal: AbortSignal.timeout(8000) });
+      if (!upstream.ok) {
+        res.status(upstream.status).end();
+        return;
+      }
+      const contentType = upstream.headers.get('content-type') || 'image/jpeg';
+      const buf = Buffer.from(await upstream.arrayBuffer());
+      res.setHeader('Content-Type', contentType);
+      res.setHeader('Cache-Control', 'public, max-age=3600');
+      res.send(buf);
+    } catch {
+      res.status(502).end();
+    }
   });
 
   // 2. Real-Time SSE Stream Endpoint for Instant Device-to-Device Sync (< 50ms)

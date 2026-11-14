@@ -26,6 +26,7 @@ import {
   MaintenanceCategory,
   MaintenanceMonthEntry,
   MaintenanceScheduleRecord,
+  DailyQuoteRecord,
 } from '../types';
 import {
   INITIAL_AREAS,
@@ -61,6 +62,7 @@ const KEYS = {
   CASHIER_MONTHLY_PRODUCTS: 'cinema_xxi_cashier_monthly_products',
   DAILY_SECTION_SALES: 'cinema_xxi_daily_section_sales',
   MAINTENANCE: 'cinema_xxi_maintenance_records',
+  DAILY_QUOTES: 'cinema_xxi_daily_quotes',
 };
 
 const RECENT_INSPECTIONS_KEY = 'cinema_xxi_recent_inspections_v2';
@@ -4512,5 +4514,62 @@ export const StorageService = {
       ...record,
       keterangan: keterangan.trim(),
     });
+  },
+
+  // Kata-kata Hari Ini (Daily Quotes per Outlet per Hari)
+  getDailyQuotes(): DailyQuoteRecord[] {
+    try {
+      const raw = localStorage.getItem(KEYS.DAILY_QUOTES);
+      const parsed = raw ? JSON.parse(raw) : [];
+      if (!Array.isArray(parsed)) return [];
+      return parsed.sort((a: DailyQuoteRecord, b: DailyQuoteRecord) =>
+        (b.updatedAt || b.createdAt || b.date || '').localeCompare(
+          a.updatedAt || a.createdAt || a.date || ''
+        )
+      );
+    } catch {
+      return [];
+    }
+  },
+
+  getDailyQuoteResponse(outletId: string, date: string): DailyQuoteRecord | undefined {
+    if (!outletId || !date) return undefined;
+    const targetId = `${outletId}_${date}`;
+    return this.getDailyQuotes().find(
+      (q) => q.id === targetId || (q.outletId === outletId && q.date === date)
+    );
+  },
+
+  saveDailyQuoteResponse(
+    input: Omit<DailyQuoteRecord, 'id' | 'createdAt' | 'updatedAt'> & { id?: string }
+  ): DailyQuoteRecord[] {
+    const all = this.getDailyQuotes();
+    const recordId = input.id || `${input.outletId}_${input.date}`;
+    const nowIso = new Date().toISOString();
+    const existing = all.find((q) => q.id === recordId);
+
+    const { id: _ignoredId, ...rest } = input;
+    const nextRecord: DailyQuoteRecord = {
+      ...rest,
+      id: recordId,
+      quoteText: (input.quoteText || '').trim(),
+      createdAt: existing?.createdAt || nowIso,
+      updatedAt: nowIso,
+    };
+
+    const filtered = all.filter((q) => q.id !== recordId);
+    const nextList = [nextRecord, ...filtered];
+    localStorage.setItem(KEYS.DAILY_QUOTES, JSON.stringify(nextList));
+    this.broadcastChange('daily-quotes');
+
+    import('./supabase')
+      .then((m) => {
+        if (typeof (m as any).syncAdditionalModulesToSupabase === 'function') {
+          (m as any).syncAdditionalModulesToSupabase(['daily_quotes']);
+        }
+      })
+      .catch(() => {});
+
+    return nextList;
   },
 };

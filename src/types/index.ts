@@ -26,6 +26,7 @@ export interface Outlet {
   umr?: number;
   class?: string;
   classMigratedV3?: boolean;
+  address?: string;
   studios?: { name: string; capacity: number }[];
 }
 
@@ -358,4 +359,17 @@ export interface MaintenanceScheduleRecord {
   months: { [month: number]: MaintenanceMonthEntry }; // 1 to 12
   keterangan?: string;
   updatedAt?: string;
+}
+
+export interface DailyQuoteRecord {
+  id: string; // `${outletId}_${date}`
+  outletId: string;
+  outletName: string;
+  date: string; // YYYY-MM-DD
+  status: 'submitted' | 'skipped';
+  quoteText: string;
+  authorName: string;
+  authorRole: string;
+  createdAt: string;
+  updatedAt: string;
 }

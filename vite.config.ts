@@ -25,6 +25,8 @@ export default defineConfig(() => {
           : 'sb_publishable_8hN55FEmasxtjZRfMM4M4Q_gsvSmk6q'
       ),
       'import.meta.env.VITE_MISTRAL_API_KEY': JSON.stringify(process.env.VITE_MISTRAL_API_KEY || 'mstrl_AtUyYnNPgt6tVyUqo0TjtDXPwG8RyyS8_3oxmaZ'),
+      'process.env.GOOGLE_MAPS_API_KEY': JSON.stringify(process.env.GOOGLE_MAPS_API_KEY || process.env.VITE_GOOGLE_MAPS_API_KEY || ''),
+      'import.meta.env.VITE_GOOGLE_MAPS_API_KEY': JSON.stringify(process.env.VITE_GOOGLE_MAPS_API_KEY || process.env.GOOGLE_MAPS_API_KEY || ''),
     },
     server: {
       // HMR is disabled in AI Studio via DISABLE_HMR env var.

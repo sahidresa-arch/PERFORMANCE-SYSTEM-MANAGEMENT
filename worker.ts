@@ -35,6 +35,7 @@ const MERGE_BY_ID_ROWS = new Set([
   '__SYSTEM_SYNC_BOPO__',
   '__SYSTEM_SYNC_LOST_FOUND__',
   '__SYSTEM_SYNC_MAINTENANCE__',
+  '__SYSTEM_SYNC_DAILY_QUOTES__',
 ]);
 
 const MERGE_BY_OUTLET_DATE_ROWS = new Set([

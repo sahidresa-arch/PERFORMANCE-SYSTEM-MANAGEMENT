@@ -15,6 +15,7 @@ import {
   Filter,
   Clock,
   Info,
+  FileText,
 } from 'lucide-react';
 import {
   User,
@@ -25,6 +26,7 @@ import {
   MaintenanceScheduleRecord,
 } from '../../types';
 import { StorageService } from '../../lib/storage';
+import { BeritaAcaraModal, BeritaAcaraStatusInfo } from './BeritaAcaraModal';
 
 interface MaintenanceScheduleViewProps {
   currentUser: User;
@@ -187,6 +189,13 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
     currentKeterangan: string;
   } | null>(null);
   const [keteranganText, setKeteranganText] = useState('');
+
+  // Modal Berita Acara Pengajuan Pencucian (Karpet / Kursi Studio)
+  const [beritaAcaraTarget, setBeritaAcaraTarget] = useState<{
+    outlet: Outlet;
+    displayName: string;
+    computedStatus: BeritaAcaraStatusInfo;
+  } | null>(null);
 
   // Determine active category from activeMenu & sub-tab
   const activeCategory: MaintenanceCategory = useMemo(() => {
@@ -1257,29 +1266,69 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
                           )}
 
                           {status === 'overdue' && (
-                            <div
-                              title={`Jadwal terakhir: ${lastDate} | Batas SOP: ${expDate} (Terlewat ${Math.abs(
-                                daysRemaining
-                              )} hari)`}
-                              className="inline-flex items-center justify-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-extrabold bg-rose-50 text-rose-700 border border-rose-300 shadow-2xs w-full max-w-[175px] truncate"
-                            >
-                              <AlertTriangle className="w-3 h-3 text-rose-600 shrink-0" />
-                              <span className="truncate">
-                                🚨 {categoryMeta.actionOverdue} (Lewat{' '}
-                                {Math.abs(daysRemaining)} hr)
-                              </span>
+                            <div className="flex flex-col items-center gap-1.5">
+                              <div
+                                title={`Jadwal terakhir: ${lastDate} | Batas SOP: ${expDate} (Terlewat ${Math.abs(
+                                  daysRemaining
+                                )} hari)`}
+                                className="inline-flex items-center justify-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-extrabold bg-rose-50 text-rose-700 border border-rose-300 shadow-2xs w-full max-w-[175px] truncate"
+                              >
+                                <AlertTriangle className="w-3 h-3 text-rose-600 shrink-0" />
+                                <span className="truncate">
+                                  🚨 {categoryMeta.actionOverdue} (Lewat{' '}
+                                  {Math.abs(daysRemaining)} hr)
+                                </span>
+                              </div>
+                              {(activeCategory === 'kursi_studio' ||
+                                activeCategory === 'karpet') && (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setBeritaAcaraTarget({
+                                      outlet,
+                                      displayName,
+                                      computedStatus,
+                                    })
+                                  }
+                                  className="inline-flex items-center justify-center gap-1 px-2.5 py-1 rounded-lg text-[10px] font-extrabold bg-slate-900 hover:bg-slate-800 text-amber-300 border border-slate-700 shadow-2xs w-full max-w-[175px] transition-colors cursor-pointer"
+                                  title="Buat & download PDF Berita Acara Pengajuan Pencucian"
+                                >
+                                  <FileText className="w-3 h-3 shrink-0" />
+                                  <span className="truncate">Buat Berita Acara</span>
+                                </button>
+                              )}
                             </div>
                           )}
 
                           {status === 'warning' && (
-                            <div
-                              title={`Jadwal terakhir: ${lastDate} | Jatuh tempo: ${expDate} (Sisa ${daysRemaining} hari lagi)`}
-                              className="inline-flex items-center justify-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-extrabold bg-amber-50 text-amber-800 border border-amber-300 shadow-2xs w-full max-w-[175px] truncate animate-pulse"
-                            >
-                              <Bell className="w-3 h-3 text-amber-600 shrink-0" />
-                              <span className="truncate">
-                                🔔 {categoryMeta.actionWarning} (Sisa {daysRemaining} hr)
-                              </span>
+                            <div className="flex flex-col items-center gap-1.5">
+                              <div
+                                title={`Jadwal terakhir: ${lastDate} | Jatuh tempo: ${expDate} (Sisa ${daysRemaining} hari lagi)`}
+                                className="inline-flex items-center justify-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-extrabold bg-amber-50 text-amber-800 border border-amber-300 shadow-2xs w-full max-w-[175px] truncate animate-pulse"
+                              >
+                                <Bell className="w-3 h-3 text-amber-600 shrink-0" />
+                                <span className="truncate">
+                                  🔔 {categoryMeta.actionWarning} (Sisa {daysRemaining} hr)
+                                </span>
+                              </div>
+                              {(activeCategory === 'kursi_studio' ||
+                                activeCategory === 'karpet') && (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setBeritaAcaraTarget({
+                                      outlet,
+                                      displayName,
+                                      computedStatus,
+                                    })
+                                  }
+                                  className="inline-flex items-center justify-center gap-1 px-2.5 py-1 rounded-lg text-[10px] font-extrabold bg-slate-900 hover:bg-slate-800 text-amber-300 border border-slate-700 shadow-2xs w-full max-w-[175px] transition-colors cursor-pointer"
+                                  title="Buat & download PDF Berita Acara Pengajuan Pencucian"
+                                >
+                                  <FileText className="w-3 h-3 shrink-0" />
+                                  <span className="truncate">Buat Berita Acara</span>
+                                </button>
+                              )}
                             </div>
                           )}
 
@@ -1772,6 +1821,18 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
           </div>
         </div>
       )}
+      {/* Modal Berita Acara Pengajuan Pencucian Karpet / Kursi */}
+      {beritaAcaraTarget &&
+        (activeCategory === 'kursi_studio' || activeCategory === 'karpet') && (
+          <BeritaAcaraModal
+            isOpen={Boolean(beritaAcaraTarget)}
+            onClose={() => setBeritaAcaraTarget(null)}
+            outlet={beritaAcaraTarget.outlet}
+            displayName={beritaAcaraTarget.displayName}
+            category={activeCategory}
+            computedStatus={beritaAcaraTarget.computedStatus}
+          />
+        )}
     </div>
   );
 };

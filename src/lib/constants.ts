@@ -390,6 +390,7 @@ export const BAKING_PRODUCTS: BakingProduct[] = [
   { id: 25, name: 'Croffle Nutella (Mini)', unit: 'PCS', targetDefault: 25 },
   { id: 26, name: 'Croffle Original', unit: 'PCS', targetDefault: 35 },
   { id: 27, name: 'Croffle Original (Mini)', unit: 'PCS', targetDefault: 25 },
+  { id: 28, name: 'Roti Sri Kaya', unit: 'PCS', targetDefault: 25 },
 ];
 
 // Definisi Lengkap Daftar Pengguna Sistem Cinema XXI (Sesuai Gambar 1 & Gambar 2, Tanpa Duplikasi)
