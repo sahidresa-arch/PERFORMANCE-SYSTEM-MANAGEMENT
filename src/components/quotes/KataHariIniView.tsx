@@ -13,6 +13,10 @@ import {
   AlertTriangle,
   ShieldCheck,
   RefreshCw,
+  Trash2,
+  CheckSquare,
+  Square,
+  X,
 } from 'lucide-react';
 import { DailyQuoteRecord, Outlet, User } from '../../types';
 import { StorageService } from '../../lib/storage';
@@ -72,6 +76,7 @@ export const KataHariIniView: React.FC<KataHariIniViewProps> = ({
   currentUser,
   selectedDate,
 }) => {
+  const isAdmin = currentUser?.role === 'admin';
   const canPostDirectly =
     currentUser?.role === 'admin' || currentUser?.role === 'area_manager';
 
@@ -91,6 +96,12 @@ export const KataHariIniView: React.FC<KataHariIniViewProps> = ({
   const [submitSuccess, setSubmitSuccess] = useState(false);
   const [isSyncingQuotes, setIsSyncingQuotes] = useState(false);
 
+  // Tools Delete khusus Admin (selain Admin tidak bisa delete)
+  const [isSelectDeleteMode, setIsSelectDeleteMode] = useState(false);
+  const [selectedDeleteIds, setSelectedDeleteIds] = useState<string[]>([]);
+  const [pendingDeleteTargets, setPendingDeleteTargets] = useState<DailyQuoteRecord[]>([]);
+  const [deleteToast, setDeleteToast] = useState<string>('');
+
   const handleManualSync = async () => {
     setIsSyncingQuotes(true);
     try {
@@ -102,6 +113,43 @@ export const KataHariIniView: React.FC<KataHariIniViewProps> = ({
     } finally {
       setIsSyncingQuotes(false);
     }
+  };
+
+  const toggleSelectDeleteId = (id: string) => {
+    if (!isAdmin) return;
+    setSelectedDeleteIds((prev) =>
+      prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]
+    );
+  };
+
+  const handleRequestSingleDelete = (record: DailyQuoteRecord) => {
+    if (!isAdmin) return;
+    setPendingDeleteTargets([record]);
+  };
+
+  const handleRequestBatchDelete = () => {
+    if (!isAdmin || selectedDeleteIds.length === 0) return;
+    const idSet = new Set(selectedDeleteIds);
+    const targets = submittedQuotes.filter((q) => idSet.has(q.id));
+    if (targets.length > 0) {
+      setPendingDeleteTargets(targets);
+    }
+  };
+
+  const handleConfirmDelete = () => {
+    if (!isAdmin || !currentUser || pendingDeleteTargets.length === 0) return;
+    const idsToDelete = pendingDeleteTargets.map((t) => t.id);
+    const next = StorageService.deleteDailyQuotes(idsToDelete, currentUser);
+    setQuotes(next);
+    setPendingDeleteTargets([]);
+    setSelectedDeleteIds((prev) => prev.filter((id) => !idsToDelete.includes(id)));
+    if (isSelectDeleteMode && idsToDelete.length >= selectedDeleteIds.length) {
+      setIsSelectDeleteMode(false);
+    }
+    setDeleteToast(
+      `${idsToDelete.length} kata-kata berhasil dihapus oleh Admin dan disinkronkan.`
+    );
+    setTimeout(() => setDeleteToast(''), 3500);
   };
 
   useEffect(() => {
@@ -407,8 +455,85 @@ export const KataHariIniView: React.FC<KataHariIniViewProps> = ({
               <span>{formatDateId(selectedDate)}</span>
             </button>
           </div>
+          {isAdmin && submittedQuotes.length > 0 && (
+            <button
+              type="button"
+              onClick={() => {
+                setIsSelectDeleteMode((prev) => {
+                  const next = !prev;
+                  if (!next) setSelectedDeleteIds([]);
+                  return next;
+                });
+              }}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold border transition-colors cursor-pointer ${
+                isSelectDeleteMode
+                  ? 'bg-rose-600 text-white border-rose-600'
+                  : 'bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100'
+              }`}
+              title="Tools Hapus Khusus Admin"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>{isSelectDeleteMode ? 'Tutup Pilih Hapus' : 'Kelola Hapus'}</span>
+            </button>
+          )}
         </div>
       </div>
+
+      {/* Admin-Only Delete Toolbar & Feedback */}
+      {isAdmin && isSelectDeleteMode && filteredQuotes.length > 0 && (
+        <div className="bg-rose-50/90 border border-rose-200 rounded-2xl px-4 py-3 flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5 text-xs text-rose-900">
+            <Trash2 className="w-4 h-4 text-rose-600 shrink-0" />
+            <span className="font-bold">
+              Mode Hapus Admin: {selectedDeleteIds.length} kata-kata dipilih
+            </span>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                const visibleIds = filteredQuotes.map((q) => q.id);
+                const allSelected = visibleIds.every((id) => selectedDeleteIds.includes(id));
+                if (allSelected) {
+                  setSelectedDeleteIds((prev) => prev.filter((id) => !visibleIds.includes(id)));
+                } else {
+                  setSelectedDeleteIds((prev) => Array.from(new Set([...prev, ...visibleIds])));
+                }
+              }}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-white text-slate-700 border border-rose-200 hover:bg-rose-100/60 cursor-pointer"
+            >
+              <CheckSquare className="w-3.5 h-3.5 text-rose-600" />
+              <span>
+                {filteredQuotes.every((q) => selectedDeleteIds.includes(q.id))
+                  ? 'Batal Pilih Semua'
+                  : `Pilih Semua (${filteredQuotes.length})`}
+              </span>
+            </button>
+            <button
+              type="button"
+              disabled={selectedDeleteIds.length === 0}
+              onClick={handleRequestBatchDelete}
+              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-black bg-rose-600 hover:bg-rose-700 text-white shadow-xs disabled:opacity-45 disabled:cursor-not-allowed cursor-pointer transition-colors"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>Hapus Terpilih ({selectedDeleteIds.length})</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {deleteToast && (
+        <div className="rounded-2xl bg-emerald-50 border border-emerald-200 text-emerald-800 px-4 py-2.5 text-xs font-bold flex items-center justify-between gap-2">
+          <span>✓ {deleteToast}</span>
+          <button
+            type="button"
+            onClick={() => setDeleteToast('')}
+            className="text-emerald-700 hover:text-emerald-950 cursor-pointer"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
 
       {/* Quotes List */}
       {filteredQuotes.length === 0 ? (
@@ -431,12 +556,22 @@ export const KataHariIniView: React.FC<KataHariIniViewProps> = ({
             const isToday = item.date === selectedDate;
             const isMgmt =
               item.outletId === '__ADMIN__' || item.outletId === '__AREA_MANAGER__';
+            const isCheckedForDelete = isAdmin && selectedDeleteIds.includes(item.id);
 
             return (
               <div
                 key={item.id}
-                className={`bg-white rounded-2xl border p-5 shadow-xs flex flex-col justify-between gap-4 transition-shadow hover:shadow-md ${
-                  isMgmt
+                onClick={() => {
+                  if (isAdmin && isSelectDeleteMode) {
+                    toggleSelectDeleteId(item.id);
+                  }
+                }}
+                className={`bg-white rounded-2xl border p-5 shadow-xs flex flex-col justify-between gap-4 transition-all hover:shadow-md ${
+                  isAdmin && isSelectDeleteMode ? 'cursor-pointer select-none' : ''
+                } ${
+                  isCheckedForDelete
+                    ? 'border-rose-500 ring-2 ring-rose-300 bg-rose-50/30'
+                    : isMgmt
                     ? 'border-purple-300 bg-gradient-to-b from-purple-50/40 to-white'
                     : isToday
                     ? 'border-amber-300/90 ring-1 ring-amber-200/60'
@@ -446,25 +581,60 @@ export const KataHariIniView: React.FC<KataHariIniViewProps> = ({
                 <div className="space-y-3">
                   {/* Top Badge Row */}
                   <div className="flex items-start justify-between gap-2">
-                    <span
-                      className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-extrabold border ${
-                        isMgmt
-                          ? 'bg-purple-700 text-white border-purple-700'
-                          : 'bg-purple-50 text-purple-900 border-purple-200/80'
-                      }`}
-                    >
-                      {isMgmt ? (
-                        <ShieldCheck className="w-3.5 h-3.5 text-amber-300 shrink-0" />
-                      ) : (
-                        <Building2 className="w-3.5 h-3.5 text-purple-700 shrink-0" />
+                    <div className="flex items-center gap-2 min-w-0">
+                      {isAdmin && isSelectDeleteMode && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            toggleSelectDeleteId(item.id);
+                          }}
+                          className="text-rose-600 shrink-0 cursor-pointer"
+                          aria-label="Pilih untuk dihapus"
+                        >
+                          {isCheckedForDelete ? (
+                            <CheckSquare className="w-4 h-4 text-rose-600" />
+                          ) : (
+                            <Square className="w-4 h-4 text-slate-400" />
+                          )}
+                        </button>
                       )}
-                      <span className="truncate max-w-[200px]">{item.outletName}</span>
-                    </span>
-                    {isToday && (
-                      <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-amber-100 text-amber-800 border border-amber-200 shrink-0">
-                        Hari Ini
+                      <span
+                        className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-extrabold border min-w-0 ${
+                          isMgmt
+                            ? 'bg-purple-700 text-white border-purple-700'
+                            : 'bg-purple-50 text-purple-900 border-purple-200/80'
+                        }`}
+                      >
+                        {isMgmt ? (
+                          <ShieldCheck className="w-3.5 h-3.5 text-amber-300 shrink-0" />
+                        ) : (
+                          <Building2 className="w-3.5 h-3.5 text-purple-700 shrink-0" />
+                        )}
+                        <span className="truncate max-w-[180px]">{item.outletName}</span>
                       </span>
-                    )}
+                    </div>
+
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      {isToday && (
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-amber-100 text-amber-800 border border-amber-200 shrink-0">
+                          Hari Ini
+                        </span>
+                      )}
+                      {isAdmin && !isSelectDeleteMode && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleRequestSingleDelete(item);
+                          }}
+                          className="p-1.5 rounded-lg text-rose-600 hover:text-white hover:bg-rose-600 bg-rose-50 border border-rose-200/80 transition-colors cursor-pointer"
+                          title="Hapus kata-kata ini (Khusus Admin)"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
                   </div>
 
                   {/* Quote Content */}
@@ -494,6 +664,76 @@ export const KataHariIniView: React.FC<KataHariIniViewProps> = ({
               </div>
             );
           })}
+        </div>
+      )}
+
+      {/* Modal Konfirmasi Hapus (Khusus Admin) */}
+      {isAdmin && pendingDeleteTargets.length > 0 && (
+        <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl border border-rose-200 shadow-2xl max-w-md w-full overflow-hidden">
+            <div className="bg-rose-600 text-white px-5 py-4 flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2.5">
+                <Trash2 className="w-5 h-5 text-rose-100 shrink-0" />
+                <h3 className="text-sm font-black">
+                  Konfirmasi Hapus Kata-kata (Admin)
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPendingDeleteTargets([])}
+                className="text-rose-100 hover:text-white cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4">
+              <p className="text-xs text-slate-700 leading-relaxed">
+                Anda akan menghapus{' '}
+                <strong className="text-rose-700">
+                  {pendingDeleteTargets.length} kata-kata hari ini
+                </strong>
+                . Data yang dihapus tidak akan tampil lagi di semua perangkat dan outlet.
+              </p>
+
+              <div className="max-h-44 overflow-y-auto space-y-2 pr-1">
+                {pendingDeleteTargets.map((target) => (
+                  <div
+                    key={target.id}
+                    className="p-3 rounded-2xl bg-slate-50 border border-slate-200 text-xs space-y-1"
+                  >
+                    <div className="font-extrabold text-purple-900 flex items-center justify-between gap-2">
+                      <span className="truncate">{target.outletName}</span>
+                      <span className="text-[10px] font-semibold text-slate-500 shrink-0">
+                        {formatDateId(target.date)}
+                      </span>
+                    </div>
+                    <p className="text-slate-700 italic line-clamp-2">
+                      &ldquo;{target.quoteText}&rdquo;
+                    </p>
+                  </div>
+                ))}
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setPendingDeleteTargets([])}
+                  className="px-4 py-2 rounded-xl text-xs font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 cursor-pointer transition-colors"
+                >
+                  Batal
+                </button>
+                <button
+                  type="button"
+                  onClick={handleConfirmDelete}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-black bg-rose-600 hover:bg-rose-700 text-white shadow-xs cursor-pointer transition-colors"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Ya, Hapus Permanen</span>
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       )}
     </div>

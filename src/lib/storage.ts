@@ -4517,12 +4517,15 @@ export const StorageService = {
   },
 
   // Kata-kata Hari Ini (Daily Quotes per Outlet per Hari)
-  getDailyQuotes(): DailyQuoteRecord[] {
+  getDailyQuotes(includeDeleted = false): DailyQuoteRecord[] {
     try {
       const raw = localStorage.getItem(KEYS.DAILY_QUOTES);
       const parsed = raw ? JSON.parse(raw) : [];
       if (!Array.isArray(parsed)) return [];
-      return parsed.sort((a: DailyQuoteRecord, b: DailyQuoteRecord) =>
+      const list = includeDeleted
+        ? parsed
+        : parsed.filter((q: DailyQuoteRecord) => q && !q.deleted);
+      return list.sort((a: DailyQuoteRecord, b: DailyQuoteRecord) =>
         (b.updatedAt || b.createdAt || b.date || '').localeCompare(
           a.updatedAt || a.createdAt || a.date || ''
         )
@@ -4535,7 +4538,7 @@ export const StorageService = {
   getDailyQuoteResponse(outletId: string, date: string): DailyQuoteRecord | undefined {
     if (!outletId || !date) return undefined;
     const targetId = `${outletId}_${date}`;
-    return this.getDailyQuotes().find(
+    return this.getDailyQuotes(false).find(
       (q) => q.id === targetId || (q.outletId === outletId && q.date === date)
     );
   },
@@ -4543,7 +4546,7 @@ export const StorageService = {
   saveDailyQuoteResponse(
     input: Omit<DailyQuoteRecord, 'id' | 'createdAt' | 'updatedAt'> & { id?: string }
   ): DailyQuoteRecord[] {
-    const all = this.getDailyQuotes();
+    const all = this.getDailyQuotes(true);
     const recordId = input.id || `${input.outletId}_${input.date}`;
     const nowIso = new Date().toISOString();
     const existing = all.find((q) => q.id === recordId);
@@ -4555,6 +4558,9 @@ export const StorageService = {
       quoteText: (input.quoteText || '').trim(),
       createdAt: existing?.createdAt || nowIso,
       updatedAt: nowIso,
+      deleted: false,
+      deletedAt: undefined,
+      deletedBy: undefined,
     };
 
     const filtered = all.filter((q) => q.id !== recordId);
@@ -4572,6 +4578,46 @@ export const StorageService = {
       })
       .catch(() => {});
 
-    return nextList;
+    return nextList.filter((q) => !q.deleted);
+  },
+
+  deleteDailyQuotes(ids: string[], actor: User | null): DailyQuoteRecord[] {
+    if (!actor || actor.role !== 'admin') {
+      return this.getDailyQuotes(false);
+    }
+    const idSet = new Set((ids || []).filter(Boolean));
+    if (idSet.size === 0) {
+      return this.getDailyQuotes(false);
+    }
+
+    const all = this.getDailyQuotes(true);
+    const nowIso = new Date().toISOString();
+    const nextList = all.map((q) => {
+      if (!q || !idSet.has(q.id)) return q;
+      return {
+        ...q,
+        quoteText: '',
+        status: 'skipped' as const,
+        deleted: true,
+        deletedAt: nowIso,
+        deletedBy: actor.name || actor.username || 'Admin',
+        updatedAt: nowIso,
+      };
+    });
+
+    localStorage.setItem(KEYS.DAILY_QUOTES, JSON.stringify(nextList));
+    this.broadcastChange('daily-quotes');
+
+    import('./supabase')
+      .then((m) => {
+        if (typeof (m as any).syncDailyQuotesNow === 'function') {
+          void (m as any).syncDailyQuotesNow();
+        } else if (typeof (m as any).syncAdditionalModulesToSupabase === 'function') {
+          void (m as any).syncAdditionalModulesToSupabase(['daily_quotes']);
+        }
+      })
+      .catch(() => {});
+
+    return nextList.filter((q) => !q.deleted);
   },
 };

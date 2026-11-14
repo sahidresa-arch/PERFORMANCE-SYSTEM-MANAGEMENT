@@ -2998,7 +2998,7 @@ async function executeAdditionalModulesUpsert(
     }
 
     if (modules.includes('daily_quotes')) {
-      const quotes = StorageService.getDailyQuotes();
+      const quotes = StorageService.getDailyQuotes(true);
       recordSyncTimestamp('__SYSTEM_SYNC_DAILY_QUOTES__', nowIso, true);
       rowsToUpsert.push({
         id: '__SYSTEM_SYNC_DAILY_QUOTES__',
@@ -3251,7 +3251,7 @@ export async function mergeRemoteAdditionalModulesToLocal(
 
     const quotesRow = data.find((r: any) => r.id === '__SYSTEM_SYNC_DAILY_QUOTES__');
     if (quotesRow && Array.isArray(quotesRow.shows)) {
-      const localQuotes = StorageService.getDailyQuotes();
+      const localQuotes = StorageService.getDailyQuotes(true);
       const map = new Map<string, any>();
       localQuotes.forEach((q) => {
         if (q && q.id) map.set(q.id, q);
@@ -3590,7 +3590,7 @@ async function seedInternalServerFromLocalDevice(): Promise<void> {
         updated_at: getSeedTs('__SYSTEM_SYNC_MAINTENANCE__'),
       });
     }
-    const dailyQuotes = StorageService.getDailyQuotes();
+    const dailyQuotes = StorageService.getDailyQuotes(true);
     if (dailyQuotes.length > 0) {
       batchRecords.push({
         id: '__SYSTEM_SYNC_DAILY_QUOTES__',

@@ -372,4 +372,7 @@ export interface DailyQuoteRecord {
   authorRole: string;
   createdAt: string;
   updatedAt: string;
+  deleted?: boolean;
+  deletedAt?: string;
+  deletedBy?: string;
 }
