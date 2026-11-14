@@ -4564,8 +4564,10 @@ export const StorageService = {
 
     import('./supabase')
       .then((m) => {
-        if (typeof (m as any).syncAdditionalModulesToSupabase === 'function') {
-          (m as any).syncAdditionalModulesToSupabase(['daily_quotes']);
+        if (typeof (m as any).syncDailyQuotesNow === 'function') {
+          void (m as any).syncDailyQuotesNow();
+        } else if (typeof (m as any).syncAdditionalModulesToSupabase === 'function') {
+          void (m as any).syncAdditionalModulesToSupabase(['daily_quotes']);
         }
       })
       .catch(() => {});

@@ -131,6 +131,22 @@ export const InputDataSales: React.FC<InputDataSalesProps> = ({
     setQuoteDraft('');
     setQuoteError('');
     setIsQuoteModalOpen(Boolean(selectedOutletId && selectedDate && !existingQuote));
+
+    import('../../lib/supabase')
+      .then((m) => {
+        if (typeof m.pullDailyQuotesNow === 'function') {
+          return m.pullDailyQuotesNow();
+        }
+        return false;
+      })
+      .then((updated) => {
+        if (updated) {
+          const synced = StorageService.getDailyQuoteResponse(selectedOutletId, selectedDate);
+          setDailyQuoteResponse(synced);
+          if (synced) setIsQuoteModalOpen(false);
+        }
+      })
+      .catch(() => {});
   }, [selectedOutletId, selectedDate, isAdmin]);
 
   // Real-time sync listener when data arrives from Supabase / Web Live / AI Studio

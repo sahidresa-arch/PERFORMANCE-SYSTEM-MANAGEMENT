@@ -12,6 +12,7 @@ import {
   Send,
   AlertTriangle,
   ShieldCheck,
+  RefreshCw,
 } from 'lucide-react';
 import { DailyQuoteRecord, Outlet, User } from '../../types';
 import { StorageService } from '../../lib/storage';
@@ -88,6 +89,20 @@ export const KataHariIniView: React.FC<KataHariIniViewProps> = ({
   const [newQuoteText, setNewQuoteText] = useState('');
   const [submitNotice, setSubmitNotice] = useState('');
   const [submitSuccess, setSubmitSuccess] = useState(false);
+  const [isSyncingQuotes, setIsSyncingQuotes] = useState(false);
+
+  const handleManualSync = async () => {
+    setIsSyncingQuotes(true);
+    try {
+      const m = await import('../../lib/supabase');
+      if (typeof m.pullDailyQuotesNow === 'function') {
+        await m.pullDailyQuotesNow();
+      }
+      setQuotes(StorageService.getDailyQuotes());
+    } finally {
+      setIsSyncingQuotes(false);
+    }
+  };
 
   useEffect(() => {
     const refresh = () => {
@@ -96,6 +111,10 @@ export const KataHariIniView: React.FC<KataHariIniViewProps> = ({
     };
     window.addEventListener('cinema-xxi-storage-update', refresh);
     window.addEventListener('storage', refresh);
+
+    // Tarik data Kata-kata Hari Ini terbaru dari cloud/server setiap kali menu dibuka
+    void handleManualSync();
+
     return () => {
       window.removeEventListener('cinema-xxi-storage-update', refresh);
       window.removeEventListener('storage', refresh);
@@ -207,7 +226,7 @@ export const KataHariIniView: React.FC<KataHariIniViewProps> = ({
             </div>
           </div>
 
-          {/* Stat Pills */}
+          {/* Stat Pills + Sync Button */}
           <div className="flex flex-wrap items-center gap-3 shrink-0">
             <div className="px-4 py-2.5 rounded-2xl bg-white/10 border border-white/15 text-center min-w-[125px]">
               <div className="text-[10px] font-bold uppercase tracking-wider text-purple-200">
@@ -225,6 +244,16 @@ export const KataHariIniView: React.FC<KataHariIniViewProps> = ({
                 {submittedQuotes.length}
               </div>
             </div>
+            <button
+              type="button"
+              onClick={handleManualSync}
+              disabled={isSyncingQuotes}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2.5 rounded-2xl bg-white/15 hover:bg-white/25 border border-white/20 text-xs font-bold text-white transition-colors cursor-pointer disabled:opacity-60"
+              title="Tarik Kata-kata Hari Ini terbaru dari perangkat lain"
+            >
+              <RefreshCw className={`w-4 h-4 ${isSyncingQuotes ? 'animate-spin' : ''}`} />
+              <span>{isSyncingQuotes ? 'Menyinkronkan...' : 'Sinkronkan'}</span>
+            </button>
           </div>
         </div>
 

@@ -337,6 +337,174 @@ export default {
   async fetch(request: Request, env: any, ctx: any): Promise<Response> {
     const url = new URL(request.url);
 
+    // Handle /api/maps-* routes inside Cloudflare Worker
+    if (
+      url.pathname === '/api/maps-config' ||
+      url.pathname === '/api/maps-place' ||
+      url.pathname === '/api/maps-place-photo'
+    ) {
+      const apiKey =
+        env?.VITE_GOOGLE_MAPS_API_KEY ||
+        env?.GOOGLE_MAPS_API_KEY ||
+        '';
+      const jsonHeaders = {
+        'Content-Type': 'application/json',
+        'Cache-Control': 'no-store, no-cache, must-revalidate',
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'GET, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type',
+      };
+
+      if (request.method === 'OPTIONS') {
+        return new Response(null, { status: 204, headers: jsonHeaders });
+      }
+
+      if (url.pathname === '/api/maps-config') {
+        return new Response(JSON.stringify({ apiKey }), {
+          status: 200,
+          headers: jsonHeaders,
+        });
+      }
+
+      if (url.pathname === '/api/maps-place-photo') {
+        const name = String(url.searchParams.get('name') || '').trim();
+        if (!name || !name.startsWith('places/') || !apiKey) {
+          return new Response(null, { status: 400 });
+        }
+        try {
+          const mediaUrl = `https://places.googleapis.com/v1/${name}/media?maxWidthPx=800&key=${encodeURIComponent(
+            apiKey
+          )}`;
+          const upstream = await fetch(mediaUrl);
+          if (!upstream.ok) {
+            return new Response(null, { status: upstream.status });
+          }
+          const contentType = upstream.headers.get('content-type') || 'image/jpeg';
+          return new Response(upstream.body, {
+            status: 200,
+            headers: {
+              'Content-Type': contentType,
+              'Cache-Control': 'public, max-age=3600',
+              'Access-Control-Allow-Origin': '*',
+            },
+          });
+        } catch {
+          return new Response(null, { status: 502 });
+        }
+      }
+
+      // /api/maps-place
+      const query = String(url.searchParams.get('q') || '').trim();
+      if (!query) {
+        return new Response(JSON.stringify({ error: 'Missing query parameter q' }), {
+          status: 400,
+          headers: jsonHeaders,
+        });
+      }
+      if (!apiKey) {
+        return new Response(JSON.stringify({ error: 'Maps API key not configured' }), {
+          status: 503,
+          headers: jsonHeaders,
+        });
+      }
+      try {
+        const upstream = await fetch('https://places.googleapis.com/v1/places:searchText', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Goog-Api-Key': apiKey,
+            'X-Goog-FieldMask': [
+              'places.id',
+              'places.displayName',
+              'places.formattedAddress',
+              'places.location',
+              'places.rating',
+              'places.userRatingCount',
+              'places.googleMapsUri',
+              'places.websiteUri',
+              'places.nationalPhoneNumber',
+              'places.primaryTypeDisplayName',
+              'places.regularOpeningHours',
+              'places.photos',
+              'places.reviews',
+            ].join(','),
+          },
+          body: JSON.stringify({
+            textQuery: query,
+            languageCode: 'id',
+            regionCode: 'ID',
+            pageSize: 1,
+          }),
+        });
+        const payload: any = await upstream.json();
+        if (!upstream.ok) {
+          const errStatus = payload?.error?.status || '';
+          return new Response(
+            JSON.stringify({
+              error: payload?.error?.message || 'Places API request failed',
+              status: errStatus,
+              quotaExceeded: upstream.status === 429 || errStatus === 'RESOURCE_EXHAUSTED',
+            }),
+            { status: upstream.status, headers: jsonHeaders }
+          );
+        }
+        const p = payload?.places?.[0];
+        if (!p) {
+          return new Response(JSON.stringify({ place: null }), {
+            status: 200,
+            headers: jsonHeaders,
+          });
+        }
+        const photoName = p.photos?.[0]?.name || null;
+        const reviews = Array.isArray(p.reviews)
+          ? p.reviews.map((r: any) => ({
+              authorName: r?.authorAttribution?.displayName || 'Pengguna Google',
+              authorPhotoUrl: r?.authorAttribution?.photoUri || undefined,
+              authorUri: r?.authorAttribution?.uri || undefined,
+              rating: typeof r?.rating === 'number' ? r.rating : 0,
+              relativeTime: r?.relativePublishTimeDescription || '',
+              text: r?.text?.text || r?.originalText?.text || '',
+            }))
+          : [];
+        return new Response(
+          JSON.stringify({
+            place: {
+              id: p.id,
+              displayName: p.displayName?.text || query,
+              formattedAddress: p.formattedAddress || '',
+              location: p.location
+                ? { lat: Number(p.location.latitude), lng: Number(p.location.longitude) }
+                : null,
+              rating: typeof p.rating === 'number' ? p.rating : undefined,
+              userRatingCount:
+                typeof p.userRatingCount === 'number' ? p.userRatingCount : undefined,
+              googleMapsURI: p.googleMapsUri || undefined,
+              websiteURI: p.websiteUri || undefined,
+              nationalPhoneNumber: p.nationalPhoneNumber || undefined,
+              primaryTypeDisplayName: p.primaryTypeDisplayName?.text || undefined,
+              weekdayDescriptions: Array.isArray(p.regularOpeningHours?.weekdayDescriptions)
+                ? p.regularOpeningHours.weekdayDescriptions
+                : undefined,
+              openNow:
+                typeof p.regularOpeningHours?.openNow === 'boolean'
+                  ? p.regularOpeningHours.openNow
+                  : undefined,
+              photoUrl: photoName
+                ? `/api/maps-place-photo?name=${encodeURIComponent(photoName)}`
+                : undefined,
+              reviews,
+            },
+          }),
+          { status: 200, headers: jsonHeaders }
+        );
+      } catch (err: any) {
+        return new Response(
+          JSON.stringify({ error: err?.message || 'Failed to query Places API' }),
+          { status: 502, headers: jsonHeaders }
+        );
+      }
+    }
+
     // Handle /api/sync/* routes inside Cloudflare Worker
     if (url.pathname.startsWith('/api/sync/')) {
       const action = url.pathname.replace(/^\/api\/sync\//, '').split('/')[0].toLowerCase();

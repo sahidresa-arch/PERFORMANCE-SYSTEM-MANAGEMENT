@@ -171,6 +171,7 @@ let hybridClientInstance: SupabaseClient | null = null;
 let hybridClientKey = '';
 let supabaseQuotaBackoffUntil = 0;
 let lastSupabaseMetaPollAt = 0;
+let forceBypassSupaMetaSkip = false;
 
 const LIVE_WORKER_ORIGINS = [
   'https://performance-system-management.bdv3.workers.dev',
@@ -408,12 +409,14 @@ function createInternalTableQueryBuilder(table: string, rawSupabase: SupabaseCli
     const hasWarmInternalMeta =
       isMetaHeartbeat && Array.isArray(internalRes?.data) && internalRes.data.length > 0;
     const shouldSkipSupaMeta =
-      hasWarmInternalMeta && Date.now() - lastSupabaseMetaPollAt < 90000;
+      !forceBypassSupaMetaSkip &&
+      hasWarmInternalMeta &&
+      Date.now() - lastSupabaseMetaPollAt < 15000;
 
     const fetchSupa = async () => {
       if (!rawSupabase) return null;
       // Only honor circuit-breaker backoff if Internal Server has warm data; on Static Workers (where internalRes is null), never lock out Supabase
-      if (hasWarmInternalData && Date.now() < supabaseQuotaBackoffUntil) {
+      if (!forceBypassSupaMetaSkip && hasWarmInternalData && Date.now() < supabaseQuotaBackoffUntil) {
         return null;
       }
       try {
@@ -661,22 +664,53 @@ function createInternalTableQueryBuilder(table: string, rawSupabase: SupabaseCli
         }
       };
 
-      // 1. Primary: Save to Internal Server Sync Engine + Cross-Worker Auto-Bridge (main <-> v2)
-      const internalRes = await callInternalSyncUpsert({
-        table,
-        records,
-        clientId: DEVICE_CLIENT_ID,
-        returnFull: table === 'cinema_occupancy',
-      });
+      // 1 & 2. Parallel Dual-Write: Save to Internal Server Sync Engine AND Supabase Cloud simultaneously
+      // Await both (with 10s safety cap on Supabase) so Device A's data is immediately visible to Device B across all Cloudflare POPs/devices
+      const isSeedPayload = Boolean(
+        Array.isArray(records)
+          ? records.every((r: any) => String(r?.updated_at || '').startsWith('2020-'))
+          : String(records?.updated_at || '').startsWith('2020-')
+      );
 
-      if (internalRes.ok) {
-        // 2. Secondary Background Mirror: Mirror full valid records (including rows/shows) to Supabase Cloud
-        upsertToRawSupabaseSafely().catch(() => {});
-        return { data: internalRes.data, error: null };
+      if (isSeedPayload) {
+        const internalRes = await callInternalSyncUpsert({
+          table,
+          records,
+          clientId: DEVICE_CLIENT_ID,
+          returnFull: table === 'cinema_occupancy',
+        });
+        if (internalRes.ok) {
+          return { data: internalRes.data, error: null };
+        }
+        return await upsertToRawSupabaseSafely();
       }
 
-      // 3. Direct Supabase Fallback
-      return await upsertToRawSupabaseSafely();
+      const supaWithTimeout = Promise.race([
+        upsertToRawSupabaseSafely(),
+        new Promise<{ data: null; error: null }>((resolve) =>
+          setTimeout(() => resolve({ data: null, error: null }), 10000)
+        ),
+      ]);
+
+      const [internalSettled, supaSettled] = await Promise.allSettled([
+        callInternalSyncUpsert({
+          table,
+          records,
+          clientId: DEVICE_CLIENT_ID,
+          returnFull: table === 'cinema_occupancy',
+        }),
+        supaWithTimeout,
+      ]);
+
+      const internalRes =
+        internalSettled.status === 'fulfilled' ? internalSettled.value : { ok: false, data: null };
+      const supaRes =
+        supaSettled.status === 'fulfilled' ? supaSettled.value : { data: null, error: null };
+
+      if (internalRes.ok) {
+        return { data: internalRes.data, error: null };
+      }
+      return supaRes;
     },
   };
 
@@ -2985,6 +3019,20 @@ async function executeAdditionalModulesUpsert(
   }
 }
 
+export async function syncDailyQuotesNow(): Promise<boolean> {
+  return executeAdditionalModulesUpsert(['daily_quotes']);
+}
+
+export async function pullDailyQuotesNow(): Promise<boolean> {
+  const prevBypass = forceBypassSupaMetaSkip;
+  forceBypassSupaMetaSkip = true;
+  try {
+    return await mergeRemoteAdditionalModulesToLocal(['__SYSTEM_SYNC_DAILY_QUOTES__']);
+  } finally {
+    forceBypassSupaMetaSkip = prevBypass;
+  }
+}
+
 export async function mergeRemoteAdditionalModulesToLocal(
   specificIds?: string[]
 ): Promise<boolean> {
@@ -3250,6 +3298,10 @@ export async function pullAllRemoteToLocal(forceFull = false): Promise<void> {
 
   isPullInFlight = true;
   lastDeltaPullMs = nowMs;
+  const prevBypass = forceBypassSupaMetaSkip;
+  if (forceFull) {
+    forceBypassSupaMetaSkip = true;
+  }
 
   try {
     // Hanya 1 query super ringan (~400 Bytes) untuk mengecek id & updated_at tanpa mengunduh JSONB 'shows'
@@ -3282,32 +3334,34 @@ export async function pullAllRemoteToLocal(forceFull = false): Promise<void> {
       }
     }
 
-    // Jika pada saat buka pertama kali ada modul yang belum pernah ada di localStorage sama sekali, pastikan di-fetch
-    const isInitialPullNow = !hasCompletedInitialPull;
+    // Jika pada saat buka pertama kali (atau forceFull) ada modul penting di server, pastikan ikut ter-pull
+    const isInitialPullNow = !hasCompletedInitialPull || forceFull;
     if (isInitialPullNow) {
       const serverIds = new Set(metaRows.map((r: any) => String(r?.id || '')));
-      if (serverIds.has('__SYSTEM_SYNC_DAILY_SALES__')) {
-        changedIds.add('__SYSTEM_SYNC_DAILY_SALES__');
-      }
-      if (serverIds.has('__SYSTEM_SYNC_OUTLETS__')) {
-        changedIds.add('__SYSTEM_SYNC_OUTLETS__');
-      }
+      [
+        '__SYSTEM_SYNC_DAILY_SALES__',
+        '__SYSTEM_SYNC_OUTLETS__',
+        '__SYSTEM_SYNC_SDM_PERFORMANCE__',
+        '__SYSTEM_SYNC_SDM_PRODUCTS__',
+        '__SYSTEM_SYNC_BAKING_SALES__',
+        '__SYSTEM_SYNC_EMPLOYEES__',
+        '__SYSTEM_SYNC_DAILY_QUOTES__',
+        '__SYSTEM_SYNC_MAINTENANCE__',
+        '__SYSTEM_SYNC_LOST_FOUND__',
+        '__SYSTEM_SYNC_BOPO__',
+        '__SYSTEM_SYNC_ADMINISTRATION__',
+        '__SYSTEM_SYNC_WAREHOUSE__',
+        '__SYSTEM_SYNC_USERS__',
+        '__SYSTEM_SYNC_FILM_GENRES__',
+      ].forEach((syncId) => {
+        if (serverIds.has(syncId)) {
+          changedIds.add(syncId);
+        }
+      });
       if (serverIds.has('__SYSTEM_SYNC_INSPECTIONS__') || serverIds.has('__SYSTEM_SYNC_INSPECTIONS_DELTA__')) {
         changedIds.add('__SYSTEM_SYNC_INSPECTIONS__');
       }
       changedIds.add('__SYSTEM_SYNC_OCCUPANCY__');
-      if (serverIds.has('__SYSTEM_SYNC_SDM_PERFORMANCE__')) {
-        changedIds.add('__SYSTEM_SYNC_SDM_PERFORMANCE__');
-      }
-      if (serverIds.has('__SYSTEM_SYNC_SDM_PRODUCTS__')) {
-        changedIds.add('__SYSTEM_SYNC_SDM_PRODUCTS__');
-      }
-      if (serverIds.has('__SYSTEM_SYNC_BAKING_SALES__')) {
-        changedIds.add('__SYSTEM_SYNC_BAKING_SALES__');
-      }
-      if (serverIds.has('__SYSTEM_SYNC_EMPLOYEES__')) {
-        changedIds.add('__SYSTEM_SYNC_EMPLOYEES__');
-      }
     }
 
     if (changedIds.size === 0) {
@@ -3387,6 +3441,7 @@ export async function pullAllRemoteToLocal(forceFull = false): Promise<void> {
       }
     }
   } finally {
+    forceBypassSupaMetaSkip = prevBypass;
     isPullInFlight = false;
   }
 }
@@ -3533,6 +3588,26 @@ async function seedInternalServerFromLocalDevice(): Promise<void> {
         date: '2026-01-01',
         shows: maintRecords,
         updated_at: getSeedTs('__SYSTEM_SYNC_MAINTENANCE__'),
+      });
+    }
+    const dailyQuotes = StorageService.getDailyQuotes();
+    if (dailyQuotes.length > 0) {
+      batchRecords.push({
+        id: '__SYSTEM_SYNC_DAILY_QUOTES__',
+        outlet_id: '__SYSTEM_SYNC__',
+        date: '2026-01-01',
+        shows: dailyQuotes,
+        updated_at: getSeedTs('__SYSTEM_SYNC_DAILY_QUOTES__'),
+      });
+    }
+    const lostFound = StorageService.getLostAndFoundRecords();
+    if (lostFound.length > 0) {
+      batchRecords.push({
+        id: '__SYSTEM_SYNC_LOST_FOUND__',
+        outlet_id: '__SYSTEM_SYNC__',
+        date: '2026-01-01',
+        shows: lostFound,
+        updated_at: getSeedTs('__SYSTEM_SYNC_LOST_FOUND__'),
       });
     }
 
