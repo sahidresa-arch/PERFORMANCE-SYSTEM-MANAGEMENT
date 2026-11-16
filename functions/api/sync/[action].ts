@@ -173,9 +173,14 @@ function smartMergeSalesRow(existingRow: any, incomingRow: any): any {
     }
     let finalShows = Array.from(mergedMap.values());
     if (rowId.endsWith('_DELTA__')) {
-      finalShows.sort((a: any, b: any) => String(a?.date || '').localeCompare(String(b?.date || '')));
-      if (finalShows.length > 40) {
-        finalShows = finalShows.slice(-40);
+      finalShows.sort((a: any, b: any) => {
+        const dA = String(a?.date || '');
+        const dB = String(b?.date || '');
+        if (dA !== dB) return dA < dB ? -1 : 1;
+        return String(a?.updatedAt || '').localeCompare(String(b?.updatedAt || ''));
+      });
+      if (finalShows.length > 90) {
+        finalShows = finalShows.slice(-90);
       }
     }
     return {

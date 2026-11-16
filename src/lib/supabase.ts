@@ -169,9 +169,25 @@ export function sanitizeSupabaseBaseUrl(rawUrl: string): string {
 const DEVICE_CLIENT_ID = `dev_${Math.random().toString(36).slice(2, 10)}_${Date.now().toString(36)}`;
 let hybridClientInstance: SupabaseClient | null = null;
 let hybridClientKey = '';
-let supabaseQuotaBackoffUntil = 0;
+let quotaBackoffUntil = 0;
+let supabaseBillingBlockedUntil = 0;
 let lastSupabaseMetaPollAt = 0;
 let forceBypassSupaMetaSkip = false;
+
+function isQuotaOrBillingError(err: any): boolean {
+  if (!err) return false;
+  const status = Number(err.status || err.code || 0);
+  const msg = String(err.message || err.details || err.hint || '').toLowerCase();
+  return (
+    status === 402 ||
+    msg.includes('exceed_egress_quota') ||
+    msg.includes('egress') ||
+    msg.includes('quota') ||
+    msg.includes('spend cap') ||
+    msg.includes('payment required') ||
+    msg.includes('restricted')
+  );
+}
 
 const LIVE_WORKER_ORIGINS = [
   'https://performance-system-management.bdv3.workers.dev',
@@ -231,10 +247,10 @@ function mergeSyncRowObjects(rowA: any, rowB: any): any {
         if (item.outletId && item.date && Array.isArray(item.shows) && !item.nik) {
           return `${item.outletId}_${item.date}`;
         }
-        if (item.id) return String(item.id);
         if (item.outletId && item.year !== undefined && item.month !== undefined) {
           return `${item.outletId}_${item.year}_${item.month}`;
         }
+        if (item.id) return String(item.id);
         if (item.outletId && item.date && item.nik) {
           return `${item.outletId}_${item.date}_${item.nik}`;
         }
@@ -346,33 +362,38 @@ async function callInternalSyncQuery(payload: any): Promise<any> {
 
 async function callInternalSyncUpsert(payload: any): Promise<{ ok: boolean; data: any }> {
   const endpoints = getWorkerSyncEndpoints('upsert', Boolean(payload?.seedMode));
-  let primaryOk = false;
-  let primaryData: any = null;
 
-  for (let i = 0; i < endpoints.length; i++) {
-    const url = endpoints[i];
-    if (i === 0 || !primaryOk) {
-      try {
-        const resp = await fetch(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-        });
-        if (resp.ok && (resp.headers.get('content-type') || '').includes('application/json')) {
-          const json = await resp.json();
-          primaryData = json.data;
-          primaryOk = true;
-        }
-      } catch {
-        // try sibling worker endpoint
-      }
-    } else {
-      // Mirror in background to sibling Worker (-v2 <-> main) so both links stay 100% identical
-      fetch(url, {
+  const postOne = async (url: string): Promise<{ ok: boolean; data: any }> => {
+    try {
+      const fetchPromise = fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
-      }).catch(() => {});
+      });
+      const timeoutPromise = new Promise<null>((resolve) =>
+        setTimeout(() => resolve(null), 8000)
+      );
+      const resp = await Promise.race([fetchPromise, timeoutPromise]);
+      if (resp && resp.ok && (resp.headers.get('content-type') || '').includes('application/json')) {
+        const json = await resp.json();
+        return { ok: true, data: json.data };
+      }
+    } catch {
+      // try remaining endpoints
+    }
+    return { ok: false, data: null };
+  };
+
+  const settled = await Promise.allSettled(endpoints.map(postOne));
+  let primaryOk = false;
+  let primaryData: any = null;
+
+  for (const res of settled) {
+    if (res.status === 'fulfilled' && res.value.ok) {
+      if (!primaryOk) {
+        primaryOk = true;
+        primaryData = res.value.data;
+      }
     }
   }
 
@@ -415,8 +436,12 @@ function createInternalTableQueryBuilder(table: string, rawSupabase: SupabaseCli
 
     const fetchSupa = async () => {
       if (!rawSupabase) return null;
-      // Only honor circuit-breaker backoff if Internal Server has warm data; on Static Workers (where internalRes is null), never lock out Supabase
-      if (!forceBypassSupaMetaSkip && hasWarmInternalData && Date.now() < supabaseQuotaBackoffUntil) {
+      // Stop hammering Supabase Cloud for 5 minutes when billing/egress quota (HTTP 402) is active
+      if (Date.now() < supabaseBillingBlockedUntil) {
+        return null;
+      }
+      // Only honor general circuit-breaker backoff if Internal Server has warm data; on Static Workers (where internalRes is null), never lock out Supabase
+      if (!forceBypassSupaMetaSkip && hasWarmInternalData && Date.now() < quotaBackoffUntil) {
         return null;
       }
       try {
@@ -445,12 +470,16 @@ function createInternalTableQueryBuilder(table: string, rawSupabase: SupabaseCli
         if (supaRes && !supaRes.error) {
           return supaRes;
         }
-        if ((!supaRes || supaRes.error) && hasWarmInternalData) {
-          supabaseQuotaBackoffUntil = Date.now() + 45000;
+        if (isQuotaOrBillingError(supaRes?.error)) {
+          supabaseBillingBlockedUntil = Date.now() + 5 * 60 * 1000;
+        } else if ((!supaRes || supaRes.error) && hasWarmInternalData) {
+          quotaBackoffUntil = Date.now() + 45000;
         }
-      } catch {
-        if (hasWarmInternalData) {
-          supabaseQuotaBackoffUntil = Date.now() + 45000;
+      } catch (err) {
+        if (isQuotaOrBillingError(err)) {
+          supabaseBillingBlockedUntil = Date.now() + 5 * 60 * 1000;
+        } else if (hasWarmInternalData) {
+          quotaBackoffUntil = Date.now() + 45000;
         }
       }
       return null;
@@ -582,7 +611,9 @@ function createInternalTableQueryBuilder(table: string, rawSupabase: SupabaseCli
     },
     async upsert(records: any, options?: any) {
       const upsertToRawSupabaseSafely = async () => {
-        if (!rawSupabase) return { data: null, error: null };
+        if (!rawSupabase || Date.now() < supabaseBillingBlockedUntil) {
+          return { data: null, error: null };
+        }
         try {
           const incomingList = (Array.isArray(records) ? records : [records]).filter(Boolean);
           if (incomingList.length === 0) return { data: null, error: null };
@@ -599,7 +630,11 @@ function createInternalTableQueryBuilder(table: string, rawSupabase: SupabaseCli
               }));
             if (validOccList.length === 0) return { data: null, error: null };
             const payload = Array.isArray(records) ? validOccList : validOccList[0];
-            return await rawSupabase.from(table).upsert(payload, options);
+            const res = await rawSupabase.from(table).upsert(payload, options);
+            if (isQuotaOrBillingError(res?.error)) {
+              supabaseBillingBlockedUntil = Date.now() + 5 * 60 * 1000;
+            }
+            return res;
           }
 
           if (table === 'cinema_sales') {
@@ -628,6 +663,10 @@ function createInternalTableQueryBuilder(table: string, rawSupabase: SupabaseCli
                 .in('id', syncIds);
 
               if (fetchErr) {
+                if (isQuotaOrBillingError(fetchErr)) {
+                  supabaseBillingBlockedUntil = Date.now() + 5 * 60 * 1000;
+                  return { data: null, error: fetchErr };
+                }
                 listToSave = listToSave.filter(
                   (r) =>
                     r?.id !== '__SYSTEM_SYNC_INSPECTIONS__' &&
@@ -655,11 +694,22 @@ function createInternalTableQueryBuilder(table: string, rawSupabase: SupabaseCli
             }
 
             const payload = Array.isArray(records) ? listToSave : listToSave[0];
-            return await rawSupabase.from(table).upsert(payload, options);
+            const res = await rawSupabase.from(table).upsert(payload, options);
+            if (isQuotaOrBillingError(res?.error)) {
+              supabaseBillingBlockedUntil = Date.now() + 5 * 60 * 1000;
+            }
+            return res;
           }
 
-          return await rawSupabase.from(table).upsert(records, options);
-        } catch {
+          const res = await rawSupabase.from(table).upsert(records, options);
+          if (isQuotaOrBillingError(res?.error)) {
+            supabaseBillingBlockedUntil = Date.now() + 5 * 60 * 1000;
+          }
+          return res;
+        } catch (err) {
+          if (isQuotaOrBillingError(err)) {
+            supabaseBillingBlockedUntil = Date.now() + 5 * 60 * 1000;
+          }
           return { data: null, error: null };
         }
       };
@@ -881,8 +931,69 @@ const recentInspectionsDeltaMap = new Map<string, ToiletInspectionRecord>();
 const occupancyWriteTimers: Record<string, any> = {};
 let salesArchiveTimer: NodeJS.Timeout | null = null;
 
+const pendingSalesArchiveMap = new Map<string, DailySalesRecord>();
+const lastAutoPushedSalesMap = new Map<string, number>();
+
+async function flushPendingSalesArchive(): Promise<void> {
+  if (salesArchiveTimer) {
+    clearTimeout(salesArchiveTimer);
+    salesArchiveTimer = null;
+  }
+  const cl = getSupabase();
+  if (!cl || pendingSalesArchiveMap.size === 0) return;
+
+  try {
+    const queued = Array.from(pendingSalesArchiveMap.values());
+    pendingSalesArchiveMap.clear();
+
+    const overrideMap = new Map<string, DailySalesRecord>();
+    for (const loc of StorageService.getUserSalesOverrides()) {
+      if (loc && loc.outletId && loc.date && !StorageService.isStaticUneditedSalesRecord(loc)) {
+        overrideMap.set(`${loc.outletId}_${loc.date}`, {
+          ...loc,
+          id: `sales-${loc.outletId}-${loc.date}`,
+          isMigrated: false,
+        });
+      }
+    }
+    for (const item of queued) {
+      if (item && item.outletId && item.date) {
+        overrideMap.set(`${item.outletId}_${item.date}`, item);
+      }
+    }
+
+    const finalOverrides = Array.from(overrideMap.values());
+    if (finalOverrides.length === 0) return;
+
+    const archIso = new Date().toISOString();
+    recordSyncTimestamp('__SYSTEM_SYNC_DAILY_SALES__', archIso, true);
+    await cl.from('cinema_sales').upsert(
+      [
+        {
+          id: '__SYSTEM_SYNC_DAILY_SALES__',
+          outlet_id: '__SYSTEM_SYNC__',
+          date: '2026-01-01',
+          shows: finalOverrides as any,
+          updated_at: archIso,
+        },
+      ],
+      { onConflict: 'id' }
+    );
+  } catch (err) {
+    console.warn('Sales archive sync error:', err);
+  }
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('pagehide', () => {
+    if (pendingSalesArchiveMap.size > 0) {
+      flushPendingSalesArchive().catch(() => {});
+    }
+  });
+}
+
 /**
- * Sinkronisasi Data Sales Harian ke Supabase (Hemat Egress: Master Sync + 2 KB Delta Row untuk Live Broadcast)
+ * Sinkronisasi Data Sales Harian ke Supabase & Edge Workers (Master Sync + 85-Item Delta Buffer untuk 23 Outlet × 3 Hari)
  */
 export async function syncSalesToSupabase(sales: DailySalesRecord[]): Promise<boolean> {
   const client = getSupabase();
@@ -890,6 +1001,7 @@ export async function syncSalesToSupabase(sales: DailySalesRecord[]): Promise<bo
 
   try {
     const nowIso = new Date().toISOString();
+    const threeDaysAgo = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
     const normalSales = sales.filter(
       (s) =>
         s &&
@@ -901,7 +1013,12 @@ export async function syncSalesToSupabase(sales: DailySalesRecord[]): Promise<bo
 
     if (normalSales.length === 0) return true;
 
-    const overrideMap = new Map<string, DailySalesRecord>();
+    // Bersihkan record lama (> 3 hari) agar tidak mendesak sales kemarin & hari ini (23 outlet × 2 hari = 46 item)
+    for (const [k, v] of recentSalesDeltaMap.entries()) {
+      if (v && v.date && v.date < threeDaysAgo) {
+        recentSalesDeltaMap.delete(k);
+      }
+    }
 
     // Jika perangkat ini belum pernah sinkronisasi awal, ambil dulu dari server agar tidak menimpa data device lain
     if (!lastSeenSyncTimestamps['__SYSTEM_SYNC_DAILY_SALES__']) {
@@ -913,43 +1030,29 @@ export async function syncSalesToSupabase(sales: DailySalesRecord[]): Promise<bo
 
       const remoteOverrides: DailySalesRecord[] =
         syncRow && Array.isArray(syncRow.shows) ? syncRow.shows : [];
-      remoteOverrides.forEach((r) => {
-        if (r && r.outletId && r.date && !StorageService.isStaticUneditedSalesRecord(r)) {
-          overrideMap.set(`${r.outletId}_${r.date}`, {
-            ...r,
-            id: `sales-${r.outletId}-${r.date}`,
-            isMigrated: false,
-          });
-        }
-      });
+      if (remoteOverrides.length > 0) {
+        StorageService.saveMergedSalesOverrides(remoteOverrides);
+      }
     }
 
-    // Gabungkan dengan local overrides yang sudah ada di memori lokal
+    // Seed Delta Buffer dengan sales lokal 3 hari terakhir agar seluruh 23 outlet kemarin & hari ini tetap ikut terjaga
     const localOverrides = StorageService.getUserSalesOverrides();
-    localOverrides.forEach((loc) => {
-      if (!loc || !loc.outletId || !loc.date) return;
+    for (const loc of localOverrides) {
+      if (!loc || !loc.outletId || !loc.date || loc.date < threeDaysAgo) continue;
       const key = `${loc.outletId}_${loc.date}`;
-      const existing = overrideMap.get(key);
-      if (!existing) {
-        overrideMap.set(key, {
+      const existing = recentSalesDeltaMap.get(key);
+      const exTs = existing?.updatedAt ? new Date(existing.updatedAt).getTime() : 0;
+      const locTs = loc.updatedAt ? new Date(loc.updatedAt).getTime() : 0;
+      if (!existing || locTs >= exTs) {
+        recentSalesDeltaMap.set(key, {
           ...loc,
           id: `sales-${loc.outletId}-${loc.date}`,
           isMigrated: false,
         });
-      } else {
-        const remTime = existing.updatedAt ? new Date(existing.updatedAt).getTime() : 0;
-        const locTime = loc.updatedAt ? new Date(loc.updatedAt).getTime() : 0;
-        if (locTime >= remTime) {
-          overrideMap.set(key, {
-            ...loc,
-            id: `sales-${loc.outletId}-${loc.date}`,
-            isMigrated: false,
-          });
-        }
       }
-    });
+    }
 
-    // Terapkan data sales yang baru saja disimpan sebagai prioritas tertinggi & masukkan ke Delta Buffer (~2 KB)
+    // Terapkan data sales yang baru saja disimpan sebagai prioritas tertinggi & masukkan ke Delta Buffer & Pending Master
     normalSales.forEach((s) => {
       const key = `${s.outletId}_${s.date}`;
       const normalizedItem: DailySalesRecord = {
@@ -958,61 +1061,53 @@ export async function syncSalesToSupabase(sales: DailySalesRecord[]): Promise<bo
         isMigrated: false,
         updatedAt: s.updatedAt || nowIso,
       };
-      overrideMap.set(key, normalizedItem);
       recentSalesDeltaMap.delete(key);
       recentSalesDeltaMap.set(key, normalizedItem);
+      pendingSalesArchiveMap.set(key, normalizedItem);
     });
 
-    // Batasi Delta Buffer maksimal 15 record terbaru (~2-5 KB)
-    while (recentSalesDeltaMap.size > 15) {
-      const oldestKey = recentSalesDeltaMap.keys().next().value;
-      if (oldestKey) recentSalesDeltaMap.delete(oldestKey);
-      else break;
+    // Sort kronologis & batasi Delta Buffer maksimal 85 record terbaru (cukup untuk 23 outlet × 3+ hari)
+    const sortedDelta = Array.from(recentSalesDeltaMap.values())
+      .sort((a, b) => {
+        const dA = String(a?.date || '');
+        const dB = String(b?.date || '');
+        if (dA !== dB) return dA < dB ? -1 : 1;
+        return String(a?.updatedAt || '').localeCompare(String(b?.updatedAt || ''));
+      })
+      .slice(-85);
+
+    recentSalesDeltaMap.clear();
+    for (const item of sortedDelta) {
+      recentSalesDeltaMap.set(`${item.outletId}_${item.date}`, item);
     }
 
-    const finalOverrides = Array.from(overrideMap.values());
-    const deltaSalesList = Array.from(recentSalesDeltaMap.values());
-
-    // 1. Kirim Delta Sales (~1 KB) secara instan ke Supabase agar realtime super responsif
+    // 1. Kirim Delta Sales instan (Server & Workers otomatis cross-merge _DELTA__ ke Master __SYSTEM_SYNC_DAILY_SALES__)
     recordSyncTimestamp('__SYSTEM_SYNC_DAILY_SALES_DELTA__', nowIso, true);
+    recordSyncTimestamp('__SYSTEM_SYNC_DAILY_SALES__', nowIso, true);
     const { error: deltaErr } = await client.from('cinema_sales').upsert(
       [
         {
           id: '__SYSTEM_SYNC_DAILY_SALES_DELTA__',
           outlet_id: '__SYSTEM_SYNC__',
           date: '2026-01-01',
-          shows: deltaSalesList as any,
+          shows: sortedDelta as any,
           updated_at: nowIso,
         },
       ],
       { onConflict: 'id' }
     );
 
-    // 2. Debounce master sales archive (2.5 detik) agar langsung tersimpan di master tanpa membebani setiap ketukan
+    if (deltaErr) {
+      setTimeout(() => {
+        flushPendingSalesArchive().catch(() => {});
+      }, 2500);
+    }
+
+    // 2. Debounce master sales archive (600ms) memakai state terbaru dari StorageService
     if (salesArchiveTimer) clearTimeout(salesArchiveTimer);
-    salesArchiveTimer = setTimeout(async () => {
-      salesArchiveTimer = null;
-      try {
-        const cl = getSupabase();
-        if (!cl) return;
-        const archIso = new Date().toISOString();
-        recordSyncTimestamp('__SYSTEM_SYNC_DAILY_SALES__', archIso, true);
-        await cl.from('cinema_sales').upsert(
-          [
-            {
-              id: '__SYSTEM_SYNC_DAILY_SALES__',
-              outlet_id: '__SYSTEM_SYNC__',
-              date: '2026-01-01',
-              shows: finalOverrides as any,
-              updated_at: archIso,
-            },
-          ],
-          { onConflict: 'id' }
-        );
-      } catch (err) {
-        console.warn('Sales archive debounced sync error:', err);
-      }
-    }, 2500);
+    salesArchiveTimer = setTimeout(() => {
+      flushPendingSalesArchive().catch(() => {});
+    }, 600);
 
     return !deltaErr;
   } catch (e) {
@@ -1243,14 +1338,21 @@ export async function fetchOccupancyFromSupabase(
 }
 
 /**
- * Merges remote sales records from Supabase into local storage (Strict Read-Only: Supports 2 KB Delta Mode)
+ * Merges remote sales records into quota-safe local storage (Timestamp-Safe + Auto-Heal for unsynced local records)
  */
 export async function mergeRemoteSalesToLocal(deltaOnly = false): Promise<boolean> {
   const remoteSales = await fetchSalesFromSupabase(deltaOnly);
-  if (!remoteSales || remoteSales.length === 0) return false;
+  if (!remoteSales) return false;
 
   const currentLocal = StorageService.getDailySales();
   const localOverrides = StorageService.getUserSalesOverrides();
+  const localByKey = new Map<string, DailySalesRecord>();
+  currentLocal.forEach((loc) => {
+    if (loc && loc.outletId && loc.date) {
+      localByKey.set(`${loc.outletId}_${loc.date}`, loc);
+    }
+  });
+
   const overrideMap = new Map<string, DailySalesRecord>();
   localOverrides.forEach((ov) => {
     if (ov && ov.outletId && ov.date) {
@@ -1258,17 +1360,22 @@ export async function mergeRemoteSalesToLocal(deltaOnly = false): Promise<boolea
     }
   });
 
+  const remoteMap = new Map<string, DailySalesRecord>();
+  remoteSales.forEach((r) => {
+    if (r && r.outletId && r.date) {
+      remoteMap.set(`${r.outletId}_${r.date}`, r);
+    }
+  });
+
   let updated = false;
 
-  remoteSales.forEach((remote) => {
-    const key = `${remote.outletId}_${remote.date}`;
-
+  remoteMap.forEach((remote, key) => {
     try {
       const localSaveTsRaw = localStorage.getItem(`cinema_xxi_sales_local_save_ts_${key}`);
       if (localSaveTsRaw) {
         const localSaveTs = Number(localSaveTsRaw);
         const remoteTs = remote.updatedAt ? new Date(remote.updatedAt).getTime() : 0;
-        if (Date.now() - localSaveTs < 10000 && remoteTs < localSaveTs) {
+        if (Date.now() - localSaveTs < 15000 && remoteTs < localSaveTs) {
           return;
         }
       }
@@ -1276,27 +1383,44 @@ export async function mergeRemoteSalesToLocal(deltaOnly = false): Promise<boolea
       // ignore
     }
 
-    const idx = currentLocal.findIndex(
-      (s) => s.outletId === remote.outletId && s.date === remote.date
-    );
     const normalizedRemote: DailySalesRecord = {
       ...remote,
       id: `sales-${remote.outletId}-${remote.date}`,
       isMigrated: false,
     };
 
-    if (idx >= 0) {
-      const localStr = JSON.stringify(currentLocal[idx].shows || []);
+    const existingLocal = localByKey.get(key);
+    const existingOverride = overrideMap.get(key);
+
+    if (existingLocal) {
+      const localTs = existingOverride?.updatedAt
+        ? new Date(existingOverride.updatedAt).getTime()
+        : existingLocal.updatedAt
+        ? new Date(existingLocal.updatedAt).getTime()
+        : 0;
+      const remoteTs = remote.updatedAt ? new Date(remote.updatedAt).getTime() : 0;
+      const localStr = JSON.stringify(existingLocal.shows || []);
       const remoteStr = JSON.stringify(remote.shows || []);
-      if (localStr !== remoteStr) {
-        currentLocal[idx] = normalizedRemote;
+
+      const isStaticReplaced =
+        Boolean(existingLocal.isMigrated) &&
+        !existingOverride &&
+        !StorageService.isStaticUneditedSalesRecord(normalizedRemote);
+
+      const shouldAccept =
+        localStr !== remoteStr &&
+        (isStaticReplaced ||
+          remoteTs > localTs ||
+          (remoteTs === 0 && localTs === 0) ||
+          (remoteTs === localTs && !existingOverride));
+
+      if (shouldAccept) {
         if (!StorageService.isStaticUneditedSalesRecord(normalizedRemote)) {
           overrideMap.set(key, normalizedRemote);
         }
         updated = true;
       }
     } else {
-      currentLocal.push(normalizedRemote);
       if (!StorageService.isStaticUneditedSalesRecord(normalizedRemote)) {
         overrideMap.set(key, normalizedRemote);
       }
@@ -1304,18 +1428,70 @@ export async function mergeRemoteSalesToLocal(deltaOnly = false): Promise<boolea
     }
   });
 
+  const finalOverrides = Array.from(overrideMap.values());
   if (updated) {
-    try {
-      localStorage.setItem(
-        'cinema_xxi_user_sales_overrides',
-        JSON.stringify(Array.from(overrideMap.values()))
-      );
-      const compactSales = currentLocal.filter((s) => !StorageService.isStaticUneditedSalesRecord(s));
-      localStorage.setItem('cinema_xxi_daily_sales', JSON.stringify(compactSales));
-    } catch {
-      // ignore
-    }
+    StorageService.saveMergedSalesOverrides(finalOverrides);
     StorageService.broadcastChange('sales');
+  }
+
+  // Continuous Auto-Heal (mirip Inspections): dorong ulang sales lokal 3 hari terakhir yang belum ada / lebih baru di Server
+  if (finalOverrides.length > 0) {
+    const nowMs = Date.now();
+    const threeDaysAgo = new Date(nowMs - 3 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const yesterdayStr = new Date(nowMs - 1 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const minDateForMode = deltaOnly ? yesterdayStr : threeDaysAgo;
+
+    const unsyncedRecent = finalOverrides
+      .filter((loc) => {
+        if (!loc || !loc.outletId || !loc.date || loc.date < minDateForMode) return false;
+        if (StorageService.isStaticUneditedSalesRecord(loc)) return false;
+        const key = `${loc.outletId}_${loc.date}`;
+        const lastAttempt = lastAutoPushedSalesMap.get(key) || 0;
+        if (nowMs - lastAttempt < 15000) return false;
+
+        const rem = remoteMap.get(key);
+        if (!rem) return true;
+        const locTs = loc.updatedAt ? new Date(loc.updatedAt).getTime() : 0;
+        const remTs = rem.updatedAt ? new Date(rem.updatedAt).getTime() : 0;
+        return locTs > remTs;
+      })
+      .sort((a, b) => String(a.date || '').localeCompare(String(b.date || '')));
+
+    if (unsyncedRecent.length > 0) {
+      const client = getSupabase();
+      if (client) {
+        const nowIso = new Date().toISOString();
+        const batchToPush = unsyncedRecent.slice(-85).map((item) => ({
+          ...item,
+          id: `sales-${item.outletId}-${item.date}`,
+          isMigrated: false,
+          updatedAt: item.updatedAt || nowIso,
+        }));
+        for (const item of batchToPush) {
+          lastAutoPushedSalesMap.set(`${item.outletId}_${item.date}`, nowMs);
+        }
+
+        recordSyncTimestamp('__SYSTEM_SYNC_DAILY_SALES_DELTA__', nowIso, true);
+        recordSyncTimestamp('__SYSTEM_SYNC_DAILY_SALES__', nowIso, true);
+
+        Promise.resolve(
+          client
+            .from('cinema_sales')
+            .upsert(
+              [
+                {
+                  id: '__SYSTEM_SYNC_DAILY_SALES_DELTA__',
+                  outlet_id: '__SYSTEM_SYNC__',
+                  date: '2026-01-01',
+                  shows: batchToPush as any,
+                  updated_at: nowIso,
+                },
+              ],
+              { onConflict: 'id' }
+            )
+        ).catch(() => {});
+      }
+    }
   }
 
   return updated;
@@ -3033,6 +3209,36 @@ export async function pullDailyQuotesNow(): Promise<boolean> {
   }
 }
 
+let inFlightSalesPull: Promise<boolean> | null = null;
+let lastSalesPullNowMs = 0;
+
+export async function pullSalesNow(includeBaking = true): Promise<boolean> {
+  if (inFlightSalesPull) return inFlightSalesPull;
+  const now = Date.now();
+  if (now - lastSalesPullNowMs < 1500) {
+    return false;
+  }
+  lastSalesPullNowMs = now;
+
+  inFlightSalesPull = (async () => {
+    const prevBypass = forceBypassSupaMetaSkip;
+    forceBypassSupaMetaSkip = true;
+    try {
+      const tasks: Promise<boolean>[] = [mergeRemoteSalesToLocal(false)];
+      if (includeBaking) {
+        tasks.push(mergeRemoteBakingSalesToLocal());
+      }
+      const results = await Promise.allSettled(tasks);
+      return results.some((r) => r.status === 'fulfilled' && r.value);
+    } finally {
+      forceBypassSupaMetaSkip = prevBypass;
+      inFlightSalesPull = null;
+    }
+  })();
+
+  return inFlightSalesPull;
+}
+
 export async function mergeRemoteAdditionalModulesToLocal(
   specificIds?: string[]
 ): Promise<boolean> {
@@ -3478,6 +3684,14 @@ async function seedInternalServerFromLocalDevice(): Promise<void> {
     // 2. User Sales Overrides
     const salesOverrides = StorageService.getUserSalesOverrides();
     if (salesOverrides.length > 0) {
+      const threeDaysAgoSales = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000)
+        .toISOString()
+        .slice(0, 10);
+      const recentSalesDelta = salesOverrides
+        .filter((s) => s && (!s.date || s.date >= threeDaysAgoSales))
+        .sort((a, b) => String(a.date || '').localeCompare(String(b.date || '')))
+        .slice(-85);
+
       batchRecords.push({
         id: '__SYSTEM_SYNC_DAILY_SALES__',
         outlet_id: '__SYSTEM_SYNC__',
@@ -3485,13 +3699,15 @@ async function seedInternalServerFromLocalDevice(): Promise<void> {
         shows: salesOverrides,
         updated_at: getSeedTs('__SYSTEM_SYNC_DAILY_SALES__'),
       });
-      batchRecords.push({
-        id: '__SYSTEM_SYNC_DAILY_SALES_DELTA__',
-        outlet_id: '__SYSTEM_SYNC__',
-        date: '2026-01-01',
-        shows: salesOverrides.slice(-15),
-        updated_at: getSeedTs('__SYSTEM_SYNC_DAILY_SALES_DELTA__'),
-      });
+      if (recentSalesDelta.length > 0) {
+        batchRecords.push({
+          id: '__SYSTEM_SYNC_DAILY_SALES_DELTA__',
+          outlet_id: '__SYSTEM_SYNC__',
+          date: '2026-01-01',
+          shows: recentSalesDelta,
+          updated_at: getSeedTs('__SYSTEM_SYNC_DAILY_SALES_DELTA__'),
+        });
+      }
     }
 
     // 3. Baking Sales

@@ -42,6 +42,12 @@ export const ExecutiveDashboard: React.FC<ExecutiveDashboardProps> = ({
     };
   }, []);
 
+  React.useEffect(() => {
+    import('../../lib/supabase')
+      .then((m) => m.pullSalesNow?.(false))
+      .catch(() => {});
+  }, [selectedDate]);
+
   const areas = StorageService.getAreas();
   const outlets = StorageService.getOutlets();
   const dailySales = StorageService.getDailySales();

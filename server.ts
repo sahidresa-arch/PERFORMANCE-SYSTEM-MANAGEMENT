@@ -131,6 +131,9 @@ function sortAndBoundInspectionShows(shows: any[], isDelta: boolean): any[] {
   if (isDelta && list.length > 240) {
     return list.slice(-240);
   }
+  if (!isDelta && list.length > 3000) {
+    return list.slice(-3000);
+  }
   return list;
 }
 
@@ -217,8 +220,16 @@ function smartMergeSalesRow(existingRow: any, incomingRow: any): any {
       }
     }
     let finalShows = Array.from(mergedMap.values());
-    if (rowId.endsWith('_DELTA__') && finalShows.length > 45) {
-      finalShows = finalShows.slice(-45);
+    if (rowId.endsWith('_DELTA__')) {
+      finalShows.sort((a, b) => {
+        const dA = String(a?.date || '');
+        const dB = String(b?.date || '');
+        if (dA !== dB) return dA < dB ? -1 : 1;
+        return String(a?.updatedAt || '').localeCompare(String(b?.updatedAt || ''));
+      });
+      if (finalShows.length > 90) {
+        finalShows = finalShows.slice(-90);
+      }
     }
     return {
       ...existingRow,
@@ -305,7 +316,7 @@ async function hydrateStoreFromLiveWorkers(force = false): Promise<void> {
               }
             }
           }
-          // Cross-merge DELTA into Master so no show in DELTA is ever missing in Master
+          // Cross-merge DELTA into Master so no show or daily sale in DELTA is ever missing in Master
           const deltaInsp = syncStore.cinema_sales['__SYSTEM_SYNC_INSPECTIONS_DELTA__'];
           const masterInsp = syncStore.cinema_sales['__SYSTEM_SYNC_INSPECTIONS__'];
           if (deltaInsp && Array.isArray(deltaInsp.shows) && deltaInsp.shows.length > 0 && masterInsp) {
@@ -319,6 +330,28 @@ async function hydrateStoreFromLiveWorkers(force = false): Promise<void> {
                 : masterInsp.updated_at,
             });
             if ((syncStore.cinema_sales['__SYSTEM_SYNC_INSPECTIONS__']?.shows?.length || 0) !== prevMasterLen) {
+              changed = true;
+            }
+          }
+
+          const deltaSales = syncStore.cinema_sales['__SYSTEM_SYNC_DAILY_SALES_DELTA__'];
+          const masterSales = syncStore.cinema_sales['__SYSTEM_SYNC_DAILY_SALES__'];
+          if (deltaSales && Array.isArray(deltaSales.shows) && deltaSales.shows.length > 0 && masterSales) {
+            const prevSalesTs = masterSales.updated_at;
+            const prevSalesLen = Array.isArray(masterSales.shows) ? masterSales.shows.length : 0;
+            syncStore.cinema_sales['__SYSTEM_SYNC_DAILY_SALES__'] = smartMergeSalesRow(masterSales, {
+              ...masterSales,
+              id: '__SYSTEM_SYNC_DAILY_SALES__',
+              shows: deltaSales.shows,
+              updated_at: isNewerOrEqualIso(deltaSales.updated_at, masterSales.updated_at)
+                ? deltaSales.updated_at
+                : masterSales.updated_at,
+            });
+            const nextMasterSales = syncStore.cinema_sales['__SYSTEM_SYNC_DAILY_SALES__'];
+            if (
+              (nextMasterSales?.shows?.length || 0) !== prevSalesLen ||
+              nextMasterSales?.updated_at !== prevSalesTs
+            ) {
               changed = true;
             }
           }

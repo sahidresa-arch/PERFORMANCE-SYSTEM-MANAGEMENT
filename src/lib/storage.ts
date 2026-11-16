@@ -66,8 +66,12 @@ const KEYS = {
 };
 
 const RECENT_INSPECTIONS_KEY = 'cinema_xxi_recent_inspections_v2';
+const RECENT_SALES_KEY = 'cinema_xxi_recent_sales_v1';
+const USER_SALES_OVERRIDES_KEY = 'cinema_xxi_user_sales_overrides';
 let cachedInspectionsList: ToiletInspectionRecord[] | null = null;
 const sessionSavedInspectionsMap = new Map<string, ToiletInspectionRecord>();
+let cachedUserSalesOverrides: DailySalesRecord[] | null = null;
+const sessionSavedSalesMap = new Map<string, DailySalesRecord>();
 const sessionSavedOccupancyMap = new Map<string, any[]>();
 let cachedAllUploadedMovies: MovieScreeningRecord[] | null = null;
 let cachedGenreRegistry: Record<string, any> | null = null;
@@ -84,6 +88,14 @@ if (typeof window !== 'undefined') {
       e.key === 'cinema_xxi_user_inspections_overrides'
     ) {
       cachedInspectionsList = null;
+    }
+    if (
+      !e.key ||
+      e.key === KEYS.SALES ||
+      e.key === RECENT_SALES_KEY ||
+      e.key === USER_SALES_OVERRIDES_KEY
+    ) {
+      cachedUserSalesOverrides = null;
     }
     if (
       !e.key ||
@@ -1196,42 +1208,221 @@ export const StorageService = {
     return norm(record.shows) === norm(mig.shows);
   },
 
-  // Daily Sales - User Overrides Layer (100% immune to static migration overwrites & stripped of untouched static clones)
-  getUserSalesOverrides(): DailySalesRecord[] {
-    try {
-      const raw = localStorage.getItem('cinema_xxi_user_sales_overrides');
-      if (!raw) return [];
-      const parsed = JSON.parse(raw);
-      if (!Array.isArray(parsed)) return [];
-      const filtered = parsed.filter(
-        (r: DailySalesRecord) => r && r.outletId && r.date && !this.isStaticUneditedSalesRecord(r)
-      );
-      if (filtered.length !== parsed.length) {
-        localStorage.setItem('cinema_xxi_user_sales_overrides', JSON.stringify(filtered));
+  // Daily Sales - User Overrides Layer (100% immune to static migration overwrites & QuotaExceededError)
+  persistSalesOverridesSafe(overridesList: DailySalesRecord[]): DailySalesRecord[] {
+    const mergedMap = new Map<string, DailySalesRecord>();
+    const absorb = (items: Iterable<DailySalesRecord>) => {
+      for (const r of items) {
+        if (!r || !r.outletId || !r.date || this.isStaticUneditedSalesRecord(r)) continue;
+        const key = `${r.outletId}_${r.date}`;
+        const normalized: DailySalesRecord = {
+          ...r,
+          id: `sales-${r.outletId}-${r.date}`,
+          isMigrated: false,
+        };
+        const existing = mergedMap.get(key);
+        if (!existing) {
+          mergedMap.set(key, normalized);
+        } else {
+          const exIso = String(existing.updatedAt || '');
+          const newIso = String(normalized.updatedAt || '');
+          if (newIso >= exIso) {
+            mergedMap.set(key, normalized);
+          }
+        }
       }
-      return filtered;
+    };
+
+    absorb(overridesList);
+    absorb(sessionSavedSalesMap.values());
+
+    const finalOverrides = Array.from(mergedMap.values()).sort((a, b) =>
+      String(a.date || '').localeCompare(String(b.date || ''))
+    );
+    cachedUserSalesOverrides = finalOverrides;
+
+    // 1. Always write lightweight 7-day buffer first so today/yesterday never fail quota
+    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const recentSales = finalOverrides.filter((s) => s.date >= sevenDaysAgo);
+    try {
+      const recentSerialized = JSON.stringify(recentSales);
+      localStorage.setItem(RECENT_SALES_KEY, recentSerialized);
+      sessionStorage.setItem('cinema_xxi_recent_sales_session', recentSerialized);
     } catch {
-      return [];
+      // ignore if quota is completely exhausted
     }
+
+    // 2. Remove legacy duplicate KEYS.SALES to free up ~800 KB+ of localStorage space
+    try {
+      if (localStorage.getItem(KEYS.SALES) !== null) {
+        localStorage.removeItem(KEYS.SALES);
+      }
+      if (localStorage.getItem('cinema_xxi_user_inspections_overrides') !== null) {
+        localStorage.removeItem('cinema_xxi_user_inspections_overrides');
+      }
+    } catch {
+      // ignore
+    }
+
+    // 3. Persist full overrides list with progressive fallback on QuotaExceededError
+    const fullSerialized = JSON.stringify(finalOverrides);
+    try {
+      localStorage.setItem(USER_SALES_OVERRIDES_KEY, fullSerialized);
+    } catch {
+      try {
+        // Free redundant duplicate occupancy key copies if needed to make room for sales
+        const keysToTrim: string[] = [];
+        for (let i = 0; i < localStorage.length; i++) {
+          const k = localStorage.key(i);
+          if (k && k.startsWith('cinema_xxi_occupancy_') && !k.startsWith('cinema_xxi_occupancy_records_') && k !== 'cinema_xxi_occupancy_manifest') {
+            keysToTrim.push(k);
+          }
+        }
+        for (const k of keysToTrim) {
+          localStorage.removeItem(k);
+        }
+        localStorage.setItem(USER_SALES_OVERRIDES_KEY, fullSerialized);
+      } catch {
+        try {
+          const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+          localStorage.setItem(
+            USER_SALES_OVERRIDES_KEY,
+            JSON.stringify(finalOverrides.filter((s) => s.date >= ninetyDaysAgo))
+          );
+        } catch {
+          try {
+            localStorage.setItem(USER_SALES_OVERRIDES_KEY, JSON.stringify(recentSales));
+          } catch {
+            // In-memory cachedUserSalesOverrides & sessionSavedSalesMap still preserve all records
+          }
+        }
+      }
+    }
+
+    return finalOverrides;
+  },
+
+  saveMergedSalesOverrides(records: DailySalesRecord[]): DailySalesRecord[] {
+    const existing = this.getUserSalesOverrides();
+    const map = new Map<string, DailySalesRecord>();
+    for (const r of existing) {
+      if (r && r.outletId && r.date) {
+        map.set(`${r.outletId}_${r.date}`, r);
+      }
+    }
+    for (const r of records) {
+      if (!r || !r.outletId || !r.date || this.isStaticUneditedSalesRecord(r)) continue;
+      const key = `${r.outletId}_${r.date}`;
+      const prev = map.get(key);
+      if (!prev) {
+        map.set(key, { ...r, id: `sales-${r.outletId}-${r.date}`, isMigrated: false });
+      } else {
+        const prevTs = prev.updatedAt ? new Date(prev.updatedAt).getTime() : 0;
+        const nextTs = r.updatedAt ? new Date(r.updatedAt).getTime() : 0;
+        if (nextTs >= prevTs || prevTs === 0) {
+          map.set(key, { ...r, id: `sales-${r.outletId}-${r.date}`, isMigrated: false });
+        }
+      }
+    }
+    return this.persistSalesOverridesSafe(Array.from(map.values()));
+  },
+
+  getUserSalesOverrides(forceReload = false): DailySalesRecord[] {
+    if (!forceReload && cachedUserSalesOverrides !== null) {
+      if (sessionSavedSalesMap.size === 0) {
+        return cachedUserSalesOverrides;
+      }
+      let needsMerge = false;
+      for (const [key, rec] of sessionSavedSalesMap.entries()) {
+        const found = cachedUserSalesOverrides.find((c) => `${c.outletId}_${c.date}` === key);
+        if (!found || String(rec.updatedAt || '') > String(found.updatedAt || '')) {
+          needsMerge = true;
+          break;
+        }
+      }
+      if (!needsMerge) {
+        return cachedUserSalesOverrides;
+      }
+    }
+
+    const parseSafe = (raw: string | null): DailySalesRecord[] => {
+      if (!raw) return [];
+      try {
+        const parsed = JSON.parse(raw);
+        return Array.isArray(parsed) ? parsed : [];
+      } catch {
+        return [];
+      }
+    };
+
+    const primaryOverrides = parseSafe(localStorage.getItem(USER_SALES_OVERRIDES_KEY));
+    const recentProtected = parseSafe(localStorage.getItem(RECENT_SALES_KEY));
+    const legacySales = parseSafe(localStorage.getItem(KEYS.SALES));
+    let sessionList: DailySalesRecord[] = [];
+    try {
+      sessionList = parseSafe(sessionStorage.getItem('cinema_xxi_recent_sales_session'));
+    } catch {
+      sessionList = [];
+    }
+
+    const mergedMap = new Map<string, DailySalesRecord>();
+    const absorb = (items: Iterable<DailySalesRecord>) => {
+      for (const r of items) {
+        if (!r || !r.outletId || !r.date) continue;
+        if (
+          String(r.id || '').startsWith('__SYSTEM_SYNC_') ||
+          String(r.outletId || '').startsWith('__SYSTEM_SYNC_')
+        ) {
+          continue;
+        }
+        if (this.isStaticUneditedSalesRecord(r)) continue;
+        const key = `${r.outletId}_${r.date}`;
+        const normalized: DailySalesRecord = {
+          ...r,
+          id: `sales-${r.outletId}-${r.date}`,
+          isMigrated: false,
+        };
+        const existing = mergedMap.get(key);
+        if (!existing) {
+          mergedMap.set(key, normalized);
+        } else {
+          const exTs = existing.updatedAt ? new Date(existing.updatedAt).getTime() : 0;
+          const nextTs = normalized.updatedAt ? new Date(normalized.updatedAt).getTime() : 0;
+          if (nextTs >= exTs) {
+            mergedMap.set(key, normalized);
+          }
+        }
+      }
+    };
+
+    absorb(legacySales);
+    absorb(primaryOverrides);
+    absorb(recentProtected);
+    absorb(sessionList);
+    absorb(sessionSavedSalesMap.values());
+
+    const filtered = Array.from(mergedMap.values()).sort((a, b) =>
+      String(a.date || '').localeCompare(String(b.date || ''))
+    );
+    cachedUserSalesOverrides = filtered;
+
+    if (legacySales.length > 0 || filtered.length !== primaryOverrides.length) {
+      try {
+        const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+        const recent = filtered.filter((s) => s.date >= sevenDaysAgo);
+        localStorage.setItem(RECENT_SALES_KEY, JSON.stringify(recent));
+        if (legacySales.length > 0) localStorage.removeItem(KEYS.SALES);
+        localStorage.setItem(USER_SALES_OVERRIDES_KEY, JSON.stringify(filtered));
+      } catch {
+        // ignore
+      }
+    }
+
+    return filtered;
   },
 
   getDailySales(): DailySalesRecord[] {
-    const raw = localStorage.getItem(KEYS.SALES);
-    let list: DailySalesRecord[] = [];
-    if (raw) {
-      try {
-        list = JSON.parse(raw);
-      } catch {
-        list = [];
-      }
-    }
-
     const allMigrated = [...MIGRATED_SALES_2025, ...MIGRATED_SALES_2026];
-    const migratedByKey = new Map<string, DailySalesRecord>();
-    for (const m of allMigrated) {
-      migratedByKey.set(`${m.outletId}_${m.date}`, m);
-    }
-
     const existingMap = new Map<string, DailySalesRecord>();
 
     // 1. Seed base migrated records first
@@ -1239,29 +1430,7 @@ export const StorageService = {
       existingMap.set(`${migrated.outletId}_${migrated.date}`, migrated);
     }
 
-    // 2. Apply any non-system, user-modified records from KEYS.SALES
-    let updated = false;
-    for (const item of list) {
-      if (!item || !item.outletId || !item.date) continue;
-      if (
-        String(item.id || '').startsWith('__SYSTEM_SYNC_') ||
-        String(item.outletId || '').startsWith('__SYSTEM_SYNC_')
-      ) {
-        updated = true;
-        continue;
-      }
-      const key = `${item.outletId}_${item.date}`;
-      const mig = migratedByKey.get(key);
-      if (!mig) {
-        // Record on a date not in static migrated list (e.g. user input on any daily date)
-        existingMap.set(key, { ...item, isMigrated: false });
-      } else if (!this.isStaticUneditedSalesRecord(item)) {
-        // Record is on a migrated date AND its numbers were genuinely edited by user
-        existingMap.set(key, { ...item, isMigrated: false });
-      }
-    }
-
-    // 3. Apply dedicated user overrides layer on top (highest priority)
+    // 2. Apply deduplicated, quota-safe user overrides layer (includes legacy KEYS.SALES + 7-day buffer + session saves)
     const overrides = this.getUserSalesOverrides();
     for (const ov of overrides) {
       if (ov && ov.outletId && ov.date) {
@@ -1274,20 +1443,19 @@ export const StorageService = {
       }
     }
 
-    const finalList = Array.from(existingMap.values());
-    if (updated || !raw) {
-      const compactList = finalList.filter((item) => !this.isStaticUneditedSalesRecord(item));
-      try {
-        localStorage.setItem(KEYS.SALES, JSON.stringify(compactList));
-      } catch {
-        // ignore quota errors
-      }
-    }
-
-    return finalList;
+    return Array.from(existingMap.values());
   },
 
   getDailySaleByOutletAndDate(outletId: string, date: string): DailySalesRecord {
+    const sessionHit = sessionSavedSalesMap.get(`${outletId}_${date}`);
+    if (sessionHit) {
+      return {
+        ...sessionHit,
+        id: `sales-${outletId}-${date}`,
+        isMigrated: false,
+      };
+    }
+
     // Check user overrides first for instant accuracy
     const overrides = this.getUserSalesOverrides();
     const overrideMatch = overrides.find((s) => s.outletId === outletId && s.date === date);
@@ -1331,34 +1499,28 @@ export const StorageService = {
       updatedAt: nowIso,
     };
 
+    const key = `${normalizedRecord.outletId}_${normalizedRecord.date}`;
+    // Pin in session memory so background sync or localStorage quota can NEVER lose this record
+    sessionSavedSalesMap.set(key, normalizedRecord);
+
     try {
       localStorage.setItem(
-        `cinema_xxi_sales_local_save_ts_${record.outletId}_${record.date}`,
+        `cinema_xxi_sales_local_save_ts_${normalizedRecord.outletId}_${normalizedRecord.date}`,
         String(Date.now())
       );
-      // Save to persistent user overrides layer
-      const overrides = this.getUserSalesOverrides().filter(
-        (s) => !(s.outletId === normalizedRecord.outletId && s.date === normalizedRecord.date)
-      );
-      overrides.push(normalizedRecord);
-      localStorage.setItem('cinema_xxi_user_sales_overrides', JSON.stringify(overrides));
     } catch {
       // ignore
     }
 
-    const list = this.getDailySales().filter(
+    const overrides = this.getUserSalesOverrides().filter(
       (s) => !(s.outletId === normalizedRecord.outletId && s.date === normalizedRecord.date)
     );
-    list.push(normalizedRecord);
-    const compactList = list.filter((item) => !this.isStaticUneditedSalesRecord(item));
-    try {
-      localStorage.setItem(KEYS.SALES, JSON.stringify(compactList));
-    } catch {
-      // ignore quota error since cinema_xxi_user_sales_overrides already holds the record
-    }
+    overrides.push(normalizedRecord);
+    this.persistSalesOverridesSafe(overrides);
+
     this.broadcastChange('sales');
 
-    // Asynchronous background sync ke Supabase jika terhubung
+    // Asynchronous immediate sync ke Internal Server, Live Workers & Supabase
     import('./supabase')
       .then((m) => m.syncSalesToSupabase([normalizedRecord]))
       .catch(() => {});
@@ -1484,7 +1646,18 @@ export const StorageService = {
     } else {
       list.push(updatedRecord);
     }
-    localStorage.setItem(KEYS.BAKING, JSON.stringify(list));
+    const serialized = JSON.stringify(list);
+    try {
+      localStorage.setItem(KEYS.BAKING, serialized);
+    } catch {
+      try {
+        localStorage.removeItem(KEYS.SALES);
+        localStorage.removeItem('cinema_xxi_user_inspections_overrides');
+        localStorage.setItem(KEYS.BAKING, serialized);
+      } catch {
+        // ignore if storage completely full
+      }
+    }
     this.broadcastChange('baking');
 
     import('./supabase')

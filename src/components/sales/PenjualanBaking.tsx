@@ -51,8 +51,16 @@ export const PenjualanBaking: React.FC<PenjualanBakingProps> = ({
 
   const [activeTab, setActiveTab] = useState<'sheet' | 'dashboard'>('sheet');
   const [selectedAreaId, setSelectedAreaId] = useState<string>(areas[0]?.id || '');
-  const [selectedMonth, setSelectedMonth] = useState<number>(10); // Oktober
-  const [selectedYear, setSelectedYear] = useState<number>(2026);
+  const [selectedMonth, setSelectedMonth] = useState<number>(() => {
+    const parts = (selectedDate || '').split('-');
+    const parsedM = parts.length >= 2 ? Number(parts[1]) : NaN;
+    return parsedM >= 1 && parsedM <= 12 ? parsedM : new Date().getMonth() + 1;
+  });
+  const [selectedYear, setSelectedYear] = useState<number>(() => {
+    const parts = (selectedDate || '').split('-');
+    const parsedY = parts.length >= 1 ? Number(parts[0]) : NaN;
+    return parsedY >= 2020 && parsedY <= 2100 ? parsedY : new Date().getFullYear();
+  });
   const [searchQuery, setSearchQuery] = useState('');
   const [, setRefreshTick] = useState(0);
 
@@ -67,11 +75,14 @@ export const PenjualanBaking: React.FC<PenjualanBakingProps> = ({
     StorageService.getBakingSaleByOutlet(defaultOutletId, selectedYear, selectedMonth)
   );
 
-  // Reload bakingRecord when outlet, month, or year changes
+  // Reload bakingRecord & tarik data baking/sales terbaru saat outlet, bulan, atau tahun berubah
   useEffect(() => {
     setBakingRecord(
       StorageService.getBakingSaleByOutlet(selectedOutletId, selectedYear, selectedMonth)
     );
+    import('../../lib/supabase')
+      .then((m) => m.pullSalesNow?.(true))
+      .catch(() => {});
   }, [selectedOutletId, selectedYear, selectedMonth]);
 
   // Listen for real-time Supabase / storage updates across devices

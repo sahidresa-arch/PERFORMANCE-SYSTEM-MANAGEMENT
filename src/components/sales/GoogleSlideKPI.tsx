@@ -125,6 +125,9 @@ export const GoogleSlideKPI: React.FC<GoogleSlideKPIProps> = ({
     const handleStorageUpdate = () => setStorageTick((t) => t + 1);
     window.addEventListener('cinema-xxi-storage-update', handleStorageUpdate);
     window.addEventListener('storage', handleStorageUpdate);
+    import('../../lib/supabase')
+      .then((m) => m.pullSalesNow?.(false))
+      .catch(() => {});
     return () => {
       window.removeEventListener('cinema-xxi-storage-update', handleStorageUpdate);
       window.removeEventListener('storage', handleStorageUpdate);

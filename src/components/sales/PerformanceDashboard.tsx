@@ -48,6 +48,12 @@ export const PerformanceDashboard: React.FC<PerformanceDashboardProps> = ({
     };
   }, []);
 
+  React.useEffect(() => {
+    import('../../lib/supabase')
+      .then((m) => m.pullSalesNow?.(false))
+      .catch(() => {});
+  }, [selectedDate]);
+
   // 'all' = SEMUA WILAYAH
   const [selectedAreaId, setSelectedAreaId] = useState<string>('all');
   // Sort order for Achievement column ('desc' = terbesar ke terkecil, 'asc' = terkecil ke terbesar)

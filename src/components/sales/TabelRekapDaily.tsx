@@ -48,6 +48,12 @@ export const TabelRekapDaily: React.FC<TabelRekapDailyProps> = ({
     };
   }, []);
 
+  React.useEffect(() => {
+    import('../../lib/supabase')
+      .then((m) => m.pullSalesNow?.(false))
+      .catch(() => {});
+  }, [selectedDate]);
+
   const [selectedAreaId, setSelectedAreaId] = useState<string>(
     currentUser?.areaId || (isManagerOrCleaner ? (outlets[0]?.areaId || areas[0]?.id || '') : areas[0]?.id || 'all')
   );

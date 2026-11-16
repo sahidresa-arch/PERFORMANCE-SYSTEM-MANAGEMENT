@@ -112,6 +112,13 @@ export const InputDataSales: React.FC<InputDataSalesProps> = ({
   const isQuoteBlocked = !isAdmin && Boolean(selectedOutletId && selectedDate && !dailyQuoteResponse);
   const isShowInputDisabled = isLocked || isQuoteBlocked;
 
+  // Tarik data sales terbaru dari Edge Server / Worker saat buka menu atau ganti outlet/tanggal
+  useEffect(() => {
+    import('../../lib/supabase')
+      .then((m) => m.pullSalesNow?.(false))
+      .catch(() => {});
+  }, [selectedOutletId, selectedDate]);
+
   // Sync record & Kata-kata Hari Ini status when outlet or date changes
   useEffect(() => {
     isDirtyRef.current = false;

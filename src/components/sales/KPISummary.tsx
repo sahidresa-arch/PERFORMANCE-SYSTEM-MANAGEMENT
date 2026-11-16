@@ -78,6 +78,12 @@ export const KPISummary: React.FC<KPISummaryProps> = ({
     };
   }, []);
 
+  React.useEffect(() => {
+    import('../../lib/supabase')
+      .then((m) => m.pullSalesNow?.(false))
+      .catch(() => {});
+  }, [selectedDate]);
+
   const isAdmin = currentUser?.role === 'admin' || currentUser?.role === 'area_manager';
 
   const defaultOutletId =
