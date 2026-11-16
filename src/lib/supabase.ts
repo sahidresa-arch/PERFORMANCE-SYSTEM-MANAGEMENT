@@ -3638,13 +3638,22 @@ export async function pullAllRemoteToLocal(forceFull = false): Promise<void> {
 
     hasCompletedInitialPull = true;
 
-    // Simpan semua timestamp terbaru yang sudah berhasil ditarik
+    // Simpan timestamp modul selain sales/inspections (yang sudah dicatat langsung saat data valid diterima)
     for (const row of metaRows) {
       const id = String(row.id || '');
       const updatedAt = String(row.updated_at || '');
-      if (id && updatedAt && changedIds.has(id)) {
-        recordSyncTimestamp(id, updatedAt, false);
+      if (
+        !id ||
+        !updatedAt ||
+        !changedIds.has(id) ||
+        id === '__SYSTEM_SYNC_DAILY_SALES__' ||
+        id === '__SYSTEM_SYNC_DAILY_SALES_DELTA__' ||
+        id === '__SYSTEM_SYNC_INSPECTIONS__' ||
+        id === '__SYSTEM_SYNC_INSPECTIONS_DELTA__'
+      ) {
+        continue;
       }
+      recordSyncTimestamp(id, updatedAt, false);
     }
   } finally {
     forceBypassSupaMetaSkip = prevBypass;
