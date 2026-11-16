@@ -1096,26 +1096,25 @@ export const GoogleReviewView: React.FC<GoogleReviewViewProps> = ({ currentUser 
               />
             </APIProvider>
           ) : (
-            <a
-              href={targetGoogleMapsUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="w-full h-full flex flex-col items-center justify-center gap-3 p-6 text-center bg-gradient-to-br from-slate-50 to-teal-50/40 hover:bg-teal-50/60 transition-colors"
-            >
-              <div className="w-14 h-14 rounded-2xl bg-[#EA4335] text-white flex items-center justify-center shadow-md">
-                <MapPin className="w-7 h-7" />
-              </div>
-              <div className="max-w-md space-y-1">
-                <h2 className="text-sm font-extrabold text-[#111827]">{displayTitle}</h2>
-                <p className="text-xs text-[#6B7280]">
-                  Klik di sini untuk langsung masuk ke halaman Google Maps &amp; Google Review outlet ini.
-                </p>
-              </div>
-              <span className="px-4 py-2 rounded-xl bg-[#0F766E] text-white text-xs font-bold inline-flex items-center gap-1.5 shadow-xs">
-                <span>Masuk ke Halaman Google Maps</span>
-                <ExternalLink className="w-3.5 h-3.5" />
-              </span>
-            </a>
+            <div className="w-full h-full relative bg-slate-100">
+              <iframe
+                key={`${searchQuery}_${mapType}`}
+                title={`Peta Lokasi ${displayTitle}`}
+                src={`https://maps.google.com/maps?q=${encodeURIComponent(searchQuery)}&t=${
+                  mapType === 'hybrid' ? 'k' : 'm'
+                }&z=16&hl=id&ie=UTF8&iwloc=&output=embed`}
+                className="w-full h-full border-0"
+                loading="lazy"
+                referrerPolicy="no-referrer-when-downgrade"
+                allowFullScreen
+              />
+              {currentUser?.role === 'admin' && (
+                <div className="absolute bottom-6 right-3 z-10 max-w-xs bg-white/95 backdrop-blur-xs border border-amber-200 shadow-md rounded-xl px-3 py-2 text-[11px] text-amber-900 leading-snug">
+                  <strong className="block text-amber-950">Info Admin:</strong>
+                  Tambahkan <code className="font-mono font-bold">GOOGLE_MAPS_API_KEY</code> di Variables Cloudflare lalu redeploy agar foto, rating &amp; daftar ulasan muncul otomatis.
+                </div>
+              )}
+            </div>
           )}
 
           {/* Top-right floating hint to enter Google Maps */}
@@ -1130,27 +1129,25 @@ export const GoogleReviewView: React.FC<GoogleReviewViewProps> = ({ currentUser 
           </a>
 
           {/* Bottom-left Map Layers ("Lapisan") Toggle matching screenshot */}
-          {apiKey && (
-            <button
-              type="button"
-              onClick={() => setMapType((prev) => (prev === 'roadmap' ? 'hybrid' : 'roadmap'))}
-              className="absolute bottom-6 left-3 z-10 w-16 h-16 rounded-xl border-2 border-white shadow-lg overflow-hidden bg-slate-800 cursor-pointer group"
-              title="Ubah lapisan peta (Peta / Satelit)"
+          <button
+            type="button"
+            onClick={() => setMapType((prev) => (prev === 'roadmap' ? 'hybrid' : 'roadmap'))}
+            className="absolute bottom-6 left-3 z-10 w-16 h-16 rounded-xl border-2 border-white shadow-lg overflow-hidden bg-slate-800 cursor-pointer group"
+            title="Ubah lapisan peta (Peta / Satelit)"
+          >
+            <div
+              className={`w-full h-full flex flex-col items-center justify-end p-1.5 transition-colors ${
+                mapType === 'hybrid'
+                  ? 'bg-gradient-to-br from-emerald-800 to-slate-900'
+                  : 'bg-gradient-to-br from-sky-100 via-emerald-50 to-amber-50'
+              }`}
             >
-              <div
-                className={`w-full h-full flex flex-col items-center justify-end p-1.5 transition-colors ${
-                  mapType === 'hybrid'
-                    ? 'bg-gradient-to-br from-emerald-800 to-slate-900'
-                    : 'bg-gradient-to-br from-sky-100 via-emerald-50 to-amber-50'
-                }`}
-              >
-                <span className="px-1.5 py-0.5 rounded bg-black/70 text-white text-[10px] font-bold inline-flex items-center gap-1">
-                  <Layers className="w-2.5 h-2.5" />
-                  {mapType === 'hybrid' ? 'Peta' : 'Satelit'}
-                </span>
-              </div>
-            </button>
-          )}
+              <span className="px-1.5 py-0.5 rounded bg-black/70 text-white text-[10px] font-bold inline-flex items-center gap-1">
+                <Layers className="w-2.5 h-2.5" />
+                {mapType === 'hybrid' ? 'Peta' : 'Satelit'}
+              </span>
+            </div>
+          </button>
         </div>
       </div>
     </div>

@@ -238,51 +238,41 @@ export const BeritaAcaraModal: React.FC<BeritaAcaraModalProps> = ({
 
     // Pre-fill Rincian Karpet or Kursi Studio
     if (category === 'karpet') {
-      const savedAreas = computedStatus.latestMonthEntry?.carpetAreas || [];
-      const findAreaVal = (id: string, keyword: string): string => {
-        const match = savedAreas.find(
-          (a) =>
-            a.id === id ||
-            (a.name || '').toLowerCase().includes(keyword.toLowerCase())
-        );
-        return match && match.areaSqm > 0 ? String(match.areaSqm) : '';
+      const savedAreas = computedStatus.latestMonthEntry?.carpetAreas;
+      const toBeritaLabel = (rawName: string) => {
+        const clean = (rawName || '').trim();
+        if (!clean) return 'Luas Area Karpet';
+        return clean.toLowerCase().startsWith('luas') ? clean : `Luas ${clean}`;
       };
 
-      const baseRows: CarpetDetailRow[] = [
-        {
-          id: 'karpet_studio',
-          label: 'Luas Karpet Studio',
-          areaSqm: findAreaVal('karpet_studio', 'studio'),
-        },
-        {
-          id: 'karpet_lobi',
-          label: 'Luas Karpet Lobi',
-          areaSqm: findAreaVal('karpet_lobi', 'lobi'),
-        },
-        {
-          id: 'karpet_koridor',
-          label: 'Luas Karpet Koridor',
-          areaSqm: findAreaVal('karpet_koridor', 'koridor'),
-        },
-      ];
+      if (Array.isArray(savedAreas) && savedAreas.length > 0) {
+        // Hanya area yang DICENTANG pada Pilih Area / Ruangan Karpet yang masuk ke Berita Acara
+        const checkedOnly = savedAreas
+          .filter((a) => Boolean(a.checked))
+          .map((a, idx) => ({
+            id: a.id || `carpet_checked_${idx}`,
+            label: toBeritaLabel(a.name),
+            areaSqm: a.areaSqm > 0 ? String(a.areaSqm) : '',
+          }));
+        setCarpetRows(checkedOnly);
+      } else {
+        // Fallback jika jadwal lama belum memakai checklist carpetAreas: buat detail per-studio outlet
+        const studios = Array.isArray(outlet.studios) ? outlet.studios : [];
+        const studioRows: CarpetDetailRow[] =
+          studios.length > 0
+            ? studios.map((s, idx) => ({
+                id: `karpet_studio_${idx + 1}`,
+                label: `Luas Karpet ${s.name}`,
+                areaSqm: '',
+              }))
+            : [{ id: 'karpet_studio', label: 'Luas Karpet Studio', areaSqm: '' }];
 
-      const extraRows: CarpetDetailRow[] = savedAreas
-        .filter(
-          (a) =>
-            a.id !== 'karpet_studio' &&
-            a.id !== 'karpet_lobi' &&
-            a.id !== 'karpet_koridor' &&
-            !(a.name || '').toLowerCase().includes('studio') &&
-            !(a.name || '').toLowerCase().includes('lobi') &&
-            !(a.name || '').toLowerCase().includes('koridor')
-        )
-        .map((a) => ({
-          id: a.id,
-          label: a.name.toLowerCase().startsWith('luas') ? a.name : `Luas ${a.name}`,
-          areaSqm: a.areaSqm > 0 ? String(a.areaSqm) : '',
-        }));
-
-      setCarpetRows([...baseRows, ...extraRows]);
+        setCarpetRows([
+          ...studioRows,
+          { id: 'karpet_lobi', label: 'Luas Karpet Lobi', areaSqm: '' },
+          { id: 'karpet_koridor', label: 'Luas Karpet Koridor', areaSqm: '' },
+        ]);
+      }
     } else {
       const studios = outlet.studios || [];
       if (studios.length > 0) {
@@ -977,49 +967,54 @@ export const BeritaAcaraModal: React.FC<BeritaAcaraModalProps> = ({
 
               {isKarpet ? (
                 <div className="space-y-2">
-                  {carpetRows.map((row, idx) => (
-                    <div key={row.id} className="flex items-center gap-2">
-                      <input
-                        type="text"
-                        value={row.label}
-                        onChange={(e) =>
-                          setCarpetRows((prev) =>
-                            prev.map((r) =>
-                              r.id === row.id ? { ...r, label: e.target.value } : r
-                            )
-                          )
-                        }
-                        className="flex-1 px-2.5 py-1.5 text-xs border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500/30"
-                      />
-                      <div className="flex items-center gap-1 w-28">
+                  {carpetRows.length === 0 ? (
+                    <div className="p-3 rounded-lg bg-slate-50 border border-dashed border-slate-300 text-[11px] text-slate-500 text-center">
+                      Belum ada area karpet yang dicentang. Klik <strong>Tambah Area</strong> jika ingin menambahkan rincian secara manual.
+                    </div>
+                  ) : (
+                    carpetRows.map((row) => (
+                      <div key={row.id} className="flex items-center gap-2">
                         <input
-                          type="number"
-                          min="0"
-                          step="0.1"
-                          value={row.areaSqm}
+                          type="text"
+                          value={row.label}
                           onChange={(e) =>
                             setCarpetRows((prev) =>
                               prev.map((r) =>
-                                r.id === row.id ? { ...r, areaSqm: e.target.value } : r
+                                r.id === row.id ? { ...r, label: e.target.value } : r
                               )
                             )
                           }
-                          placeholder="0"
-                          className="w-full px-2 py-1.5 text-xs text-right border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500/30"
+                          className="flex-1 px-2.5 py-1.5 text-xs border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500/30"
                         />
-                        <span className="text-[11px] font-bold text-slate-500">m²</span>
-                      </div>
-                      {idx >= 3 && (
+                        <div className="flex items-center gap-1 w-28">
+                          <input
+                            type="number"
+                            min="0"
+                            step="0.1"
+                            value={row.areaSqm}
+                            onChange={(e) =>
+                              setCarpetRows((prev) =>
+                                prev.map((r) =>
+                                  r.id === row.id ? { ...r, areaSqm: e.target.value } : r
+                                )
+                              )
+                            }
+                            placeholder="0"
+                            className="w-full px-2 py-1.5 text-xs text-right border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500/30"
+                          />
+                          <span className="text-[11px] font-bold text-slate-500">m²</span>
+                        </div>
                         <button
                           type="button"
                           onClick={() => handleRemoveCarpetRow(row.id)}
                           className="p-1 text-slate-400 hover:text-rose-600 cursor-pointer"
+                          title={`Hapus ${row.label || 'baris ini'}`}
                         >
                           <Trash2 className="w-3.5 h-3.5" />
                         </button>
-                      )}
-                    </div>
-                  ))}
+                      </div>
+                    ))
+                  )}
                 </div>
               ) : (
                 <div className="space-y-2">

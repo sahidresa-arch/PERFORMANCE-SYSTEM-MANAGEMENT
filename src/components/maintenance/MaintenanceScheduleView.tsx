@@ -510,51 +510,82 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
     return [];
   };
 
-  const resolveInitialCarpetAreas = (
-    existingEntry: MaintenanceMonthEntry | null
-  ): CarpetAreaEntry[] => {
-    const standardBase: CarpetAreaEntry[] = [
-      { id: 'karpet_studio', name: 'Karpet Studio', checked: false, areaSqm: 0, isCustom: false },
+  const buildDefaultCarpetAreasForOutlet = (outlet: Outlet): CarpetAreaEntry[] => {
+    const studios = Array.isArray(outlet.studios) ? outlet.studios : [];
+    const studioRows: CarpetAreaEntry[] =
+      studios.length > 0
+        ? studios.map((s, idx) => {
+            const cleanName = (s.name || `Studio ${idx + 1}`).trim();
+            return {
+              id: `karpet_studio_${idx + 1}_${cleanName
+                .toLowerCase()
+                .replace(/[^a-z0-9]+/g, '_')}`,
+              name: /^karpet\s+/i.test(cleanName) ? cleanName : `Karpet ${cleanName}`,
+              checked: false,
+              areaSqm: 0,
+              isCustom: false,
+            };
+          })
+        : [
+            {
+              id: 'karpet_studio',
+              name: 'Karpet Studio',
+              checked: false,
+              areaSqm: 0,
+              isCustom: false,
+            },
+          ];
+
+    return [
+      ...studioRows,
       { id: 'karpet_lobi', name: 'Karpet Lobi', checked: false, areaSqm: 0, isCustom: false },
       { id: 'karpet_koridor', name: 'Karpet Koridor', checked: false, areaSqm: 0, isCustom: false },
     ];
+  };
 
-    if (existingEntry && Array.isArray(existingEntry.carpetAreas) && existingEntry.carpetAreas.length > 0) {
-      const mergedStandard = standardBase.map((std) => {
-        const found = existingEntry.carpetAreas!.find(
-          (c) => c.id === std.id || c.name.toLowerCase() === std.name.toLowerCase()
+  const resolveInitialCarpetAreas = (
+    outlet: Outlet,
+    existingEntry: MaintenanceMonthEntry | null
+  ): CarpetAreaEntry[] => {
+    const defaultAreas = buildDefaultCarpetAreasForOutlet(outlet);
+    const studios = Array.isArray(outlet.studios) ? outlet.studios : [];
+
+    if (existingEntry && Array.isArray(existingEntry.carpetAreas)) {
+      const saved = existingEntry.carpetAreas.map((c, idx) => ({
+        id: c.id || `carpet_${idx}_${Math.random().toString(36).slice(2, 7)}`,
+        name: c.name || '',
+        checked: Boolean(c.checked),
+        areaSqm: Number(c.areaSqm) || 0,
+        isCustom: Boolean(c.isCustom),
+      }));
+
+      // Migrasi halus jika data lama hanya punya placeholder "Karpet Studio" belum terisi dan belum ada rincian per-studio
+      const hasPerStudioAlready = saved.some((c) => /studio\s*\d+/i.test(c.name || ''));
+      const genericIdx = saved.findIndex(
+        (c) => c.id === 'karpet_studio' && !c.checked && (!c.areaSqm || c.areaSqm <= 0)
+      );
+
+      if (studios.length > 0 && !hasPerStudioAlready && genericIdx !== -1) {
+        const perStudioDefaults = defaultAreas.filter((d) =>
+          d.id.startsWith('karpet_studio_')
         );
-        return found
-          ? { ...std, checked: Boolean(found.checked), areaSqm: Number(found.areaSqm) || 0 }
-          : std;
-      });
-      const customItems = existingEntry.carpetAreas
-        .filter(
-          (c) =>
-            c.isCustom ||
-            !standardBase.some(
-              (std) => std.id === c.id || std.name.toLowerCase() === c.name.toLowerCase()
-            )
-        )
-        .map((c) => ({
-          id: c.id || `custom_${Math.random().toString(36).slice(2, 8)}`,
-          name: c.name || '',
-          checked: Boolean(c.checked),
-          areaSqm: Number(c.areaSqm) || 0,
-          isCustom: true,
-        }));
-      return [...mergedStandard, ...customItems];
+        const before = saved.slice(0, genericIdx);
+        const after = saved.slice(genericIdx + 1);
+        return [...before, ...perStudioDefaults, ...after];
+      }
+
+      return saved;
     }
 
     if (existingEntry && existingEntry.quantity && existingEntry.quantity > 0) {
-      return standardBase.map((std, idx) =>
+      return defaultAreas.map((std, idx) =>
         idx === 0
           ? { ...std, checked: true, areaSqm: Number(existingEntry.quantity) || 0 }
           : std
       );
     }
 
-    return standardBase;
+    return defaultAreas;
   };
 
   // Open cell modal
@@ -592,12 +623,12 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
       }
     } else if (activeCategory === 'karpet') {
       setSelectedStudios([]);
-      const initCarpet = resolveInitialCarpetAreas(existingEntry);
+      const initCarpet = resolveInitialCarpetAreas(outlet, existingEntry);
       setCarpetAreas(initCarpet);
       const totalSqm = initCarpet
         .filter((c) => c.checked)
         .reduce((sum, c) => sum + (Number(c.areaSqm) || 0), 0);
-      setFormQty(String(totalSqm));
+      setFormQty(String(Math.round(totalSqm * 100) / 100));
     } else {
       setSelectedStudios([]);
       setCarpetAreas([]);
@@ -699,9 +730,15 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
     syncCarpetAreasAndQty([...carpetAreas, newRoom]);
   };
 
-  const handleRemoveCustomCarpetRoom = (id: string) => {
+  const handleRemoveCarpetRoom = (id: string) => {
     const next = carpetAreas.filter((item) => item.id !== id);
     syncCarpetAreasAndQty(next);
+  };
+
+  const handleResetDefaultCarpetAreas = () => {
+    if (!activeCellModal) return;
+    const defaults = buildDefaultCarpetAreasForOutlet(activeCellModal.outlet);
+    syncCarpetAreasAndQty(defaults);
   };
 
   // Auto-update Expired Date when Execution Date changes in modal
@@ -1589,95 +1626,110 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
                 </div>
               ) : activeCategory === 'karpet' ? (
                 <div className="space-y-2.5">
-                  <div className="flex items-center justify-between">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
                     <div>
                       <label className="block text-xs font-bold text-slate-700">
                         Pilih Area / Ruangan Karpet
                       </label>
                       <span className="text-[10px] text-slate-500 font-medium">
-                        Ceklis area & isi luas meter persegi (m²)
+                        Hanya area yang dicentang yang masuk ke total &amp; Berita Acara
                       </span>
                     </div>
-                    <button
-                      type="button"
-                      onClick={handleAddCustomCarpetRoom}
-                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-bold text-amber-700 bg-amber-50 hover:bg-amber-100 border border-amber-300 transition-colors cursor-pointer"
-                      title="Tambah Ruangan Karpet"
-                    >
-                      <Plus className="w-3.5 h-3.5" />
-                      <span>Tambah Ruangan</span>
-                    </button>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={handleResetDefaultCarpetAreas}
+                        className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 border border-slate-200 transition-colors cursor-pointer"
+                        title="Muat ulang daftar default per-studio, Lobi & Koridor"
+                      >
+                        <span>Reset Default</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleAddCustomCarpetRoom}
+                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-bold text-amber-700 bg-amber-50 hover:bg-amber-100 border border-amber-300 transition-colors cursor-pointer"
+                        title="Tambah Ruangan Karpet"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        <span>Tambah Ruangan</span>
+                      </button>
+                    </div>
                   </div>
 
-                  <div className="space-y-2 p-2.5 rounded-xl bg-slate-50 border border-slate-200/90 max-h-52 overflow-y-auto">
-                    {carpetAreas.map((area) => (
-                      <div
-                        key={area.id}
-                        className={`flex items-center justify-between gap-2 px-2.5 py-2 rounded-lg border text-xs transition-colors ${
-                          area.checked
-                            ? 'bg-amber-50/90 border-amber-400 text-slate-900 shadow-2xs'
-                            : 'bg-white border-slate-200 text-slate-700'
-                        }`}
-                      >
-                        <div className="flex items-center gap-2 min-w-0 flex-1">
-                          <input
-                            type="checkbox"
-                            checked={area.checked}
-                            onChange={() => handleToggleCarpetArea(area.id)}
-                            className="w-3.5 h-3.5 rounded border-slate-300 text-amber-500 focus:ring-amber-500/30 cursor-pointer shrink-0 accent-amber-500"
-                          />
-                          {area.isCustom ? (
+                  <div className="space-y-2 p-2.5 rounded-xl bg-slate-50 border border-slate-200/90 max-h-56 overflow-y-auto">
+                    {carpetAreas.length === 0 ? (
+                      <div className="py-4 text-center text-[11px] text-slate-500">
+                        Semua baris area dihapus. Klik <strong>Tambah Ruangan</strong> atau <strong>Reset Default</strong>.
+                      </div>
+                    ) : (
+                      carpetAreas.map((area) => (
+                        <div
+                          key={area.id}
+                          className={`flex items-center justify-between gap-2 px-2.5 py-2 rounded-lg border text-xs transition-colors ${
+                            area.checked
+                              ? 'bg-amber-50/90 border-amber-400 text-slate-900 shadow-2xs'
+                              : 'bg-white border-slate-200 text-slate-700'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2 min-w-0 flex-1">
                             <input
-                              type="text"
-                              value={area.name}
-                              onChange={(e) =>
-                                handleChangeCarpetAreaName(area.id, e.target.value)
-                              }
-                              placeholder="Nama ruangan (misal: Mushola)..."
-                              className="w-full px-2 py-1 text-xs font-semibold bg-white border border-slate-300 rounded-md focus:outline-none focus:border-amber-500"
+                              type="checkbox"
+                              checked={area.checked}
+                              onChange={() => handleToggleCarpetArea(area.id)}
+                              className="w-3.5 h-3.5 rounded border-slate-300 text-amber-500 focus:ring-amber-500/30 cursor-pointer shrink-0 accent-amber-500"
                             />
-                          ) : (
-                            <span
-                              onClick={() => handleToggleCarpetArea(area.id)}
-                              className={`truncate cursor-pointer select-none ${
-                                area.checked ? 'font-bold text-slate-900' : 'font-medium text-slate-700'
-                              }`}
-                            >
-                              {area.name}
-                            </span>
-                          )}
-                        </div>
-
-                        <div className="flex items-center gap-1.5 shrink-0">
-                          <div className="relative flex items-center w-24">
-                            <input
-                              type="number"
-                              min={0}
-                              step="any"
-                              value={area.areaSqm > 0 ? area.areaSqm : ''}
-                              onChange={(e) =>
-                                handleChangeCarpetAreaSqm(area.id, e.target.value)
-                              }
-                              placeholder="0"
-                              className="w-full pl-2.5 pr-7 py-1 text-xs font-bold text-right bg-white border border-slate-300 rounded-md tabular-nums focus:outline-none focus:border-amber-500"
-                            />
-                            <span className="absolute right-2 text-[10px] font-bold text-slate-400 pointer-events-none">
-                              m²
-                            </span>
+                            {area.isCustom ? (
+                              <input
+                                type="text"
+                                value={area.name}
+                                onChange={(e) =>
+                                  handleChangeCarpetAreaName(area.id, e.target.value)
+                                }
+                                placeholder="Nama ruangan (misal: Mushola)..."
+                                className="w-full px-2 py-1 text-xs font-semibold bg-white border border-slate-300 rounded-md focus:outline-none focus:border-amber-500"
+                              />
+                            ) : (
+                              <span
+                                onClick={() => handleToggleCarpetArea(area.id)}
+                                className={`truncate cursor-pointer select-none ${
+                                  area.checked ? 'font-bold text-slate-900' : 'font-medium text-slate-700'
+                                }`}
+                              >
+                                {area.name}
+                              </span>
+                            )}
                           </div>
-                          {area.isCustom && (
+
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <div className="relative flex items-center w-24">
+                              <input
+                                type="number"
+                                min={0}
+                                step="any"
+                                value={area.areaSqm > 0 ? area.areaSqm : ''}
+                                onChange={(e) =>
+                                  handleChangeCarpetAreaSqm(area.id, e.target.value)
+                                }
+                                placeholder="0"
+                                className="w-full pl-2.5 pr-7 py-1 text-xs font-bold text-right bg-white border border-slate-300 rounded-md tabular-nums focus:outline-none focus:border-amber-500"
+                              />
+                              <span className="absolute right-2 text-[10px] font-bold text-slate-400 pointer-events-none">
+                                m²
+                              </span>
+                            </div>
                             <button
                               type="button"
-                              onClick={() => handleRemoveCustomCarpetRoom(area.id)}
+                              onClick={() => handleRemoveCarpetRoom(area.id)}
                               className="p-1 rounded-md text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
-                              title="Hapus ruangan"
+                              title={`Hapus ${area.name || 'ruangan ini'}`}
+                              aria-label={`Hapus ${area.name || 'ruangan'}`}
                             >
                               <X className="w-3.5 h-3.5" />
                             </button>
-                          )}
+                          </div>
                         </div>
-                      </div>
-                    ))}
+                      ))
+                    )}
                   </div>
 
                   <div>
