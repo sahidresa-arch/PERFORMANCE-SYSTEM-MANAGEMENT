@@ -1057,7 +1057,8 @@ export const StorageService = {
     try {
       const stored: Outlet[] = JSON.parse(raw);
       let didMigrateClass = false;
-      // Synchronize studios, targetHead, umr, and class v3 from INITIAL_OUTLETS while preserving user edits
+      let didBackfillAddress = false;
+      // Synchronize studios, targetHead, umr, address, and class v3 from INITIAL_OUTLETS while preserving user edits
       const updatedList = stored.map((so) => {
         const init = INITIAL_OUTLETS.find((io) => io.id === so.id);
         if (init) {
@@ -1065,8 +1066,14 @@ export const StorageService = {
           if (shouldResetClass) {
             didMigrateClass = true;
           }
+          const resolvedAddress =
+            so.address && so.address.trim() ? so.address : init.address;
+          if (!so.address?.trim() && init.address) {
+            didBackfillAddress = true;
+          }
           return {
             ...so,
+            address: resolvedAddress,
             targetHead: !syncedOutletsV2
               ? init.targetHead
               : (so.targetHead !== undefined ? so.targetHead : init.targetHead),
@@ -1089,7 +1096,7 @@ export const StorageService = {
         (o) =>
           !['premiere-cibinong-xxi', 'premiere-living-world-kota-wisata-xxi', 'premiere-aeon-sentul-xxi'].includes(o.id)
       );
-      if (!syncedOutletsV2 || !classMigratedV3 || didMigrateClass || finalOutlets.length !== stored.length) {
+      if (!syncedOutletsV2 || !classMigratedV3 || didMigrateClass || didBackfillAddress || finalOutlets.length !== stored.length) {
         localStorage.setItem(KEYS.OUTLETS, JSON.stringify(finalOutlets));
         localStorage.setItem('cinema_xxi_outlets_target_synced_v2_db', 'true');
         localStorage.setItem('cinema_xxi_outlets_class_v3_migrated', 'true');

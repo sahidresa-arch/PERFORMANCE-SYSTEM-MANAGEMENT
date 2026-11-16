@@ -4,12 +4,10 @@ import {
   X,
   FileDown,
   MapPin,
-  Loader2,
   UserCheck,
   Building2,
   Plus,
   Trash2,
-  RefreshCw,
   PenTool,
   Eraser,
   Upload,
@@ -22,6 +20,7 @@ import {
   Outlet,
 } from '../../types';
 import { StorageService } from '../../lib/storage';
+import { INITIAL_OUTLETS } from '../../lib/constants';
 
 export interface BeritaAcaraStatusInfo {
   status: 'safe' | 'warning' | 'overdue' | 'empty';
@@ -83,16 +82,33 @@ function formatDateIndonesian(isoDate: string | null): string {
   return `${d} ${INDONESIAN_MONTHS[m - 1] || ''} ${y}`;
 }
 
-function buildOutletSearchQuery(outlet: Outlet): string {
-  const cleanName = (outlet.name || '').replace(/^(CAFE|HS)\s+/i, '').trim();
-  const savedAddr = (outlet.address || '').trim();
-  if (savedAddr) return `${cleanName}, ${savedAddr}`;
-  return cleanName || 'Cinema XXI Indonesia';
+function resolveOutletAddress(outlet: Outlet): string {
+  const direct = (outlet.address || '').trim();
+  if (direct) return direct;
+  const fallback = INITIAL_OUTLETS.find((o) => o.id === outlet.id)?.address;
+  return (fallback || '').trim();
 }
 
 function detectCity(address: string, outletName: string): string {
   const combined = `${address} ${outletName}`.toLowerCase();
-  if (combined.includes('depok') || combined.includes('sawangan') || combined.includes('margonda') || combined.includes('cinere') || combined.includes('pesona square') || combined.includes('margo') || combined.includes('tsm cibubur') || combined.includes('cibubur')) {
+  if (combined.includes('cianjur') || combined.includes('cipanas')) {
+    return 'Cianjur';
+  }
+  if (
+    combined.includes('depok') ||
+    combined.includes('sawangan') ||
+    combined.includes('margonda') ||
+    combined.includes('cinere') ||
+    combined.includes('pesona square') ||
+    combined.includes('margo') ||
+    combined.includes('cimanggis') ||
+    combined.includes('bojongsari') ||
+    combined.includes('beji') ||
+    combined.includes('sukmajaya') ||
+    combined.includes('pancoran mas') ||
+    combined.includes('tsm cibubur') ||
+    combined.includes('cibubur')
+  ) {
     return 'Depok';
   }
   return 'Bogor';
@@ -144,8 +160,7 @@ export const BeritaAcaraModal: React.FC<BeritaAcaraModalProps> = ({
   computedStatus,
 }) => {
   const [kopOutletName, setKopOutletName] = useState(displayName);
-  const [kopAddress, setKopAddress] = useState(outlet.address || '');
-  const [isLoadingAddress, setIsLoadingAddress] = useState(false);
+  const [kopAddress, setKopAddress] = useState(() => resolveOutletAddress(outlet));
   const [addressSourceNote, setAddressSourceNote] = useState<string>('');
 
   const [selectedManagerId, setSelectedManagerId] = useState<string>('');
@@ -153,7 +168,9 @@ export const BeritaAcaraModal: React.FC<BeritaAcaraModalProps> = ({
   const [managerJabatan, setManagerJabatan] = useState('Cinema Manager');
   const [outletFieldName, setOutletFieldName] = useState(displayName);
 
-  const [cityName, setCityName] = useState('Bogor');
+  const [cityName, setCityName] = useState(() =>
+    detectCity(resolveOutletAddress(outlet), displayName)
+  );
   const [letterDateStr, setLetterDateStr] = useState(() => formatTodayIndonesian());
   const [areaManagerName, setAreaManagerName] = useState('Bpk. Fachri');
   const [regionalManagerName, setRegionalManagerName] = useState('Bpk. Abdul Basit');
@@ -174,44 +191,6 @@ export const BeritaAcaraModal: React.FC<BeritaAcaraModalProps> = ({
     const all = StorageService.getEmployees();
     return findOutletManagers(outlet, all);
   }, [outlet]);
-
-  const fetchGoogleMapsAddress = async (signal?: AbortSignal) => {
-    setIsLoadingAddress(true);
-    setAddressSourceNote('');
-    try {
-      const q = buildOutletSearchQuery(outlet);
-      const res = await fetch(`/api/maps-place?q=${encodeURIComponent(q)}`, { signal });
-      const data = await res.json().catch(() => ({}));
-
-      if (res.status === 429 || data?.quotaExceeded) {
-        window.dispatchEvent(new CustomEvent('gmp-quota-exceeded'));
-      }
-
-      const resolvedAddr: string | undefined = data?.place?.formattedAddress;
-      if (res.ok && resolvedAddr) {
-        setKopAddress(resolvedAddr);
-        setCityName(detectCity(resolvedAddr, displayName));
-        setAddressSourceNote('Diambil otomatis dari Google Maps');
-      } else {
-        const fallback = (outlet.address || '').trim();
-        setKopAddress(fallback);
-        setCityName(detectCity(fallback, displayName));
-        setAddressSourceNote(
-          fallback
-            ? 'Menggunakan alamat database outlet (dapat diedit)'
-            : 'Alamat belum tersedia di Google Maps — silakan isi manual'
-        );
-      }
-    } catch (err: any) {
-      if (err?.name === 'AbortError') return;
-      const fallback = (outlet.address || '').trim();
-      setKopAddress(fallback);
-      setCityName(detectCity(fallback, displayName));
-      setAddressSourceNote('Gagal memuat Google Maps — silakan lengkapi alamat manual');
-    } finally {
-      setIsLoadingAddress(false);
-    }
-  };
 
   // Initialize state every time modal opens
   useEffect(() => {
@@ -295,8 +274,14 @@ export const BeritaAcaraModal: React.FC<BeritaAcaraModalProps> = ({
       }
     }
 
-    const controller = new AbortController();
-    fetchGoogleMapsAddress(controller.signal);
+    const resolvedAddr = resolveOutletAddress(outlet);
+    setKopAddress(resolvedAddr);
+    setCityName(detectCity(resolvedAddr, displayName));
+    setAddressSourceNote(
+      resolvedAddr
+        ? 'Alamat otomatis sesuai database outlet (dapat diedit manual)'
+        : 'Alamat outlet belum tersedia — silakan lengkapi manual'
+    );
 
     // Restore saved digital signature for this outlet if available
     try {
@@ -324,8 +309,6 @@ export const BeritaAcaraModal: React.FC<BeritaAcaraModalProps> = ({
     } catch {
       setSignatureDataUrl(null);
     }
-
-    return () => controller.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, outlet.id, category]);
 
@@ -834,19 +817,6 @@ export const BeritaAcaraModal: React.FC<BeritaAcaraModalProps> = ({
                   <Building2 className="w-3.5 h-3.5 text-amber-600" />
                   KOP Surat Outlet
                 </span>
-                <button
-                  type="button"
-                  onClick={() => fetchGoogleMapsAddress()}
-                  disabled={isLoadingAddress}
-                  className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-700 hover:text-amber-800 cursor-pointer disabled:opacity-50"
-                >
-                  {isLoadingAddress ? (
-                    <Loader2 className="w-3 h-3 animate-spin" />
-                  ) : (
-                    <RefreshCw className="w-3 h-3" />
-                  )}
-                  <span>Ambil dari Maps</span>
-                </button>
               </div>
 
               <div>
@@ -864,17 +834,13 @@ export const BeritaAcaraModal: React.FC<BeritaAcaraModalProps> = ({
               <div>
                 <label className="flex items-center gap-1 text-[11px] font-bold text-slate-600 mb-1">
                   <MapPin className="w-3 h-3 text-rose-500" />
-                  <span>Alamat Outlet (Otomatis Google Maps)</span>
+                  <span>Alamat Outlet (Kop Surat)</span>
                 </label>
                 <textarea
                   rows={2}
                   value={kopAddress}
                   onChange={(e) => setKopAddress(e.target.value)}
-                  placeholder={
-                    isLoadingAddress
-                      ? 'Mengambil alamat dari Google Maps...'
-                      : 'Masukkan alamat lengkap outlet...'
-                  }
+                  placeholder="Masukkan alamat lengkap outlet..."
                   className="w-full px-3 py-1.5 text-xs border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500"
                 />
                 {addressSourceNote && (
@@ -1088,13 +1054,13 @@ export const BeritaAcaraModal: React.FC<BeritaAcaraModalProps> = ({
               <div className="grid grid-cols-2 gap-2.5">
                 <div>
                   <label className="block text-[11px] font-bold text-slate-600 mb-1">
-                    Kota (Depok / Bogor)
+                    Kota (Depok / Bogor / Cianjur)
                   </label>
                   <input
                     type="text"
                     value={cityName}
                     onChange={(e) => setCityName(e.target.value)}
-                    placeholder="Depok / Bogor"
+                    placeholder="Depok / Bogor / Cianjur"
                     className="w-full px-2.5 py-1.5 text-xs border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500/30"
                   />
                 </div>
@@ -1215,9 +1181,7 @@ export const BeritaAcaraModal: React.FC<BeritaAcaraModalProps> = ({
                   {(kopOutletName || displayName).toUpperCase()}
                 </div>
                 <div className="text-[13px] sm:text-[13.5px] font-medium text-slate-700 mt-1">
-                  {isLoadingAddress && !kopAddress
-                    ? 'Memuat alamat dari Google Maps...'
-                    : kopAddress.trim() || 'Alamat outlet belum tersedia'}
+                  {kopAddress.trim() || 'Alamat outlet belum tersedia'}
                 </div>
               </div>
 
