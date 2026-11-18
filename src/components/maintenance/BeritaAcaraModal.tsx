@@ -65,9 +65,11 @@ interface CombinedDetailRow {
   seats: string;
 }
 
-function stripLuasPrefix(rawName: string, fallback = 'Area Karpet'): string {
-  const clean = (rawName || '').trim().replace(/^luas\s+/i, '').trim();
-  return clean || fallback;
+function formatBeritaCarpetLabel(rawName: string, fallback = 'Area Karpet'): string {
+  const noLuas = (rawName || '').trim().replace(/^luas\s+/i, '').trim();
+  if (!noLuas) return fallback;
+  const noKarpetStudio = noLuas.replace(/^karpet\s+(?=studio\b)/i, '').trim();
+  return noKarpetStudio || fallback;
 }
 
 function normalizeStudioMatchKey(name: string): string {
@@ -264,7 +266,7 @@ export const BeritaAcaraModal: React.FC<BeritaAcaraModalProps> = ({
       setManagerJabatan('Cinema Manager');
     }
 
-    // Build initial Karpet rows (tanpa kata "Luas")
+    // Build initial Karpet rows (tanpa kata "Luas", dan khusus Studio tanpa kata "Karpet")
     const buildCarpetRows = (): CarpetDetailRow[] => {
       const savedAreas = effectiveCarpetStatus.latestMonthEntry?.carpetAreas;
       if (Array.isArray(savedAreas) && savedAreas.length > 0) {
@@ -273,7 +275,7 @@ export const BeritaAcaraModal: React.FC<BeritaAcaraModalProps> = ({
           .filter((a) => Boolean(a.checked))
           .map((a, idx) => ({
             id: a.id || `carpet_checked_${idx}`,
-            label: stripLuasPrefix(a.name, 'Area Karpet'),
+            label: formatBeritaCarpetLabel(a.name, 'Area Karpet'),
             areaSqm: a.areaSqm > 0 ? String(a.areaSqm) : '',
           }));
       }
@@ -283,12 +285,10 @@ export const BeritaAcaraModal: React.FC<BeritaAcaraModalProps> = ({
         studios.length > 0
           ? studios.map((s, idx) => ({
               id: `karpet_studio_${idx + 1}`,
-              label: /^karpet\s+/i.test(stripLuasPrefix(s.name))
-                ? stripLuasPrefix(s.name)
-                : `Karpet ${stripLuasPrefix(s.name, `Studio ${idx + 1}`)}`,
+              label: formatBeritaCarpetLabel(s.name, `Studio ${idx + 1}`),
               areaSqm: '',
             }))
-          : [{ id: 'karpet_studio', label: 'Karpet Studio', areaSqm: '' }];
+          : [{ id: 'karpet_studio', label: 'Studio', areaSqm: '' }];
 
       return [
         ...studioRows,
@@ -824,7 +824,7 @@ export const BeritaAcaraModal: React.FC<BeritaAcaraModalProps> = ({
       doc.setFont('helvetica', 'bold');
       doc.setFontSize(10);
       doc.text(isKarpet ? 'Area / Bagian Karpet' : 'Studio / Area Kursi', marginX + 3, y + 5.5);
-      doc.text(isKarpet ? 'Luas (m²)' : 'Jumlah Kursi', marginX + col1W + col2W - 3, y + 5.5, {
+      doc.text(isKarpet ? 'Luas Karpet (m²)' : 'Jumlah Kursi', marginX + col1W + col2W - 3, y + 5.5, {
         align: 'right',
       });
       y += rowH;
@@ -858,8 +858,8 @@ export const BeritaAcaraModal: React.FC<BeritaAcaraModalProps> = ({
     };
 
     if (isGabungan) {
-      const col1W = contentWidth * 0.52;
-      const col2W = contentWidth * 0.24;
+      const col1W = contentWidth * 0.48;
+      const col2W = contentWidth * 0.27;
       const col3W = contentWidth - col1W - col2W;
       const rowH = 8;
 
@@ -873,7 +873,7 @@ export const BeritaAcaraModal: React.FC<BeritaAcaraModalProps> = ({
       doc.setFont('helvetica', 'bold');
       doc.setFontSize(10);
       doc.text('Area / Ruangan', marginX + 3, y + 5.5);
-      doc.text('Luas (m²)', marginX + col1W + col2W - 3, y + 5.5, { align: 'right' });
+      doc.text('Luas Karpet (m²)', marginX + col1W + col2W - 3, y + 5.5, { align: 'right' });
       doc.text('Jumlah Kursi', marginX + col1W + col2W + col3W - 3, y + 5.5, {
         align: 'right',
       });
@@ -1255,7 +1255,7 @@ export const BeritaAcaraModal: React.FC<BeritaAcaraModalProps> = ({
                     <>
                       <div className="grid grid-cols-12 gap-1.5 text-[10px] font-bold text-slate-500 px-0.5">
                         <div className="col-span-6">Area / Ruangan</div>
-                        <div className="col-span-3 text-right">Luas (m²)</div>
+                        <div className="col-span-3 text-right">Luas Karpet (m²)</div>
                         <div className="col-span-2 text-right">Kursi</div>
                         <div className="col-span-1" />
                       </div>
@@ -1680,10 +1680,10 @@ export const BeritaAcaraModal: React.FC<BeritaAcaraModalProps> = ({
                         <th className="border border-slate-300 px-3 py-1.5 text-left font-bold">
                           Area / Ruangan
                         </th>
-                        <th className="border border-slate-300 px-3 py-1.5 text-right font-bold w-28">
-                          Luas (m²)
+                        <th className="border border-slate-300 px-3 py-1.5 text-right font-bold w-36 whitespace-nowrap">
+                          Luas Karpet (m²)
                         </th>
-                        <th className="border border-slate-300 px-3 py-1.5 text-right font-bold w-32">
+                        <th className="border border-slate-300 px-3 py-1.5 text-right font-bold w-32 whitespace-nowrap">
                           Jumlah Kursi
                         </th>
                       </tr>
@@ -1722,8 +1722,8 @@ export const BeritaAcaraModal: React.FC<BeritaAcaraModalProps> = ({
                         <th className="border border-slate-300 px-3 py-1.5 text-left font-bold">
                           {isKarpet ? 'Area / Bagian Karpet' : 'Studio / Area Kursi'}
                         </th>
-                        <th className="border border-slate-300 px-3 py-1.5 text-right font-bold w-36">
-                          {isKarpet ? 'Luas (m²)' : 'Jumlah Kursi'}
+                        <th className="border border-slate-300 px-3 py-1.5 text-right font-bold w-40 whitespace-nowrap">
+                          {isKarpet ? 'Luas Karpet (m²)' : 'Jumlah Kursi'}
                         </th>
                       </tr>
                     </thead>
