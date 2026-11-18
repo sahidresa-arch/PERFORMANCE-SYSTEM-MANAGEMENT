@@ -26,7 +26,11 @@ import {
   MaintenanceScheduleRecord,
 } from '../../types';
 import { StorageService } from '../../lib/storage';
-import { BeritaAcaraModal, BeritaAcaraStatusInfo } from './BeritaAcaraModal';
+import {
+  BeritaAcaraModal,
+  BeritaAcaraMode,
+  BeritaAcaraStatusInfo,
+} from './BeritaAcaraModal';
 
 interface MaintenanceScheduleViewProps {
   currentUser: User;
@@ -150,6 +154,70 @@ interface ComputedOutletMaintenanceStatus {
   latestMonthEntry: MaintenanceMonthEntry | null;
 }
 
+function computeOutletCategoryStatus(
+  outlet: Outlet,
+  outletClass: 'A' | 'B' | 'C',
+  category: MaintenanceCategory,
+  records: MaintenanceScheduleRecord[],
+  todayStr: string
+): ComputedOutletMaintenanceStatus {
+  const sopDays = getSopDays(category, outletClass);
+  const threshold = getAlarmThresholdDays(category);
+
+  const allCategoryRecords = records.filter(
+    (r) => r.outletId === outlet.id && r.category === category
+  );
+
+  let latestEntry: MaintenanceMonthEntry | null = null;
+  allCategoryRecords.forEach((rec) => {
+    Object.values(rec.months || {}).forEach((entry) => {
+      if (entry && entry.date) {
+        if (!latestEntry || entry.date >= latestEntry.date) {
+          latestEntry = entry;
+        }
+      }
+    });
+  });
+
+  if (!latestEntry || !(latestEntry as MaintenanceMonthEntry).date) {
+    return {
+      status: 'empty',
+      lastDate: null,
+      expDate: null,
+      sopDays,
+      daysRemaining: 0,
+      daysElapsed: 0,
+      latestMonthEntry: null,
+    };
+  }
+
+  const validEntry = latestEntry as MaintenanceMonthEntry;
+  const lastDate = validEntry.date;
+  const expDate =
+    validEntry.customExpiryDate && validEntry.customExpiryDate.trim()
+      ? validEntry.customExpiryDate.trim()
+      : addDaysToDateString(lastDate, sopDays);
+  const daysRemaining = diffDaysBetween(todayStr, expDate);
+  const daysElapsed = diffDaysBetween(lastDate, todayStr);
+
+  let status: SopStatusType = 'safe';
+  if (daysRemaining < 0) {
+    status = 'overdue';
+  } else if (daysRemaining <= threshold) {
+    status = 'warning';
+  }
+
+  return {
+    status,
+    lastDate,
+    expDate,
+    sopDays,
+    daysRemaining,
+    daysElapsed,
+    latestMonthEntry: validEntry,
+  };
+}
+
 export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = ({
   currentUser,
   activeMenu,
@@ -190,11 +258,22 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
   } | null>(null);
   const [keteranganText, setKeteranganText] = useState('');
 
-  // Modal Berita Acara Pengajuan Pencucian (Karpet / Kursi Studio)
+  // Modal Pilihan Jenis Berita Acara (Tunggal vs Gabungan Karpet & Kursi)
+  const [beritaAcaraChooser, setBeritaAcaraChooser] = useState<{
+    outlet: Outlet;
+    displayName: string;
+    carpetStatus: BeritaAcaraStatusInfo;
+    chairStatus: BeritaAcaraStatusInfo;
+  } | null>(null);
+
+  // Modal Berita Acara Pengajuan Pencucian (Karpet / Kursi Studio / Gabungan)
   const [beritaAcaraTarget, setBeritaAcaraTarget] = useState<{
     outlet: Outlet;
     displayName: string;
     computedStatus: BeritaAcaraStatusInfo;
+    carpetStatus: BeritaAcaraStatusInfo;
+    chairStatus: BeritaAcaraStatusInfo;
+    initialMode: BeritaAcaraMode;
   } | null>(null);
 
   // Determine active category from activeMenu & sub-tab
@@ -318,11 +397,7 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
   const todayStr = getTodayDateStr();
 
   const outletRows = useMemo(() => {
-    const threshold = getAlarmThresholdDays(activeCategory);
-
     return visibleOutlets.map(({ outlet, displayName, outletClass }) => {
-      const sopDays = getSopDays(activeCategory, outletClass);
-
       // Current year record
       const currentYearRec = records.find(
         (r) =>
@@ -338,60 +413,13 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
         keterangan: '',
       };
 
-      // Find latest entry across all records of this outlet & category (prioritizing selectedYear and historical years)
-      const allCategoryRecords = records.filter(
-        (r) => r.outletId === outlet.id && r.category === activeCategory
+      const computedStatus = computeOutletCategoryStatus(
+        outlet,
+        outletClass,
+        activeCategory,
+        records,
+        todayStr
       );
-
-      let latestEntry: MaintenanceMonthEntry | null = null;
-      allCategoryRecords.forEach((rec) => {
-        Object.values(rec.months || {}).forEach((entry) => {
-          if (entry && entry.date) {
-            if (!latestEntry || entry.date >= latestEntry.date) {
-              latestEntry = entry;
-            }
-          }
-        });
-      });
-
-      let computedStatus: ComputedOutletMaintenanceStatus;
-      if (!latestEntry || !(latestEntry as MaintenanceMonthEntry).date) {
-        computedStatus = {
-          status: 'empty',
-          lastDate: null,
-          expDate: null,
-          sopDays,
-          daysRemaining: 0,
-          daysElapsed: 0,
-          latestMonthEntry: null,
-        };
-      } else {
-        const validEntry = latestEntry as MaintenanceMonthEntry;
-        const lastDate = validEntry.date;
-        const expDate =
-          validEntry.customExpiryDate && validEntry.customExpiryDate.trim()
-            ? validEntry.customExpiryDate.trim()
-            : addDaysToDateString(lastDate, sopDays);
-        const daysRemaining = diffDaysBetween(todayStr, expDate);
-        const daysElapsed = diffDaysBetween(lastDate, todayStr);
-
-        let status: SopStatusType = 'safe';
-        if (daysRemaining < 0) {
-          status = 'overdue';
-        } else if (daysRemaining <= threshold) {
-          status = 'warning';
-        }
-
-        computedStatus = {
-          status,
-          lastDate,
-          expDate,
-          sopDays,
-          daysRemaining,
-          daysElapsed,
-          latestMonthEntry: validEntry,
-        };
-      }
 
       return {
         outlet,
@@ -402,6 +430,33 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
       };
     });
   }, [visibleOutlets, records, activeCategory, selectedYear, todayStr]);
+
+  const handleRequestBeritaAcara = (
+    outlet: Outlet,
+    displayName: string,
+    outletClass: 'A' | 'B' | 'C'
+  ) => {
+    const carpetStatus = computeOutletCategoryStatus(
+      outlet,
+      outletClass,
+      'karpet',
+      records,
+      todayStr
+    );
+    const chairStatus = computeOutletCategoryStatus(
+      outlet,
+      outletClass,
+      'kursi_studio',
+      records,
+      todayStr
+    );
+    setBeritaAcaraChooser({
+      outlet,
+      displayName,
+      carpetStatus,
+      chairStatus,
+    });
+  };
 
   // Summary counts for alarm banner & legend badges
   const statusCounts = useMemo(() => {
@@ -1321,14 +1376,14 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
                                 <button
                                   type="button"
                                   onClick={() =>
-                                    setBeritaAcaraTarget({
+                                    handleRequestBeritaAcara(
                                       outlet,
                                       displayName,
-                                      computedStatus,
-                                    })
+                                      outletClass
+                                    )
                                   }
                                   className="inline-flex items-center justify-center gap-1 px-2.5 py-1 rounded-lg text-[10px] font-extrabold bg-slate-900 hover:bg-slate-800 text-amber-300 border border-slate-700 shadow-2xs w-full max-w-[175px] transition-colors cursor-pointer"
-                                  title="Buat & download PDF Berita Acara Pengajuan Pencucian"
+                                  title="Buat Berita Acara (Tunggal atau Gabungan Karpet & Kursi)"
                                 >
                                   <FileText className="w-3 h-3 shrink-0" />
                                   <span className="truncate">Buat Berita Acara</span>
@@ -1353,14 +1408,14 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
                                 <button
                                   type="button"
                                   onClick={() =>
-                                    setBeritaAcaraTarget({
+                                    handleRequestBeritaAcara(
                                       outlet,
                                       displayName,
-                                      computedStatus,
-                                    })
+                                      outletClass
+                                    )
                                   }
                                   className="inline-flex items-center justify-center gap-1 px-2.5 py-1 rounded-lg text-[10px] font-extrabold bg-slate-900 hover:bg-slate-800 text-amber-300 border border-slate-700 shadow-2xs w-full max-w-[175px] transition-colors cursor-pointer"
-                                  title="Buat & download PDF Berita Acara Pengajuan Pencucian"
+                                  title="Buat Berita Acara (Tunggal atau Gabungan Karpet & Kursi)"
                                 >
                                   <FileText className="w-3 h-3 shrink-0" />
                                   <span className="truncate">Buat Berita Acara</span>
@@ -1873,7 +1928,152 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
           </div>
         </div>
       )}
-      {/* Modal Berita Acara Pengajuan Pencucian Karpet / Kursi */}
+      {/* Modal Pilihan Jenis Berita Acara (Tunggal vs Gabungan Karpet & Kursi) */}
+      {beritaAcaraChooser &&
+        (activeCategory === 'kursi_studio' || activeCategory === 'karpet') && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 backdrop-blur-xs p-4">
+            <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl w-full max-w-md overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+              <div className="px-5 py-4 bg-slate-900 text-white flex items-center justify-between">
+                <div>
+                  <span className="text-[10px] font-bold text-amber-400 uppercase tracking-wider">
+                    PILIH JENIS BERITA ACARA
+                  </span>
+                  <h3 className="text-sm font-extrabold uppercase mt-0.5">
+                    {beritaAcaraChooser.displayName}
+                  </h3>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setBeritaAcaraChooser(null)}
+                  className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="p-5 space-y-3">
+                {/* Ringkasan Status SOP kedua kategori */}
+                <div className="grid grid-cols-2 gap-2 text-[11px]">
+                  <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-200">
+                    <div className="font-bold text-slate-500 uppercase text-[10px]">
+                      Status Karpet
+                    </div>
+                    <div
+                      className={`font-extrabold mt-0.5 ${
+                        beritaAcaraChooser.carpetStatus.status === 'overdue'
+                          ? 'text-rose-600'
+                          : beritaAcaraChooser.carpetStatus.status === 'warning'
+                          ? 'text-amber-700'
+                          : beritaAcaraChooser.carpetStatus.status === 'safe'
+                          ? 'text-emerald-700'
+                          : 'text-slate-400'
+                      }`}
+                    >
+                      {beritaAcaraChooser.carpetStatus.status === 'overdue'
+                        ? `Lewat ${Math.abs(beritaAcaraChooser.carpetStatus.daysRemaining)} hari`
+                        : beritaAcaraChooser.carpetStatus.status === 'warning' ||
+                          beritaAcaraChooser.carpetStatus.status === 'safe'
+                        ? `Sisa ${beritaAcaraChooser.carpetStatus.daysRemaining} hari`
+                        : 'Belum ada riwayat'}
+                    </div>
+                  </div>
+                  <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-200">
+                    <div className="font-bold text-slate-500 uppercase text-[10px]">
+                      Status Kursi Studio
+                    </div>
+                    <div
+                      className={`font-extrabold mt-0.5 ${
+                        beritaAcaraChooser.chairStatus.status === 'overdue'
+                          ? 'text-rose-600'
+                          : beritaAcaraChooser.chairStatus.status === 'warning'
+                          ? 'text-amber-700'
+                          : beritaAcaraChooser.chairStatus.status === 'safe'
+                          ? 'text-emerald-700'
+                          : 'text-slate-400'
+                      }`}
+                    >
+                      {beritaAcaraChooser.chairStatus.status === 'overdue'
+                        ? `Lewat ${Math.abs(beritaAcaraChooser.chairStatus.daysRemaining)} hari`
+                        : beritaAcaraChooser.chairStatus.status === 'warning' ||
+                          beritaAcaraChooser.chairStatus.status === 'safe'
+                        ? `Sisa ${beritaAcaraChooser.chairStatus.daysRemaining} hari`
+                        : 'Belum ada riwayat'}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Pilihan 1: Tunggal sesuai tab aktif */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    const target = beritaAcaraChooser;
+                    const singleMode: BeritaAcaraMode = activeCategory;
+                    const singleStatus =
+                      activeCategory === 'karpet'
+                        ? target.carpetStatus
+                        : target.chairStatus;
+                    setBeritaAcaraChooser(null);
+                    setBeritaAcaraTarget({
+                      outlet: target.outlet,
+                      displayName: target.displayName,
+                      computedStatus: singleStatus,
+                      carpetStatus: target.carpetStatus,
+                      chairStatus: target.chairStatus,
+                      initialMode: singleMode,
+                    });
+                  }}
+                  className="w-full text-left p-3.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 hover:border-slate-300 transition-colors cursor-pointer"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-extrabold text-slate-900">
+                      Berita Acara{' '}
+                      {activeCategory === 'karpet' ? 'Karpet Saja' : 'Kursi Studio Saja'}
+                    </span>
+                    <ChevronRight className="w-4 h-4 text-slate-400 shrink-0" />
+                  </div>
+                  <p className="text-[11px] text-slate-500 mt-0.5">
+                    Buat pengajuan pencucian khusus{' '}
+                    {activeCategory === 'karpet' ? 'karpet outlet' : 'kursi studio'}.
+                  </p>
+                </button>
+
+                {/* Pilihan 2: Berita Acara Gabungan (Karpet & Kursi) */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    const target = beritaAcaraChooser;
+                    const primaryStatus =
+                      activeCategory === 'karpet'
+                        ? target.carpetStatus
+                        : target.chairStatus;
+                    setBeritaAcaraChooser(null);
+                    setBeritaAcaraTarget({
+                      outlet: target.outlet,
+                      displayName: target.displayName,
+                      computedStatus: primaryStatus,
+                      carpetStatus: target.carpetStatus,
+                      chairStatus: target.chairStatus,
+                      initialMode: 'gabungan',
+                    });
+                  }}
+                  className="w-full text-left p-3.5 rounded-xl border-2 border-amber-400 bg-amber-50/80 hover:bg-amber-100/80 transition-colors cursor-pointer shadow-2xs"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-extrabold text-slate-950">
+                      Create Berita Acara Gabungan (Karpet &amp; Kursi)
+                    </span>
+                    <ChevronRight className="w-4 h-4 text-amber-700 shrink-0" />
+                  </div>
+                  <p className="text-[11px] text-amber-900/90 mt-0.5">
+                    Gabungkan pengajuan pencucian karpet &amp; kursi studio dalam 1 surat lengkap dengan kolom <strong>Luas (m²)</strong> dan <strong>Jumlah Kursi</strong>.
+                  </p>
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+      {/* Modal Berita Acara Pengajuan Pencucian Karpet / Kursi / Gabungan */}
       {beritaAcaraTarget &&
         (activeCategory === 'kursi_studio' || activeCategory === 'karpet') && (
           <BeritaAcaraModal
@@ -1883,6 +2083,9 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
             displayName={beritaAcaraTarget.displayName}
             category={activeCategory}
             computedStatus={beritaAcaraTarget.computedStatus}
+            carpetStatus={beritaAcaraTarget.carpetStatus}
+            chairStatus={beritaAcaraTarget.chairStatus}
+            initialMode={beritaAcaraTarget.initialMode}
           />
         )}
     </div>

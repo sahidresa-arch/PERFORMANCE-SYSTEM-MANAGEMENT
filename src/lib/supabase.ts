@@ -2194,11 +2194,14 @@ export async function mergeRemoteEmployeesToLocal(): Promise<boolean> {
       return false;
     }
 
+    const delUpdatedMs = delRow?.updated_at ? new Date(String(delRow.updated_at)).getTime() : 0;
+    const isSupersededByNewerEdit = (emp: Employee | undefined): boolean => {
+      if (!emp) return false;
+      const empMs = (emp as any).updatedAt ? new Date(String((emp as any).updatedAt)).getTime() : 0;
+      return empMs > 0 && (delUpdatedMs === 0 || empMs > delUpdatedMs);
+    };
+
     const mergedDeletedSet = new Set<string>([...localDeletedIds, ...remoteDeletedIds]);
-    const mergedDeletedList = Array.from(mergedDeletedSet);
-    if (mergedDeletedList.length !== localDeletedIds.length) {
-      localStorage.setItem('cinema_xxi_deleted_employee_ids', JSON.stringify(mergedDeletedList));
-    }
 
     const localById = new Map<string, Employee>();
     const localByNik = new Map<string, Employee>();
@@ -2206,7 +2209,14 @@ export async function mergeRemoteEmployeesToLocal(): Promise<boolean> {
       if (le && le.id) localById.set(le.id, le);
       const cleanNik = le?.nik ? le.nik.trim() : '';
       if (cleanNik && cleanNik !== '-') localByNik.set(cleanNik, le);
+      if (isSupersededByNewerEdit(le)) {
+        mergedDeletedSet.delete(le.id);
+        if (cleanNik && cleanNik !== '-') mergedDeletedSet.delete(cleanNik);
+      }
     });
+
+    const mergedDeletedList = Array.from(mergedDeletedSet);
+    localStorage.setItem('cinema_xxi_deleted_employee_ids', JSON.stringify(mergedDeletedList));
 
     const mergedList: Employee[] = [];
     const seenIds = new Set<string>();
@@ -2215,11 +2225,16 @@ export async function mergeRemoteEmployeesToLocal(): Promise<boolean> {
     for (const rem of remoteEmployees) {
       if (!rem || !rem.id) continue;
       const cleanNik = rem.nik ? rem.nik.trim() : '';
-      if (mergedDeletedSet.has(rem.id) || (cleanNik && mergedDeletedSet.has(cleanNik))) {
+      const loc = localById.get(rem.id) || (cleanNik ? localByNik.get(cleanNik) : undefined);
+
+      if (
+        (mergedDeletedSet.has(rem.id) || (cleanNik && mergedDeletedSet.has(cleanNik))) &&
+        !isSupersededByNewerEdit(rem) &&
+        !isSupersededByNewerEdit(loc)
+      ) {
         continue;
       }
 
-      const loc = localById.get(rem.id) || (cleanNik ? localByNik.get(cleanNik) : undefined);
       let chosen: Employee = { ...rem };
 
       if (loc) {
@@ -2247,7 +2262,10 @@ export async function mergeRemoteEmployeesToLocal(): Promise<boolean> {
     for (const loc of localEmployees) {
       if (!loc || !loc.id) continue;
       const cleanNik = loc.nik ? loc.nik.trim() : '';
-      if (mergedDeletedSet.has(loc.id) || (cleanNik && mergedDeletedSet.has(cleanNik))) {
+      if (
+        (mergedDeletedSet.has(loc.id) || (cleanNik && mergedDeletedSet.has(cleanNik))) &&
+        !isSupersededByNewerEdit(loc)
+      ) {
         continue;
       }
       const alreadyIncluded =

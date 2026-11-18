@@ -28,6 +28,7 @@ const MERGE_BY_ID_ROWS = new Set([
   '__SYSTEM_SYNC_INSPECTIONS__',
   '__SYSTEM_SYNC_INSPECTIONS_DELTA__',
   '__SYSTEM_SYNC_BAKING_SALES__',
+  '__SYSTEM_SYNC_EMPLOYEES__',
   '__SYSTEM_SYNC_EMPLOYEE_KPIS__',
   '__SYSTEM_SYNC_SDM_PERFORMANCE__',
   '__SYSTEM_SYNC_SDM_PRODUCTS__',
@@ -132,7 +133,11 @@ function smartMergeSalesRow(existingRow: any, incomingRow: any): any {
       const key = getCanonicalKey(item);
       if (key) {
         const prev = mergedMap.get(key);
-        if (!prev || isNewerOrEqualIso(item.updatedAt || incomingRow.updated_at, prev.updatedAt)) {
+        const incomingTs =
+          rowId === '__SYSTEM_SYNC_EMPLOYEES__'
+            ? item.updatedAt
+            : item.updatedAt || incomingRow.updated_at;
+        if (!prev || isNewerOrEqualIso(incomingTs, prev.updatedAt)) {
           mergedMap.set(key, isInspectionRow ? { ...item, id: key, showNumber: Number(item.showNumber) || 1 } : item);
         }
       }

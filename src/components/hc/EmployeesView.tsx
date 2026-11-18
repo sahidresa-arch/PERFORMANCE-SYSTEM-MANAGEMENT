@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import * as XLSX from 'xlsx';
 import { User, Outlet, Employee } from '../../types';
 import { StorageService } from '../../lib/storage';
@@ -18,6 +18,7 @@ import {
   X,
   AlertTriangle,
   Award,
+  Briefcase,
   CheckCircle2,
   ArrowRightLeft,
   UserX,
@@ -62,6 +63,7 @@ export const EmployeesView: React.FC<EmployeesViewProps> = ({ currentUser, selec
   const [selectedAreaId, setSelectedAreaId] = useState<string>('all');
   const [selectedOutletId, setSelectedOutletId] = useState<string>('all');
   const [selectedDivisi, setSelectedDivisi] = useState<string>('all');
+  const [selectedJabatan, setSelectedJabatan] = useState<string>('all');
   const [selectedSisaKontrak, setSelectedSisaKontrak] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState<string>('');
 
@@ -136,6 +138,41 @@ export const EmployeesView: React.FC<EmployeesViewProps> = ({ currentUser, selec
     return true;
   });
 
+  const availableJabatanOptions = useMemo(() => {
+    const set = new Set<string>();
+    employees.forEach((emp) => {
+      if (isManagerOrCleaner && emp.outletId !== currentUser?.outletId) return;
+      if (selectedAreaId !== 'all') {
+        const outletObj = outlets.find((o) => o.id === emp.outletId);
+        if (outletObj?.areaId !== selectedAreaId) return;
+      }
+      if (selectedOutletId !== 'all' && emp.outletId !== selectedOutletId) return;
+      if (
+        selectedDivisi !== 'all' &&
+        (emp.divisi || '').trim().toLowerCase() !== selectedDivisi.toLowerCase()
+      ) {
+        return;
+      }
+      const jab = (emp.jabatan || '').trim();
+      if (jab) set.add(jab);
+    });
+    return Array.from(set).sort((a, b) => a.localeCompare(b, 'id'));
+  }, [
+    employees,
+    outlets,
+    isManagerOrCleaner,
+    currentUser?.outletId,
+    selectedAreaId,
+    selectedOutletId,
+    selectedDivisi,
+  ]);
+
+  useEffect(() => {
+    if (selectedJabatan !== 'all' && !availableJabatanOptions.includes(selectedJabatan)) {
+      setSelectedJabatan('all');
+    }
+  }, [availableJabatanOptions, selectedJabatan]);
+
   const filteredEmployees = employees.filter((emp) => {
     if (isManagerOrCleaner && emp.outletId !== currentUser.outletId) {
       return false;
@@ -145,7 +182,15 @@ export const EmployeesView: React.FC<EmployeesViewProps> = ({ currentUser, selec
       if (outletObj?.areaId !== selectedAreaId) return false;
     }
     if (selectedOutletId !== 'all' && emp.outletId !== selectedOutletId) return false;
-    if (selectedDivisi !== 'all' && emp.divisi !== selectedDivisi) return false;
+    if (
+      selectedDivisi !== 'all' &&
+      (emp.divisi || '').trim().toLowerCase() !== selectedDivisi.toLowerCase()
+    ) {
+      return false;
+    }
+    if (selectedJabatan !== 'all' && (emp.jabatan || '').trim() !== selectedJabatan) {
+      return false;
+    }
 
     // Filter Sisa Kontrak < 3 Bulan
     if (selectedSisaKontrak === 'under3months') {
@@ -277,6 +322,7 @@ export const EmployeesView: React.FC<EmployeesViewProps> = ({ currentUser, selec
     e.preventDefault();
     if (!mutasiEmployee || !mutasiTargetOutletId) return;
 
+    const fromOutletObj = outlets.find((o) => o.id === mutasiEmployee.outletId);
     const targetOutletObj = outlets.find((o) => o.id === mutasiTargetOutletId);
     const updatedRecord: Employee = {
       ...mutasiEmployee,
@@ -286,8 +332,23 @@ export const EmployeesView: React.FC<EmployeesViewProps> = ({ currentUser, selec
     const updatedList = StorageService.saveEmployee(updatedRecord);
     setEmployees(updatedList);
     setIsMutasiModalOpen(false);
+
+    // Pastikan karyawan yang baru dimutasi tidak mendadak hilang dari tabel akibat filter Area/Outlet lama
+    if (!isManagerOrCleaner) {
+      if (
+        selectedAreaId !== 'all' &&
+        targetOutletObj &&
+        targetOutletObj.areaId !== selectedAreaId
+      ) {
+        setSelectedAreaId(targetOutletObj.areaId);
+      }
+      if (selectedOutletId !== 'all' && selectedOutletId !== mutasiTargetOutletId) {
+        setSelectedOutletId(mutasiTargetOutletId);
+      }
+    }
+
     showToast(
-      `Mutasi Berhasil: Karyawan ${mutasiEmployee.name} dimutasi ke outlet ${targetOutletObj?.name || mutasiTargetOutletId} efektif per ${mutasiDate}.`
+      `Mutasi Berhasil: ${mutasiEmployee.name} dipindahkan dari ${fromOutletObj?.name || mutasiEmployee.outletId} ke ${targetOutletObj?.name || mutasiTargetOutletId} (efektif ${mutasiDate}).`
     );
   };
 
@@ -387,6 +448,7 @@ export const EmployeesView: React.FC<EmployeesViewProps> = ({ currentUser, selec
     const areaName = selectedAreaId === 'all' ? 'Semua Wilayah' : (areas.find((a) => a.id === selectedAreaId)?.name || 'Area');
     const outletName = selectedOutletId === 'all' ? 'Semua Outlet' : (outlets.find((o) => o.id === selectedOutletId)?.name || 'Outlet');
     const divisiName = selectedDivisi === 'all' ? 'Semua Divisi' : selectedDivisi;
+    const jabatanName = selectedJabatan === 'all' ? 'Semua Jabatan' : selectedJabatan;
     const sisaKontrakName = selectedSisaKontrak === 'all' ? 'Semua Status Kontrak' : selectedSisaKontrak === 'under3months' ? 'Sisa Kontrak < 3 Bulan' : 'Habis Masa Kontrak';
 
     const areaLabel = areaName.replace(/[^a-zA-Z0-9]/g, '_');
@@ -395,7 +457,7 @@ export const EmployeesView: React.FC<EmployeesViewProps> = ({ currentUser, selec
 
     exportToPrettyExcel({
       title: 'CINEMA XXI - DATABASE DATA KARYAWAN OPERASIONAL',
-      subtitle: `Wilayah: ${areaName} | Outlet: ${outletName} | Divisi: ${divisiName}`,
+      subtitle: `Wilayah: ${areaName} | Outlet: ${outletName} | Divisi: ${divisiName} | Jabatan: ${jabatanName}`,
       metaInfo: `Filter Sisa Kontrak: ${sisaKontrakName} | Total Karyawan: ${dataToExport.length} Orang`,
       sheetName: 'Data Karyawan',
       filename,
@@ -463,14 +525,23 @@ export const EmployeesView: React.FC<EmployeesViewProps> = ({ currentUser, selec
       )}
 
       {/* Filters & Search Bar */}
-      <div className="bg-white rounded-2xl p-4 shadow-sm border border-slate-200 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-4 items-center">
+      <div className="bg-white rounded-2xl p-4 shadow-sm border border-slate-200 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-7 gap-3 items-center">
         <div className="space-y-1">
           <label className="block text-[11px] font-bold text-slate-500 uppercase flex items-center">
             <Filter className="w-3 h-3 text-purple-600 mr-1" /> Wilayah (Area)
           </label>
           <select
             value={selectedAreaId}
-            onChange={(e) => setSelectedAreaId(e.target.value)}
+            onChange={(e) => {
+              const nextAreaId = e.target.value;
+              setSelectedAreaId(nextAreaId);
+              if (nextAreaId !== 'all' && selectedOutletId !== 'all') {
+                const curOutlet = outlets.find((o) => o.id === selectedOutletId);
+                if (curOutlet && curOutlet.areaId !== nextAreaId) {
+                  setSelectedOutletId('all');
+                }
+              }
+            }}
             className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-purple-500 cursor-pointer"
           >
             <option value="all">Semua Area</option>
@@ -512,11 +583,24 @@ export const EmployeesView: React.FC<EmployeesViewProps> = ({ currentUser, selec
             <option value="all">Semua Divisi</option>
             <option value="Cinema">Cinema</option>
             <option value="F&B">F&B</option>
-            <option value="Kasir">Kasir</option>
-            <option value="Teknisi">Teknisi</option>
-            <option value="Cleaning">Cleaning</option>
-            <option value="Admin">Admin</option>
-            <option value="Manager">Manager</option>
+          </select>
+        </div>
+
+        <div className="space-y-1">
+          <label className="block text-[11px] font-bold text-slate-500 uppercase flex items-center">
+            <Briefcase className="w-3 h-3 text-purple-600 mr-1" /> Jabatan
+          </label>
+          <select
+            value={selectedJabatan}
+            onChange={(e) => setSelectedJabatan(e.target.value)}
+            className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-purple-500 cursor-pointer"
+          >
+            <option value="all">Semua Jabatan ({availableJabatanOptions.length})</option>
+            {availableJabatanOptions.map((jab) => (
+              <option key={jab} value={jab}>
+                {jab}
+              </option>
+            ))}
           </select>
         </div>
 
@@ -540,7 +624,7 @@ export const EmployeesView: React.FC<EmployeesViewProps> = ({ currentUser, selec
           </select>
         </div>
 
-        <div className="space-y-1 sm:col-span-2">
+        <div className="space-y-1 xl:col-span-2">
           <label className="block text-[11px] font-bold text-slate-500 uppercase flex items-center">
             <Search className="w-3 h-3 text-purple-600 mr-1" /> Cari NIK / Nama / Jabatan
           </label>
@@ -840,11 +924,9 @@ export const EmployeesView: React.FC<EmployeesViewProps> = ({ currentUser, selec
                   >
                     <option value="Cinema">Cinema</option>
                     <option value="F&B">F&B</option>
-                    <option value="Kasir">Kasir</option>
-                    <option value="Teknisi">Teknisi</option>
-                    <option value="Cleaning">Cleaning</option>
-                    <option value="Admin">Admin</option>
-                    <option value="Manager">Manager</option>
+                    {formData.divisi && formData.divisi !== 'Cinema' && formData.divisi !== 'F&B' && (
+                      <option value={formData.divisi}>{formData.divisi}</option>
+                    )}
                   </select>
                 </div>
 

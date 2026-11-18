@@ -22,6 +22,8 @@ import {
 import { StorageService } from '../../lib/storage';
 import { INITIAL_OUTLETS } from '../../lib/constants';
 
+export type BeritaAcaraMode = 'kursi_studio' | 'karpet' | 'gabungan';
+
 export interface BeritaAcaraStatusInfo {
   status: 'safe' | 'warning' | 'overdue' | 'empty';
   lastDate: string | null;
@@ -39,6 +41,9 @@ interface BeritaAcaraModalProps {
   displayName: string;
   category: Extract<MaintenanceCategory, 'kursi_studio' | 'karpet'>;
   computedStatus: BeritaAcaraStatusInfo;
+  carpetStatus?: BeritaAcaraStatusInfo;
+  chairStatus?: BeritaAcaraStatusInfo;
+  initialMode?: BeritaAcaraMode;
 }
 
 interface CarpetDetailRow {
@@ -51,6 +56,25 @@ interface ChairDetailRow {
   id: string;
   studioName: string;
   seats: string;
+}
+
+interface CombinedDetailRow {
+  id: string;
+  label: string;
+  areaSqm: string;
+  seats: string;
+}
+
+function stripLuasPrefix(rawName: string, fallback = 'Area Karpet'): string {
+  const clean = (rawName || '').trim().replace(/^luas\s+/i, '').trim();
+  return clean || fallback;
+}
+
+function normalizeStudioMatchKey(name: string): string {
+  const lower = (name || '').toLowerCase();
+  const numMatch = lower.match(/studio\s*(\d+)/);
+  if (numMatch) return `studio_${numMatch[1]}`;
+  return lower.replace(/^luas\s+/i, '').replace(/^karpet\s+/i, '').trim();
 }
 
 const INDONESIAN_MONTHS = [
@@ -158,7 +182,13 @@ export const BeritaAcaraModal: React.FC<BeritaAcaraModalProps> = ({
   displayName,
   category,
   computedStatus,
+  carpetStatus,
+  chairStatus,
+  initialMode,
 }) => {
+  const [activeMode, setActiveMode] = useState<BeritaAcaraMode>(
+    initialMode || category
+  );
   const [kopOutletName, setKopOutletName] = useState(displayName);
   const [kopAddress, setKopAddress] = useState(() => resolveOutletAddress(outlet));
   const [addressSourceNote, setAddressSourceNote] = useState<string>('');
@@ -177,6 +207,7 @@ export const BeritaAcaraModal: React.FC<BeritaAcaraModalProps> = ({
 
   const [carpetRows, setCarpetRows] = useState<CarpetDetailRow[]>([]);
   const [chairRows, setChairRows] = useState<ChairDetailRow[]>([]);
+  const [combinedRows, setCombinedRows] = useState<CombinedDetailRow[]>([]);
   const [additionalNote, setAdditionalNote] = useState('');
 
   // Tanda Tangan Digital (khusus Yang membuat / Cinema Manager)
@@ -187,6 +218,23 @@ export const BeritaAcaraModal: React.FC<BeritaAcaraModalProps> = ({
   const hasDrawnStrokeRef = useRef(false);
   const sigStorageKey = `ba_manager_signature_${outlet.id}`;
 
+  const emptyStatusFallback: BeritaAcaraStatusInfo = {
+    status: 'empty',
+    lastDate: null,
+    expDate: null,
+    sopDays: 0,
+    daysRemaining: 0,
+    daysElapsed: 0,
+    latestMonthEntry: null,
+  };
+
+  const effectiveCarpetStatus: BeritaAcaraStatusInfo =
+    carpetStatus ||
+    (category === 'karpet' ? computedStatus : emptyStatusFallback);
+  const effectiveChairStatus: BeritaAcaraStatusInfo =
+    chairStatus ||
+    (category === 'kursi_studio' ? computedStatus : emptyStatusFallback);
+
   const candidateManagers = useMemo(() => {
     const all = StorageService.getEmployees();
     return findOutletManagers(outlet, all);
@@ -196,6 +244,7 @@ export const BeritaAcaraModal: React.FC<BeritaAcaraModalProps> = ({
   useEffect(() => {
     if (!isOpen) return;
 
+    setActiveMode(initialMode || category);
     setKopOutletName(displayName);
     setOutletFieldName(displayName);
     setLetterDateStr(formatTodayIndonesian());
@@ -215,64 +264,102 @@ export const BeritaAcaraModal: React.FC<BeritaAcaraModalProps> = ({
       setManagerJabatan('Cinema Manager');
     }
 
-    // Pre-fill Rincian Karpet or Kursi Studio
-    if (category === 'karpet') {
-      const savedAreas = computedStatus.latestMonthEntry?.carpetAreas;
-      const toBeritaLabel = (rawName: string) => {
-        const clean = (rawName || '').trim();
-        if (!clean) return 'Luas Area Karpet';
-        return clean.toLowerCase().startsWith('luas') ? clean : `Luas ${clean}`;
-      };
-
+    // Build initial Karpet rows (tanpa kata "Luas")
+    const buildCarpetRows = (): CarpetDetailRow[] => {
+      const savedAreas = effectiveCarpetStatus.latestMonthEntry?.carpetAreas;
       if (Array.isArray(savedAreas) && savedAreas.length > 0) {
         // Hanya area yang DICENTANG pada Pilih Area / Ruangan Karpet yang masuk ke Berita Acara
-        const checkedOnly = savedAreas
+        return savedAreas
           .filter((a) => Boolean(a.checked))
           .map((a, idx) => ({
             id: a.id || `carpet_checked_${idx}`,
-            label: toBeritaLabel(a.name),
+            label: stripLuasPrefix(a.name, 'Area Karpet'),
             areaSqm: a.areaSqm > 0 ? String(a.areaSqm) : '',
           }));
-        setCarpetRows(checkedOnly);
-      } else {
-        // Fallback jika jadwal lama belum memakai checklist carpetAreas: buat detail per-studio outlet
-        const studios = Array.isArray(outlet.studios) ? outlet.studios : [];
-        const studioRows: CarpetDetailRow[] =
-          studios.length > 0
-            ? studios.map((s, idx) => ({
-                id: `karpet_studio_${idx + 1}`,
-                label: `Luas Karpet ${s.name}`,
-                areaSqm: '',
-              }))
-            : [{ id: 'karpet_studio', label: 'Luas Karpet Studio', areaSqm: '' }];
-
-        setCarpetRows([
-          ...studioRows,
-          { id: 'karpet_lobi', label: 'Luas Karpet Lobi', areaSqm: '' },
-          { id: 'karpet_koridor', label: 'Luas Karpet Koridor', areaSqm: '' },
-        ]);
       }
-    } else {
+
+      const studios = Array.isArray(outlet.studios) ? outlet.studios : [];
+      const studioRows: CarpetDetailRow[] =
+        studios.length > 0
+          ? studios.map((s, idx) => ({
+              id: `karpet_studio_${idx + 1}`,
+              label: /^karpet\s+/i.test(stripLuasPrefix(s.name))
+                ? stripLuasPrefix(s.name)
+                : `Karpet ${stripLuasPrefix(s.name, `Studio ${idx + 1}`)}`,
+              areaSqm: '',
+            }))
+          : [{ id: 'karpet_studio', label: 'Karpet Studio', areaSqm: '' }];
+
+      return [
+        ...studioRows,
+        { id: 'karpet_lobi', label: 'Karpet Lobi', areaSqm: '' },
+        { id: 'karpet_koridor', label: 'Karpet Koridor', areaSqm: '' },
+      ];
+    };
+
+    // Build initial Kursi Studio rows
+    const buildChairRows = (): ChairDetailRow[] => {
       const studios = outlet.studios || [];
       if (studios.length > 0) {
-        setChairRows(
-          studios.map((s, idx) => ({
-            id: `studio_${idx}_${s.name}`,
-            studioName: s.name,
-            seats: String(Number(s.capacity) || 0),
-          }))
-        );
+        return studios.map((s, idx) => ({
+          id: `studio_${idx}_${s.name}`,
+          studioName: s.name,
+          seats: String(Number(s.capacity) || 0),
+        }));
+      }
+      const fallbackQty = effectiveChairStatus.latestMonthEntry?.quantity;
+      return [
+        {
+          id: 'studio_1',
+          studioName: 'Total Kursi Studio',
+          seats: fallbackQty ? String(fallbackQty) : '',
+        },
+      ];
+    };
+
+    const nextCarpetRows = buildCarpetRows();
+    const nextChairRows = buildChairRows();
+    setCarpetRows(nextCarpetRows);
+    setChairRows(nextChairRows);
+
+    // Build initial Gabungan (Karpet + Kursi) rows: pasangkan Studio karpet & kapasitas kursi
+    const studios = Array.isArray(outlet.studios) ? outlet.studios : [];
+    const matchedChairIds = new Set<string>();
+    const combinedList: CombinedDetailRow[] = nextCarpetRows.map((cRow, idx) => {
+      const cKey = normalizeStudioMatchKey(cRow.label);
+      const matchedChair = nextChairRows.find(
+        (ch) => !matchedChairIds.has(ch.id) && normalizeStudioMatchKey(ch.studioName) === cKey
+      );
+      if (matchedChair) {
+        matchedChairIds.add(matchedChair.id);
+      }
+      return {
+        id: `comb_${cRow.id}_${idx}`,
+        label: cRow.label,
+        areaSqm: cRow.areaSqm,
+        seats: matchedChair ? matchedChair.seats : '',
+      };
+    });
+
+    // Jika ada studio di data kursi yang tidak tercentang / tidak ada di baris karpet, tetap tampilkan agar jumlah kursi lengkap
+    const remainingChairs = nextChairRows.filter((ch) => !matchedChairIds.has(ch.id));
+    if (remainingChairs.length > 0 && studios.length > 0) {
+      const firstNonStudioIdx = combinedList.findIndex(
+        (r) => !/studio/i.test(r.label)
+      );
+      const extraChairRows: CombinedDetailRow[] = remainingChairs.map((ch, idx) => ({
+        id: `comb_chair_${ch.id}_${idx}`,
+        label: ch.studioName,
+        areaSqm: '',
+        seats: ch.seats,
+      }));
+      if (firstNonStudioIdx >= 0) {
+        combinedList.splice(firstNonStudioIdx, 0, ...extraChairRows);
       } else {
-        const fallbackQty = computedStatus.latestMonthEntry?.quantity;
-        setChairRows([
-          {
-            id: 'studio_1',
-            studioName: 'Total Kursi Studio',
-            seats: fallbackQty ? String(fallbackQty) : '',
-          },
-        ]);
+        combinedList.push(...extraChairRows);
       }
     }
+    setCombinedRows(combinedList);
 
     const resolvedAddr = resolveOutletAddress(outlet);
     setKopAddress(resolvedAddr);
@@ -310,23 +397,78 @@ export const BeritaAcaraModal: React.FC<BeritaAcaraModalProps> = ({
       setSignatureDataUrl(null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOpen, outlet.id, category]);
+  }, [isOpen, outlet.id, category, initialMode]);
 
   if (!isOpen) return null;
 
-  const isKarpet = category === 'karpet';
-  const documentTitle = isKarpet
+  const isGabungan = activeMode === 'gabungan';
+  const isKarpet = activeMode === 'karpet';
+  const activeSingleStatus = isKarpet ? effectiveCarpetStatus : effectiveChairStatus;
+
+  const documentTitle = isGabungan
+    ? 'BERITA ACARA PENGAJUAN PENCUCIAN KARPET & KURSI STUDIO'
+    : isKarpet
     ? 'BERITA ACARA PENGAJUAN PENCUCIAN KARPET'
     : 'BERITA ACARA PENGAJUAN PENCUCIAN KURSI STUDIO';
 
   const sopConditionSentence = (() => {
+    if (isGabungan) {
+      const k = effectiveCarpetStatus;
+      const c = effectiveChairStatus;
+      const kLate = Math.abs(k.daysRemaining);
+      const cLate = Math.abs(c.daysRemaining);
+      const kRem = Math.max(0, k.daysRemaining);
+      const cRem = Math.max(0, c.daysRemaining);
+
+      if (k.status === 'overdue' && c.status === 'overdue') {
+        return `Dengan ini kami mengajukan pencucian karpet dan kursi karena sudah melewati batas SOP (terlambat ${kLate} hari karpet dan kursi ${cLate} hari dari jadwal jatuh tempo). Maka dari itu mohon dibuatkan jadwal pencucian.`;
+      }
+      if (k.status === 'overdue') {
+        if (c.status === 'warning') {
+          return `Dengan ini kami mengajukan pencucian karpet dan kursi karena karpet sudah melewati batas SOP (terlambat ${kLate} hari dari jadwal jatuh tempo) dan kursi sudah mendekati batas SOP (tersisa ${cRem} hari menuju jadwal jatuh tempo). Maka dari itu mohon dibuatkan jadwal pencucian.`;
+        }
+        if (c.status === 'safe') {
+          return `Dengan ini kami mengajukan pencucian karpet dan kursi karena karpet sudah melewati batas SOP (terlambat ${kLate} hari dari jadwal jatuh tempo) serta mengajukan pencucian kursi bersamaan (tersisa ${cRem} hari menuju jadwal jatuh tempo). Maka dari itu mohon dibuatkan jadwal pencucian.`;
+        }
+        return `Dengan ini kami mengajukan pencucian karpet dan kursi karena karpet sudah melewati batas SOP (terlambat ${kLate} hari dari jadwal jatuh tempo). Maka dari itu mohon dibuatkan jadwal pencucian.`;
+      }
+      if (c.status === 'overdue') {
+        if (k.status === 'warning') {
+          return `Dengan ini kami mengajukan pencucian karpet dan kursi karena kursi sudah melewati batas SOP (terlambat ${cLate} hari dari jadwal jatuh tempo) dan karpet sudah mendekati batas SOP (tersisa ${kRem} hari menuju jadwal jatuh tempo). Maka dari itu mohon dibuatkan jadwal pencucian.`;
+        }
+        if (k.status === 'safe') {
+          return `Dengan ini kami mengajukan pencucian karpet dan kursi karena kursi sudah melewati batas SOP (terlambat ${cLate} hari dari jadwal jatuh tempo) serta mengajukan pencucian karpet bersamaan (tersisa ${kRem} hari menuju jadwal jatuh tempo). Maka dari itu mohon dibuatkan jadwal pencucian.`;
+        }
+        return `Dengan ini kami mengajukan pencucian karpet dan kursi karena kursi sudah melewati batas SOP (terlambat ${cLate} hari dari jadwal jatuh tempo). Maka dari itu mohon dibuatkan jadwal pencucian.`;
+      }
+      if (k.status === 'warning' && c.status === 'warning') {
+        return `Dengan ini kami mengajukan pencucian karpet dan kursi karena sudah mendekati batas SOP (tersisa ${kRem} hari karpet dan kursi ${cRem} hari menuju jadwal jatuh tempo). Maka dari itu mohon dibuatkan jadwal pencucian.`;
+      }
+      if (k.status === 'warning' || c.status === 'warning') {
+        const parts: string[] = [];
+        if (k.status !== 'empty') parts.push(`karpet tersisa ${kRem} hari`);
+        if (c.status !== 'empty') parts.push(`kursi tersisa ${cRem} hari`);
+        return `Dengan ini kami mengajukan pencucian karpet dan kursi karena sudah mendekati batas SOP (${parts.join(
+          ' dan '
+        )} menuju jadwal jatuh tempo). Maka dari itu mohon dibuatkan jadwal pencucian.`;
+      }
+      return 'Dengan ini kami mengajukan pencucian karpet dan kursi sesuai jadwal pemeliharaan berkala SOP outlet. Maka dari itu mohon dibuatkan jadwal pencucian.';
+    }
+
     const itemWord = isKarpet ? 'karpet' : 'kursi studio';
-    if (computedStatus.status === 'overdue') {
-      const lateDays = Math.abs(computedStatus.daysRemaining);
+    if (activeSingleStatus.status === 'overdue') {
+      const lateDays = Math.abs(activeSingleStatus.daysRemaining);
       return `Dengan ini kami mengajukan pencucian ${itemWord} karena sudah melewati batas SOP (terlambat ${lateDays} hari dari jadwal jatuh tempo). Maka dari itu mohon dibuatkan jadwal pencucian.`;
     }
-    const remDays = Math.max(0, computedStatus.daysRemaining);
-    return `Dengan ini kami mengajukan pencucian ${itemWord} karena sudah dekat batas SOP (tersisa ${remDays} hari menuju jadwal jatuh tempo). Maka dari itu mohon dibuatkan jadwal pencucian.`;
+    if (activeSingleStatus.status === 'warning') {
+      const remDays = Math.max(0, activeSingleStatus.daysRemaining);
+      return `Dengan ini kami mengajukan pencucian ${itemWord} karena sudah dekat batas SOP (tersisa ${remDays} hari menuju jadwal jatuh tempo). Maka dari itu mohon dibuatkan jadwal pencucian.`;
+    }
+    if (activeSingleStatus.status === 'safe') {
+      const remDays = Math.max(0, activeSingleStatus.daysRemaining);
+      return `Dengan ini kami mengajukan pencucian ${itemWord} sesuai jadwal SOP (tersisa ${remDays} hari menuju jadwal jatuh tempo). Maka dari itu mohon dibuatkan jadwal pencucian.`;
+    }
+    return `Dengan ini kami mengajukan pencucian ${itemWord} untuk pemeliharaan outlet sesuai standar SOP. Maka dari itu mohon dibuatkan jadwal pencucian.`;
   })();
 
   const totalCarpetSqm = carpetRows.reduce((sum, r) => {
@@ -335,6 +477,16 @@ export const BeritaAcaraModal: React.FC<BeritaAcaraModalProps> = ({
   }, 0);
 
   const totalSeats = chairRows.reduce((sum, r) => {
+    const val = parseInt(r.seats, 10);
+    return sum + (isNaN(val) ? 0 : val);
+  }, 0);
+
+  const totalCombinedSqm = combinedRows.reduce((sum, r) => {
+    const val = parseFloat(r.areaSqm.replace(',', '.'));
+    return sum + (isNaN(val) ? 0 : val);
+  }, 0);
+
+  const totalCombinedSeats = combinedRows.reduce((sum, r) => {
     const val = parseInt(r.seats, 10);
     return sum + (isNaN(val) ? 0 : val);
   }, 0);
@@ -351,7 +503,7 @@ export const BeritaAcaraModal: React.FC<BeritaAcaraModalProps> = ({
   const handleAddCarpetRow = () => {
     setCarpetRows((prev) => [
       ...prev,
-      { id: `custom_${Date.now()}`, label: 'Luas Karpet Area Tambahan', areaSqm: '' },
+      { id: `custom_${Date.now()}`, label: 'Karpet Area Tambahan', areaSqm: '' },
     ]);
   };
 
@@ -372,6 +524,22 @@ export const BeritaAcaraModal: React.FC<BeritaAcaraModalProps> = ({
 
   const handleRemoveChairRow = (id: string) => {
     setChairRows((prev) => prev.filter((r) => r.id !== id));
+  };
+
+  const handleAddCombinedRow = () => {
+    setCombinedRows((prev) => [
+      ...prev,
+      {
+        id: `comb_custom_${Date.now()}`,
+        label: 'Karpet Area Tambahan',
+        areaSqm: '',
+        seats: '',
+      },
+    ]);
+  };
+
+  const handleRemoveCombinedRow = (id: string) => {
+    setCombinedRows((prev) => prev.filter((r) => r.id !== id));
   };
 
   // === Signature Canvas Handlers ===
@@ -538,7 +706,7 @@ export const BeritaAcaraModal: React.FC<BeritaAcaraModalProps> = ({
 
     // === JUDUL BERITA ACARA ===
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(12.5);
+    doc.setFontSize(isGabungan ? 11.5 : 12.5);
     doc.setTextColor(15, 23, 42);
     doc.text(documentTitle, pageWidth / 2, y, { align: 'center' });
     const titleWidth = doc.getTextWidth(documentTitle);
@@ -591,12 +759,40 @@ export const BeritaAcaraModal: React.FC<BeritaAcaraModalProps> = ({
     doc.text(bodyLines, marginX, y);
     y += bodyLines.length * 5.3 + 4;
 
-    if (computedStatus.lastDate || computedStatus.expDate) {
+    if (isGabungan) {
+      const notes: string[] = [];
+      if (effectiveCarpetStatus.lastDate || effectiveCarpetStatus.expDate) {
+        notes.push(
+          `Catatan Jadwal SOP Karpet: Pencucian terakhir ${formatDateIndonesian(
+            effectiveCarpetStatus.lastDate
+          )} | Jatuh tempo SOP ${formatDateIndonesian(effectiveCarpetStatus.expDate)}.`
+        );
+      }
+      if (effectiveChairStatus.lastDate || effectiveChairStatus.expDate) {
+        notes.push(
+          `Catatan Jadwal SOP Kursi: Pencucian terakhir ${formatDateIndonesian(
+            effectiveChairStatus.lastDate
+          )} | Jatuh tempo SOP ${formatDateIndonesian(effectiveChairStatus.expDate)}.`
+        );
+      }
+      if (notes.length > 0) {
+        doc.setFontSize(9.2);
+        doc.setTextColor(71, 85, 105);
+        notes.forEach((line) => {
+          const wrappedInfo = doc.splitTextToSize(line, contentWidth);
+          doc.text(wrappedInfo, marginX, y);
+          y += wrappedInfo.length * 4.6;
+        });
+        y += 4;
+        doc.setTextColor(15, 23, 42);
+        doc.setFontSize(10.5);
+      }
+    } else if (activeSingleStatus.lastDate || activeSingleStatus.expDate) {
       doc.setFontSize(9.5);
       doc.setTextColor(71, 85, 105);
       const infoLine = `Catatan Jadwal SOP: Pencucian terakhir ${formatDateIndonesian(
-        computedStatus.lastDate
-      )} | Jatuh tempo SOP ${formatDateIndonesian(computedStatus.expDate)}.`;
+        activeSingleStatus.lastDate
+      )} | Jatuh tempo SOP ${formatDateIndonesian(activeSingleStatus.expDate)}.`;
       const wrappedInfo = doc.splitTextToSize(infoLine, contentWidth);
       doc.text(wrappedInfo, marginX, y);
       y += wrappedInfo.length * 4.8 + 4;
@@ -661,7 +857,70 @@ export const BeritaAcaraModal: React.FC<BeritaAcaraModalProps> = ({
       y += rowH + 6;
     };
 
-    if (isKarpet) {
+    if (isGabungan) {
+      const col1W = contentWidth * 0.52;
+      const col2W = contentWidth * 0.24;
+      const col3W = contentWidth - col1W - col2W;
+      const rowH = 8;
+
+      ensureSpace(rowH * 2);
+      doc.setFillColor(241, 245, 249);
+      doc.setDrawColor(148, 163, 184);
+      doc.setLineWidth(0.3);
+      doc.rect(marginX, y, col1W, rowH, 'FD');
+      doc.rect(marginX + col1W, y, col2W, rowH, 'FD');
+      doc.rect(marginX + col1W + col2W, y, col3W, rowH, 'FD');
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(10);
+      doc.text('Area / Ruangan', marginX + 3, y + 5.5);
+      doc.text('Luas (m²)', marginX + col1W + col2W - 3, y + 5.5, { align: 'right' });
+      doc.text('Jumlah Kursi', marginX + col1W + col2W + col3W - 3, y + 5.5, {
+        align: 'right',
+      });
+      y += rowH;
+
+      doc.setFont('helvetica', 'normal');
+      combinedRows.forEach((r) => {
+        ensureSpace(rowH);
+        doc.setDrawColor(203, 213, 225);
+        doc.rect(marginX, y, col1W, rowH, 'D');
+        doc.rect(marginX + col1W, y, col2W, rowH, 'D');
+        doc.rect(marginX + col1W + col2W, y, col3W, rowH, 'D');
+        doc.text(r.label || '-', marginX + 3, y + 5.5);
+        doc.text(r.areaSqm.trim() ? `${r.areaSqm} m²` : '-', marginX + col1W + col2W - 3, y + 5.5, {
+          align: 'right',
+        });
+        doc.text(
+          r.seats.trim() ? `${r.seats} kursi` : '-',
+          marginX + col1W + col2W + col3W - 3,
+          y + 5.5,
+          { align: 'right' }
+        );
+        y += rowH;
+      });
+
+      ensureSpace(rowH);
+      doc.setFillColor(248, 250, 252);
+      doc.setDrawColor(148, 163, 184);
+      doc.rect(marginX, y, col1W, rowH, 'FD');
+      doc.rect(marginX + col1W, y, col2W, rowH, 'FD');
+      doc.rect(marginX + col1W + col2W, y, col3W, rowH, 'FD');
+      doc.setFont('helvetica', 'bold');
+      doc.text('Total', marginX + 3, y + 5.5);
+      doc.text(
+        totalCombinedSqm > 0 ? `${Math.round(totalCombinedSqm * 100) / 100} m²` : '- m²',
+        marginX + col1W + col2W - 3,
+        y + 5.5,
+        { align: 'right' }
+      );
+      doc.text(
+        totalCombinedSeats > 0 ? `${totalCombinedSeats} kursi` : '- kursi',
+        marginX + col1W + col2W + col3W - 3,
+        y + 5.5,
+        { align: 'right' }
+      );
+      y += rowH + 6;
+    } else if (isKarpet) {
       drawRincianTable(
         carpetRows.map((r) => ({
           label: r.label,
@@ -768,9 +1027,12 @@ export const BeritaAcaraModal: React.FC<BeritaAcaraModalProps> = ({
     const safeOutlet = (displayName || outlet.name)
       .replace(/[^a-zA-Z0-9]+/g, '_')
       .replace(/^_+|_+$/g, '');
-    const fileName = `Berita_Acara_Pencucian_${
-      isKarpet ? 'Karpet' : 'Kursi'
-    }_${safeOutlet}.pdf`;
+    const modeSlug = isGabungan
+      ? 'Karpet_dan_Kursi'
+      : isKarpet
+      ? 'Karpet'
+      : 'Kursi';
+    const fileName = `Berita_Acara_Pencucian_${modeSlug}_${safeOutlet}.pdf`;
     doc.save(fileName);
   };
 
@@ -781,7 +1043,8 @@ export const BeritaAcaraModal: React.FC<BeritaAcaraModalProps> = ({
         <div className="px-5 py-3.5 bg-slate-900 text-white flex items-center justify-between shrink-0">
           <div>
             <span className="text-[10px] font-bold text-amber-400 uppercase tracking-wider">
-              BERITA ACARA PENGAJUAN PENCUCIAN ({isKarpet ? 'KARPET' : 'KURSI STUDIO'})
+              BERITA ACARA PENGAJUAN PENCUCIAN (
+              {isGabungan ? 'GABUNGAN KARPET & KURSI' : isKarpet ? 'KARPET' : 'KURSI STUDIO'})
             </span>
             <h3 className="text-sm font-extrabold uppercase mt-0.5">
               {displayName}
@@ -810,6 +1073,47 @@ export const BeritaAcaraModal: React.FC<BeritaAcaraModalProps> = ({
         <div className="flex-1 overflow-y-auto grid grid-cols-1 lg:grid-cols-12 divide-y lg:divide-y-0 lg:divide-x divide-slate-200">
           {/* LEFT: Form Editor */}
           <div className="lg:col-span-5 p-4 sm:p-5 space-y-4 bg-slate-50/70 overflow-y-auto">
+            {/* Jenis Berita Acara Switcher */}
+            <div className="bg-white rounded-xl border border-slate-200 p-3 space-y-2">
+              <span className="text-[11px] font-extrabold text-slate-800 uppercase tracking-wide block">
+                Jenis Berita Acara
+              </span>
+              <div className="grid grid-cols-3 gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => setActiveMode('karpet')}
+                  className={`px-2 py-2 rounded-lg text-[11px] font-extrabold border transition-colors cursor-pointer ${
+                    activeMode === 'karpet'
+                      ? 'bg-slate-900 text-amber-300 border-slate-900 shadow-2xs'
+                      : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
+                  }`}
+                >
+                  Karpet
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActiveMode('kursi_studio')}
+                  className={`px-2 py-2 rounded-lg text-[11px] font-extrabold border transition-colors cursor-pointer ${
+                    activeMode === 'kursi_studio'
+                      ? 'bg-slate-900 text-amber-300 border-slate-900 shadow-2xs'
+                      : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
+                  }`}
+                >
+                  Kursi Studio
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActiveMode('gabungan')}
+                  className={`px-2 py-2 rounded-lg text-[11px] font-extrabold border transition-colors cursor-pointer ${
+                    activeMode === 'gabungan'
+                      ? 'bg-amber-400 text-slate-950 border-amber-500 shadow-2xs'
+                      : 'bg-amber-50 text-amber-900 border-amber-200 hover:bg-amber-100'
+                  }`}
+                >
+                  Gabungan
+                </button>
+              </div>
+            </div>
             {/* Kop Surat */}
             <div className="bg-white rounded-xl border border-slate-200 p-3.5 space-y-2.5">
               <div className="flex items-center justify-between">
@@ -915,23 +1219,109 @@ export const BeritaAcaraModal: React.FC<BeritaAcaraModalProps> = ({
               </div>
             </div>
 
-            {/* Rincian Karpet / Kursi Studio */}
+            {/* Rincian Karpet / Kursi Studio / Gabungan */}
             <div className="bg-white rounded-xl border border-slate-200 p-3.5 space-y-2.5">
               <div className="flex items-center justify-between">
                 <span className="text-[11px] font-extrabold text-slate-800 uppercase tracking-wide">
-                  {isKarpet ? 'Rincian Luas Karpet (m²)' : 'Rincian Jumlah Kursi Studio'}
+                  {isGabungan
+                    ? 'Rincian Karpet (m²) & Jumlah Kursi'
+                    : isKarpet
+                    ? 'Rincian Luas Karpet (m²)'
+                    : 'Rincian Jumlah Kursi Studio'}
                 </span>
                 <button
                   type="button"
-                  onClick={isKarpet ? handleAddCarpetRow : handleAddChairRow}
+                  onClick={
+                    isGabungan
+                      ? handleAddCombinedRow
+                      : isKarpet
+                      ? handleAddCarpetRow
+                      : handleAddChairRow
+                  }
                   className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-bold bg-amber-50 text-amber-800 border border-amber-200 hover:bg-amber-100 cursor-pointer"
                 >
                   <Plus className="w-3 h-3" />
-                  <span>{isKarpet ? 'Tambah Area' : 'Tambah Studio'}</span>
+                  <span>{isKarpet || isGabungan ? 'Tambah Area' : 'Tambah Studio'}</span>
                 </button>
               </div>
 
-              {isKarpet ? (
+              {isGabungan ? (
+                <div className="space-y-2">
+                  {combinedRows.length === 0 ? (
+                    <div className="p-3 rounded-lg bg-slate-50 border border-dashed border-slate-300 text-[11px] text-slate-500 text-center">
+                      Belum ada rincian area &amp; kursi. Klik <strong>Tambah Area</strong> untuk menambahkan baris.
+                    </div>
+                  ) : (
+                    <>
+                      <div className="grid grid-cols-12 gap-1.5 text-[10px] font-bold text-slate-500 px-0.5">
+                        <div className="col-span-6">Area / Ruangan</div>
+                        <div className="col-span-3 text-right">Luas (m²)</div>
+                        <div className="col-span-2 text-right">Kursi</div>
+                        <div className="col-span-1" />
+                      </div>
+                      {combinedRows.map((row) => (
+                        <div key={row.id} className="grid grid-cols-12 items-center gap-1.5">
+                          <input
+                            type="text"
+                            value={row.label}
+                            onChange={(e) =>
+                              setCombinedRows((prev) =>
+                                prev.map((r) =>
+                                  r.id === row.id ? { ...r, label: e.target.value } : r
+                                )
+                              )
+                            }
+                            className="col-span-6 px-2 py-1.5 text-xs border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500/30"
+                          />
+                          <div className="col-span-3 flex items-center gap-0.5">
+                            <input
+                              type="number"
+                              min="0"
+                              step="0.1"
+                              value={row.areaSqm}
+                              onChange={(e) =>
+                                setCombinedRows((prev) =>
+                                  prev.map((r) =>
+                                    r.id === row.id ? { ...r, areaSqm: e.target.value } : r
+                                  )
+                                )
+                              }
+                              placeholder="-"
+                              className="w-full px-1.5 py-1.5 text-xs text-right border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500/30"
+                            />
+                          </div>
+                          <div className="col-span-2 flex items-center gap-0.5">
+                            <input
+                              type="number"
+                              min="0"
+                              value={row.seats}
+                              onChange={(e) =>
+                                setCombinedRows((prev) =>
+                                  prev.map((r) =>
+                                    r.id === row.id ? { ...r, seats: e.target.value } : r
+                                  )
+                                )
+                              }
+                              placeholder="-"
+                              className="w-full px-1.5 py-1.5 text-xs text-right border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500/30"
+                            />
+                          </div>
+                          <div className="col-span-1 flex justify-end">
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveCombinedRow(row.id)}
+                              className="p-1 text-slate-400 hover:text-rose-600 cursor-pointer"
+                              title={`Hapus ${row.label || 'baris ini'}`}
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </>
+                  )}
+                </div>
+              ) : isKarpet ? (
                 <div className="space-y-2">
                   {carpetRows.length === 0 ? (
                     <div className="p-3 rounded-lg bg-slate-50 border border-dashed border-slate-300 text-[11px] text-slate-500 text-center">
@@ -1230,72 +1620,152 @@ export const BeritaAcaraModal: React.FC<BeritaAcaraModalProps> = ({
 
               {/* ISI PERMOHONAN */}
               <p className="mb-2 text-justify">{sopConditionSentence}</p>
-              {(computedStatus.lastDate || computedStatus.expDate) && (
-                <p className="text-[11px] text-slate-600 mb-3">
-                  Catatan Jadwal SOP: Pencucian terakhir{' '}
-                  <span className="font-semibold">
-                    {formatDateIndonesian(computedStatus.lastDate)}
-                  </span>{' '}
-                  | Jatuh tempo SOP{' '}
-                  <span className="font-semibold">
-                    {formatDateIndonesian(computedStatus.expDate)}
-                  </span>
-                  .
-                </p>
+              {isGabungan ? (
+                (effectiveCarpetStatus.lastDate ||
+                  effectiveCarpetStatus.expDate ||
+                  effectiveChairStatus.lastDate ||
+                  effectiveChairStatus.expDate) && (
+                  <div className="text-[11px] text-slate-600 mb-3 space-y-0.5">
+                    {(effectiveCarpetStatus.lastDate || effectiveCarpetStatus.expDate) && (
+                      <p>
+                        Catatan Jadwal SOP Karpet: Pencucian terakhir{' '}
+                        <span className="font-semibold">
+                          {formatDateIndonesian(effectiveCarpetStatus.lastDate)}
+                        </span>{' '}
+                        | Jatuh tempo SOP{' '}
+                        <span className="font-semibold">
+                          {formatDateIndonesian(effectiveCarpetStatus.expDate)}
+                        </span>
+                        .
+                      </p>
+                    )}
+                    {(effectiveChairStatus.lastDate || effectiveChairStatus.expDate) && (
+                      <p>
+                        Catatan Jadwal SOP Kursi: Pencucian terakhir{' '}
+                        <span className="font-semibold">
+                          {formatDateIndonesian(effectiveChairStatus.lastDate)}
+                        </span>{' '}
+                        | Jatuh tempo SOP{' '}
+                        <span className="font-semibold">
+                          {formatDateIndonesian(effectiveChairStatus.expDate)}
+                        </span>
+                        .
+                      </p>
+                    )}
+                  </div>
+                )
+              ) : (
+                (activeSingleStatus.lastDate || activeSingleStatus.expDate) && (
+                  <p className="text-[11px] text-slate-600 mb-3">
+                    Catatan Jadwal SOP: Pencucian terakhir{' '}
+                    <span className="font-semibold">
+                      {formatDateIndonesian(activeSingleStatus.lastDate)}
+                    </span>{' '}
+                    | Jatuh tempo SOP{' '}
+                    <span className="font-semibold">
+                      {formatDateIndonesian(activeSingleStatus.expDate)}
+                    </span>
+                    .
+                  </p>
+                )
               )}
 
               {/* RINCIAN */}
               <div className="mb-4">
                 <div className="font-bold mb-1.5">Dengan rincian sebagai berikut:</div>
-                <table className="w-full border-collapse border border-slate-300 text-[12px]">
-                  <thead>
-                    <tr className="bg-slate-100">
-                      <th className="border border-slate-300 px-3 py-1.5 text-left font-bold">
-                        {isKarpet ? 'Area / Bagian Karpet' : 'Studio / Area Kursi'}
-                      </th>
-                      <th className="border border-slate-300 px-3 py-1.5 text-right font-bold w-36">
-                        {isKarpet ? 'Luas (m²)' : 'Jumlah Kursi'}
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {isKarpet
-                      ? carpetRows.map((row) => (
-                          <tr key={row.id}>
-                            <td className="border border-slate-300 px-3 py-1.5">
-                              {row.label || '-'}
-                            </td>
-                            <td className="border border-slate-300 px-3 py-1.5 text-right tabular-nums">
-                              {row.areaSqm.trim() ? `${row.areaSqm} m²` : '- m²'}
-                            </td>
-                          </tr>
-                        ))
-                      : chairRows.map((row) => (
-                          <tr key={row.id}>
-                            <td className="border border-slate-300 px-3 py-1.5">
-                              {row.studioName || '-'}
-                            </td>
-                            <td className="border border-slate-300 px-3 py-1.5 text-right tabular-nums">
-                              {row.seats.trim() ? `${row.seats} kursi` : '- kursi'}
-                            </td>
-                          </tr>
-                        ))}
-                    <tr className="bg-slate-50 font-bold">
-                      <td className="border border-slate-300 px-3 py-1.5">
-                        {isKarpet ? 'Total Luas Karpet' : 'Total Kursi Studio'}
-                      </td>
-                      <td className="border border-slate-300 px-3 py-1.5 text-right tabular-nums">
-                        {isKarpet
-                          ? totalCarpetSqm > 0
-                            ? `${Math.round(totalCarpetSqm * 100) / 100} m²`
-                            : '- m²'
-                          : totalSeats > 0
-                          ? `${totalSeats} kursi`
-                          : '- kursi'}
-                      </td>
-                    </tr>
-                  </tbody>
-                </table>
+                {isGabungan ? (
+                  <table className="w-full border-collapse border border-slate-300 text-[12px]">
+                    <thead>
+                      <tr className="bg-slate-100">
+                        <th className="border border-slate-300 px-3 py-1.5 text-left font-bold">
+                          Area / Ruangan
+                        </th>
+                        <th className="border border-slate-300 px-3 py-1.5 text-right font-bold w-28">
+                          Luas (m²)
+                        </th>
+                        <th className="border border-slate-300 px-3 py-1.5 text-right font-bold w-32">
+                          Jumlah Kursi
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {combinedRows.map((row) => (
+                        <tr key={row.id}>
+                          <td className="border border-slate-300 px-3 py-1.5">
+                            {row.label || '-'}
+                          </td>
+                          <td className="border border-slate-300 px-3 py-1.5 text-right tabular-nums">
+                            {row.areaSqm.trim() ? `${row.areaSqm} m²` : '-'}
+                          </td>
+                          <td className="border border-slate-300 px-3 py-1.5 text-right tabular-nums">
+                            {row.seats.trim() ? `${row.seats} kursi` : '-'}
+                          </td>
+                        </tr>
+                      ))}
+                      <tr className="bg-slate-50 font-bold">
+                        <td className="border border-slate-300 px-3 py-1.5">Total</td>
+                        <td className="border border-slate-300 px-3 py-1.5 text-right tabular-nums">
+                          {totalCombinedSqm > 0
+                            ? `${Math.round(totalCombinedSqm * 100) / 100} m²`
+                            : '- m²'}
+                        </td>
+                        <td className="border border-slate-300 px-3 py-1.5 text-right tabular-nums">
+                          {totalCombinedSeats > 0 ? `${totalCombinedSeats} kursi` : '- kursi'}
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                ) : (
+                  <table className="w-full border-collapse border border-slate-300 text-[12px]">
+                    <thead>
+                      <tr className="bg-slate-100">
+                        <th className="border border-slate-300 px-3 py-1.5 text-left font-bold">
+                          {isKarpet ? 'Area / Bagian Karpet' : 'Studio / Area Kursi'}
+                        </th>
+                        <th className="border border-slate-300 px-3 py-1.5 text-right font-bold w-36">
+                          {isKarpet ? 'Luas (m²)' : 'Jumlah Kursi'}
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {isKarpet
+                        ? carpetRows.map((row) => (
+                            <tr key={row.id}>
+                              <td className="border border-slate-300 px-3 py-1.5">
+                                {row.label || '-'}
+                              </td>
+                              <td className="border border-slate-300 px-3 py-1.5 text-right tabular-nums">
+                                {row.areaSqm.trim() ? `${row.areaSqm} m²` : '- m²'}
+                              </td>
+                            </tr>
+                          ))
+                        : chairRows.map((row) => (
+                            <tr key={row.id}>
+                              <td className="border border-slate-300 px-3 py-1.5">
+                                {row.studioName || '-'}
+                              </td>
+                              <td className="border border-slate-300 px-3 py-1.5 text-right tabular-nums">
+                                {row.seats.trim() ? `${row.seats} kursi` : '- kursi'}
+                              </td>
+                            </tr>
+                          ))}
+                      <tr className="bg-slate-50 font-bold">
+                        <td className="border border-slate-300 px-3 py-1.5">
+                          {isKarpet ? 'Total Luas Karpet' : 'Total Kursi Studio'}
+                        </td>
+                        <td className="border border-slate-300 px-3 py-1.5 text-right tabular-nums">
+                          {isKarpet
+                            ? totalCarpetSqm > 0
+                              ? `${Math.round(totalCarpetSqm * 100) / 100} m²`
+                              : '- m²'
+                            : totalSeats > 0
+                            ? `${totalSeats} kursi`
+                            : '- kursi'}
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                )}
 
                 {additionalNote.trim() && (
                   <div className="text-[11px] italic text-slate-600 mt-2">
