@@ -27,7 +27,7 @@ import { CashierLeaderboard } from './components/sdm/CashierLeaderboard';
 import { CashierBeverageCategoryView } from './components/sdm/CashierBeverageCategoryView';
 import { MaintenanceScheduleView } from './components/maintenance/MaintenanceScheduleView';
 import { GoogleReviewView } from './components/reviews/GoogleReviewView';
-import { KataHariIniView } from './components/quotes/KataHariIniView';
+import { MonitoringSuhuView } from './components/iot/MonitoringSuhuView';
 import { SettingsModal } from './components/settings/SettingsModal';
 
 function getTodayDateString(): string {
@@ -421,6 +421,13 @@ export default function App() {
                 />
               )}
 
+              {activeMenu === 'iot_monitoring' && (
+                <MonitoringSuhuView
+                  currentUser={currentUser}
+                  selectedDate={selectedDate}
+                />
+              )}
+
               {activeMenu === 'lost_and_found' && (
                 <LostAndFoundView
                   currentUser={currentUser}
@@ -430,13 +437,6 @@ export default function App() {
 
               {activeMenu === 'google_review' && (
                 <GoogleReviewView currentUser={currentUser} />
-              )}
-
-              {activeMenu === 'kata_hari_ini' && (
-                <KataHariIniView
-                  currentUser={currentUser}
-                  selectedDate={selectedDate}
-                />
               )}
 
               {/* Admin Management */}

@@ -376,3 +376,42 @@ export interface DailyQuoteRecord {
   deletedAt?: string;
   deletedBy?: string;
 }
+
+export type IotRoomType = 'server' | 'projector' | 'studio' | 'lobby' | 'other';
+
+export interface IotSensorDevice {
+  id: string;
+  outletId: string;
+  deviceId: string; // Hardware identifier sent by ESP32, e.g. ESP32-TPS-SERVER-01
+  roomName: string; // e.g. "Ruang Server", "Ruang Projector", "Studio 1", "Lobi Utama"
+  roomType: IotRoomType;
+  connectionType: 'wifi' | 'ethernet';
+  sensorModel: string; // e.g. "ESP32 + SHT31"
+  occupancyOverridePct?: number | null; // Optional test/manual override % for studio SOP check; null = auto from Rekap Okupansi
+  notes?: string;
+  lastTemperature?: number | null;
+  lastHumidity?: number | null; // Monitored & displayed specifically for 'projector'
+  lastSeenAt?: string | null;
+  lastSource?: 'hardware' | 'simulation' | 'manual' | null;
+  signalRssi?: number | null;
+  updatedAt: string;
+  deleted?: boolean;
+}
+
+export interface IotTelemetryReading {
+  id: string;
+  outletId: string;
+  deviceId: string;
+  roomName: string;
+  roomType: IotRoomType;
+  temperature: number;
+  humidity?: number | null;
+  source: 'hardware' | 'simulation' | 'manual';
+  occupancyPct?: number | null;
+  sopMinTemp: number;
+  sopMaxTemp: number;
+  isTempWithinSop: boolean;
+  isHumidityWithinSop?: boolean | null;
+  recordedAt: string;
+}
+

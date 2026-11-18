@@ -3033,10 +3033,11 @@ const pendingAdditionalModules = new Set<
   | 'warehouse'
   | 'maintenance'
   | 'daily_quotes'
+  | 'iot_monitoring'
 >();
 
 /**
- * Sinkronisasi Modul Tambahan (Users, Genre Film, Administrasi, BOPO, Lost & Found, Gudang/Inventory, Maintenance, Kata-kata Hari Ini) dengan Debounce
+ * Sinkronisasi Modul Tambahan (Users, Genre Film, Administrasi, BOPO, Lost & Found, Gudang/Inventory, Maintenance, Kata-kata Hari Ini, IoT Monitoring) dengan Debounce
  */
 export async function syncAdditionalModulesToSupabase(
   modules: Array<
@@ -3048,6 +3049,7 @@ export async function syncAdditionalModulesToSupabase(
     | 'warehouse'
     | 'maintenance'
     | 'daily_quotes'
+    | 'iot_monitoring'
   > = [
     'users',
     'genres',
@@ -3057,6 +3059,7 @@ export async function syncAdditionalModulesToSupabase(
     'warehouse',
     'maintenance',
     'daily_quotes',
+    'iot_monitoring',
   ]
 ): Promise<boolean> {
   const client = getSupabase();
@@ -3088,6 +3091,7 @@ async function executeAdditionalModulesUpsert(
     | 'warehouse'
     | 'maintenance'
     | 'daily_quotes'
+    | 'iot_monitoring'
   >
 ): Promise<boolean> {
   const client = getSupabase();
@@ -3203,6 +3207,42 @@ async function executeAdditionalModulesUpsert(
       });
     }
 
+    if (modules.includes('iot_monitoring')) {
+      const devices = StorageService.getIotDevices(true);
+      const readings = StorageService.getIotReadings();
+      const byDevice = new Map<string, any[]>();
+      readings.forEach((r) => {
+        const list = byDevice.get(r.deviceId) || [];
+        if (list.length < 30) {
+          list.push(r);
+          byDevice.set(r.deviceId, list);
+        }
+      });
+      const iotShows: any[] = [
+        ...devices.map((d) => ({
+          id: `iotdev_${d.deviceId}`,
+          recordType: 'device',
+          updatedAt: d.updatedAt || nowIso,
+          payload: d,
+        })),
+        ...Array.from(byDevice.entries()).map(([deviceId, list]) => ({
+          id: `iothist_${deviceId}`,
+          recordType: 'history',
+          deviceId,
+          updatedAt: list[0]?.recordedAt || nowIso,
+          readings: list,
+        })),
+      ];
+      recordSyncTimestamp('__SYSTEM_SYNC_IOT_MONITORING__', nowIso, true);
+      rowsToUpsert.push({
+        id: '__SYSTEM_SYNC_IOT_MONITORING__',
+        outlet_id: '__SYSTEM_SYNC__',
+        date: '2026-01-01',
+        shows: iotShows,
+        updated_at: nowIso,
+      });
+    }
+
     if (rowsToUpsert.length > 0) {
       await client.from('cinema_sales').upsert(rowsToUpsert, { onConflict: 'id' });
     }
@@ -3222,6 +3262,16 @@ export async function pullDailyQuotesNow(): Promise<boolean> {
   forceBypassSupaMetaSkip = true;
   try {
     return await mergeRemoteAdditionalModulesToLocal(['__SYSTEM_SYNC_DAILY_QUOTES__']);
+  } finally {
+    forceBypassSupaMetaSkip = prevBypass;
+  }
+}
+
+export async function pullIotMonitoringNow(): Promise<boolean> {
+  const prevBypass = forceBypassSupaMetaSkip;
+  forceBypassSupaMetaSkip = true;
+  try {
+    return await mergeRemoteAdditionalModulesToLocal(['__SYSTEM_SYNC_IOT_MONITORING__']);
   } finally {
     forceBypassSupaMetaSkip = prevBypass;
   }
@@ -3276,6 +3326,7 @@ export async function mergeRemoteAdditionalModulesToLocal(
             '__SYSTEM_SYNC_WAREHOUSE__',
             '__SYSTEM_SYNC_MAINTENANCE__',
             '__SYSTEM_SYNC_DAILY_QUOTES__',
+            '__SYSTEM_SYNC_IOT_MONITORING__',
           ];
 
     const { data, error } = await client
@@ -3499,6 +3550,61 @@ export async function mergeRemoteAdditionalModulesToLocal(
       }
     }
 
+    const iotRow = data.find((r: any) => r.id === '__SYSTEM_SYNC_IOT_MONITORING__');
+    if (iotRow && Array.isArray(iotRow.shows)) {
+      const localDevices = StorageService.getIotDevices(true);
+      const devMap = new Map<string, any>();
+      localDevices.forEach((d) => {
+        if (d && d.deviceId) devMap.set(d.deviceId.toUpperCase(), d);
+      });
+
+      const localReadings = StorageService.getIotReadings();
+      const readingMap = new Map<string, any>();
+      localReadings.forEach((r) => {
+        if (r && r.id) readingMap.set(r.id, r);
+      });
+
+      iotRow.shows.forEach((entry: any) => {
+        if (!entry || typeof entry !== 'object') return;
+        if (entry.recordType === 'device' && entry.payload && entry.payload.deviceId) {
+          const rDev = entry.payload;
+          const key = String(rDev.deviceId).toUpperCase();
+          const cur = devMap.get(key);
+          if (!cur || (rDev.updatedAt || '') >= (cur.updatedAt || '')) {
+            devMap.set(key, rDev);
+          }
+        } else if (entry.recordType === 'history' && Array.isArray(entry.readings)) {
+          entry.readings.forEach((rr: any) => {
+            if (rr && rr.id) {
+              readingMap.set(rr.id, rr);
+            }
+          });
+        }
+      });
+
+      const mergedDevices = Array.from(devMap.values());
+      const curDevRaw = localStorage.getItem('cinema_xxi_iot_devices') || '[]';
+      const nextDevRaw = JSON.stringify(mergedDevices);
+      if (curDevRaw !== nextDevRaw) {
+        localStorage.setItem('cinema_xxi_iot_devices', nextDevRaw);
+        updated = true;
+      }
+
+      const sortedReadings = Array.from(readingMap.values())
+        .sort((a: any, b: any) => String(b.recordedAt || '').localeCompare(String(a.recordedAt || '')))
+        .slice(0, 240);
+      const curReadRaw = localStorage.getItem('cinema_xxi_iot_readings') || '[]';
+      const nextReadRaw = JSON.stringify(sortedReadings);
+      if (curReadRaw !== nextReadRaw) {
+        localStorage.setItem('cinema_xxi_iot_readings', nextReadRaw);
+        updated = true;
+      }
+
+      if (updated) {
+        StorageService.broadcastChange('iot-monitoring');
+      }
+    }
+
     return updated;
   } catch {
     return false;
@@ -3577,6 +3683,7 @@ export async function pullAllRemoteToLocal(forceFull = false): Promise<void> {
         '__SYSTEM_SYNC_WAREHOUSE__',
         '__SYSTEM_SYNC_USERS__',
         '__SYSTEM_SYNC_FILM_GENRES__',
+        '__SYSTEM_SYNC_IOT_MONITORING__',
       ].forEach((syncId) => {
         if (serverIds.has(syncId)) {
           changedIds.add(syncId);
@@ -3609,6 +3716,7 @@ export async function pullAllRemoteToLocal(forceFull = false): Promise<void> {
       '__SYSTEM_SYNC_WAREHOUSE__',
       '__SYSTEM_SYNC_MAINTENANCE__',
       '__SYSTEM_SYNC_DAILY_QUOTES__',
+      '__SYSTEM_SYNC_IOT_MONITORING__',
     ].filter((id) => changedIds.has(id));
 
     if (changedAdditional.length > 0) {
@@ -3853,6 +3961,39 @@ async function seedInternalServerFromLocalDevice(): Promise<void> {
         updated_at: getSeedTs('__SYSTEM_SYNC_LOST_FOUND__'),
       });
     }
+    const iotDevices = StorageService.getIotDevices(true);
+    const iotReadings = StorageService.getIotReadings();
+    if (iotDevices.length > 0 || iotReadings.length > 0) {
+      const byDevice = new Map<string, any[]>();
+      iotReadings.forEach((r) => {
+        const list = byDevice.get(r.deviceId) || [];
+        if (list.length < 30) {
+          list.push(r);
+          byDevice.set(r.deviceId, list);
+        }
+      });
+      batchRecords.push({
+        id: '__SYSTEM_SYNC_IOT_MONITORING__',
+        outlet_id: '__SYSTEM_SYNC__',
+        date: '2026-01-01',
+        shows: [
+          ...iotDevices.map((d) => ({
+            id: `iotdev_${d.deviceId}`,
+            recordType: 'device',
+            updatedAt: d.updatedAt || '2026-01-01T00:00:00.000Z',
+            payload: d,
+          })),
+          ...Array.from(byDevice.entries()).map(([deviceId, list]) => ({
+            id: `iothist_${deviceId}`,
+            recordType: 'history',
+            deviceId,
+            updatedAt: list[0]?.recordedAt || '2026-01-01T00:00:00.000Z',
+            readings: list,
+          })),
+        ],
+        updated_at: getSeedTs('__SYSTEM_SYNC_IOT_MONITORING__'),
+      });
+    }
 
     if (batchRecords.length > 0) {
       await callInternalSyncUpsert({
@@ -3973,7 +4114,8 @@ function handleRealtimeRowTrigger(rowId: string, incomingUpdatedAt?: string, sen
     rowId === '__SYSTEM_SYNC_LOST_FOUND__' ||
     rowId === '__SYSTEM_SYNC_WAREHOUSE__' ||
     rowId === '__SYSTEM_SYNC_MAINTENANCE__' ||
-    rowId === '__SYSTEM_SYNC_DAILY_QUOTES__'
+    rowId === '__SYSTEM_SYNC_DAILY_QUOTES__' ||
+    rowId === '__SYSTEM_SYNC_IOT_MONITORING__'
   ) {
     scheduleDebouncedRealtimeMerge(`add_${rowId}`, () => mergeRemoteAdditionalModulesToLocal([rowId]));
     return;

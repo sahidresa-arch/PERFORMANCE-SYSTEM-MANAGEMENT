@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { User, Outlet, DailySalesRecord, ShowSaleInput, DailyQuoteRecord } from '../../types';
+import { User, Outlet, DailySalesRecord, ShowSaleInput } from '../../types';
 import { StorageService } from '../../lib/storage';
-import { getDailyPositiveMessage, detectNegativeWords } from '../../lib/dailyQuoteUtils';
 import { ScanModal } from '../ocr/ScanModal';
 import { ExtractedSalesData } from '../../lib/ocrService';
 import {
@@ -16,9 +15,6 @@ import {
   CheckCircle2,
   Info,
   Layers,
-  MessageSquareHeart,
-  Sparkles,
-  Send,
 } from 'lucide-react';
 
 interface InputDataSalesProps {
@@ -95,22 +91,8 @@ export const InputDataSales: React.FC<InputDataSalesProps> = ({
   // Notifications
   const [isScanModalOpen, setIsScanModalOpen] = useState(false);
 
-  // Kata-kata Hari Ini gate (Hanya berlaku untuk tim outlet; Admin & Area Manager independen)
-  const [dailyQuoteResponse, setDailyQuoteResponse] = useState<DailyQuoteRecord | undefined>(() =>
-    isAdmin ? undefined : StorageService.getDailyQuoteResponse(defaultOutletId, selectedDate)
-  );
-  const [isQuoteModalOpen, setIsQuoteModalOpen] = useState<boolean>(() => {
-    if (isAdmin || !defaultOutletId || !selectedDate) return false;
-    return !StorageService.getDailyQuoteResponse(defaultOutletId, selectedDate);
-  });
-  const [quoteModalMode, setQuoteModalMode] = useState<'choice' | 'write'>('choice');
-  const [quoteDraft, setQuoteDraft] = useState<string>('');
-  const [quoteError, setQuoteError] = useState<string>('');
-
   const selectedOutlet = outlets.find((o) => o.id === selectedOutletId) || outlets[0];
   const targetHead = selectedOutlet?.targetHead || 0;
-  const isQuoteBlocked = !isAdmin && Boolean(selectedOutletId && selectedDate && !dailyQuoteResponse);
-  const isShowInputDisabled = isLocked || isQuoteBlocked;
 
   // Tarik data sales terbaru dari Edge Server / Worker saat buka menu atau ganti outlet/tanggal
   useEffect(() => {
@@ -119,55 +101,18 @@ export const InputDataSales: React.FC<InputDataSalesProps> = ({
       .catch(() => {});
   }, [selectedOutletId, selectedDate]);
 
-  // Sync record & Kata-kata Hari Ini status when outlet or date changes
+  // Sync record when outlet or date changes
   useEffect(() => {
     isDirtyRef.current = false;
     const rec = StorageService.getDailySaleByOutletAndDate(selectedOutletId, selectedDate);
     setDailyRecord(rec);
     loadShowData(rec, activeShow);
-
-    if (isAdmin) {
-      setDailyQuoteResponse(undefined);
-      setIsQuoteModalOpen(false);
-      return;
-    }
-
-    const existingQuote = StorageService.getDailyQuoteResponse(selectedOutletId, selectedDate);
-    setDailyQuoteResponse(existingQuote);
-    setQuoteModalMode('choice');
-    setQuoteDraft('');
-    setQuoteError('');
-    setIsQuoteModalOpen(Boolean(selectedOutletId && selectedDate && !existingQuote));
-
-    import('../../lib/supabase')
-      .then((m) => {
-        if (typeof m.pullDailyQuotesNow === 'function') {
-          return m.pullDailyQuotesNow();
-        }
-        return false;
-      })
-      .then((updated) => {
-        if (updated) {
-          const synced = StorageService.getDailyQuoteResponse(selectedOutletId, selectedDate);
-          setDailyQuoteResponse(synced);
-          if (synced) setIsQuoteModalOpen(false);
-        }
-      })
-      .catch(() => {});
-  }, [selectedOutletId, selectedDate, isAdmin]);
+  }, [selectedOutletId, selectedDate]);
 
   // Real-time sync listener when data arrives from Supabase / Web Live / AI Studio
   useEffect(() => {
     const handleStorageUpdate = (e: any) => {
       const evtType = e?.detail?.type || e?.detail?.key;
-      if (evtType === 'daily-quotes') {
-        const syncedQuote = StorageService.getDailyQuoteResponse(selectedOutletId, selectedDate);
-        setDailyQuoteResponse(syncedQuote);
-        if (syncedQuote) {
-          setIsQuoteModalOpen(false);
-        }
-        return;
-      }
       if (evtType && evtType !== 'sales' && evtType !== 'outlets' && evtType !== 'all' && evtType !== 'all-reset') return;
       const latestRec = StorageService.getDailySaleByOutletAndDate(selectedOutletId, selectedDate);
       if (!isDirtyRef.current) {
@@ -239,10 +184,6 @@ export const InputDataSales: React.FC<InputDataSalesProps> = ({
   };
 
   const handleTabChange = (showNum: number) => {
-    if (isQuoteBlocked) {
-      setIsQuoteModalOpen(true);
-      return;
-    }
     let nextRec = dailyRecord;
     if (!isLocked && isDirtyRef.current) {
       const nowTime = new Date().toLocaleTimeString('id-ID', {
@@ -312,7 +253,7 @@ export const InputDataSales: React.FC<InputDataSalesProps> = ({
 
   // Handle OCR fill
   const handleApplyOcrData = (data: ExtractedSalesData) => {
-    if (isShowInputDisabled) return;
+    if (isLocked) return;
     isDirtyRef.current = true;
     const nextCin = data.omsetCinema !== undefined ? data.omsetCinema : omsetCinema;
     const nextFnb = data.omsetFnB !== undefined ? data.omsetFnB : omsetFnB;
@@ -537,34 +478,6 @@ export const InputDataSales: React.FC<InputDataSalesProps> = ({
           </div>
         </div>
 
-        {/* Blocking Banner when Kata-kata Hari Ini has not been chosen */}
-        {isQuoteBlocked && (
-          <div className="mt-5 p-4 rounded-2xl border border-rose-300 bg-rose-50 text-rose-900 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-            <div className="flex items-start sm:items-center gap-3">
-              <div className="p-2 rounded-xl bg-rose-100 text-rose-700 shrink-0">
-                <MessageSquareHeart className="w-5 h-5" />
-              </div>
-              <div className="text-xs">
-                <span className="font-black block text-rose-950">
-                  Input Show 1 - Show 5 Terkunci Sementara
-                </span>
-                <span>
-                  Pilih <strong>&ldquo;Tidak ada kata-kata&rdquo;</strong> atau{' '}
-                  <strong>&ldquo;Tulis kata-kata&rdquo;</strong> terlebih dahulu untuk outlet{' '}
-                  <strong>{selectedOutlet?.name}</strong> tanggal <strong>{selectedDate}</strong>.
-                </span>
-              </div>
-            </div>
-            <button
-              type="button"
-              onClick={() => setIsQuoteModalOpen(true)}
-              className="px-4 py-2 rounded-xl text-xs font-black bg-purple-700 hover:bg-purple-800 text-white shadow-xs shrink-0 cursor-pointer transition-colors"
-            >
-              Isi Kata-kata Hari Ini
-            </button>
-          </div>
-        )}
-
         {/* 5 Show Tab Selector with Individual Lock Status */}
         <div className="mt-6 pt-5 border-t border-slate-100">
           <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-600 mb-2">
@@ -581,14 +494,11 @@ export const InputDataSales: React.FC<InputDataSalesProps> = ({
               return (
                 <button
                   key={showNum}
-                  disabled={isQuoteBlocked}
                   onClick={() => handleTabChange(showNum)}
-                  className={`p-3 rounded-2xl border text-center transition flex flex-col items-center justify-center space-y-1 relative ${
-                    isQuoteBlocked
-                      ? 'bg-slate-100 border-slate-200 text-slate-400 opacity-60 cursor-not-allowed'
-                      : isActive
-                      ? 'bg-amber-500 text-slate-950 font-black shadow-md border-amber-400 scale-[1.02] cursor-pointer'
-                      : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-amber-50/60 cursor-pointer'
+                  className={`p-3 rounded-2xl border text-center transition flex flex-col items-center justify-center space-y-1 relative cursor-pointer ${
+                    isActive
+                      ? 'bg-amber-500 text-slate-950 font-black shadow-md border-amber-400 scale-[1.02]'
+                      : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-amber-50/60'
                   }`}
                 >
                   <div className="flex items-center space-x-1.5">
@@ -605,9 +515,7 @@ export const InputDataSales: React.FC<InputDataSalesProps> = ({
                   </div>
                   <span
                     className={`text-[10px] font-semibold ${
-                      isQuoteBlocked
-                        ? 'text-slate-400'
-                        : isActive
+                      isActive
                         ? 'text-slate-950'
                         : isShowLocked
                         ? 'text-amber-800 font-bold'
@@ -616,9 +524,7 @@ export const InputDataSales: React.FC<InputDataSalesProps> = ({
                         : 'text-slate-400'
                     }`}
                   >
-                    {isQuoteBlocked
-                      ? '🔒 Wajib Pilih Kata'
-                      : isShowLocked
+                    {isShowLocked
                       ? '🔒 Dikunci'
                       : isFilled
                       ? 'Sudah Input'
@@ -653,20 +559,11 @@ export const InputDataSales: React.FC<InputDataSalesProps> = ({
             <div className="flex items-center space-x-2">
               <button
                 type="button"
-                disabled={isQuoteBlocked}
-                onClick={() => {
-                  if (isQuoteBlocked) {
-                    setIsQuoteModalOpen(true);
-                    return;
-                  }
-                  handleToggleLock();
-                }}
-                className={`flex items-center space-x-1 px-3 py-1.5 rounded-xl text-xs font-bold transition shadow-2xs ${
-                  isQuoteBlocked
-                    ? 'bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed opacity-60'
-                    : isLocked
-                    ? 'bg-amber-100 text-amber-900 border border-amber-300 hover:bg-amber-200 cursor-pointer'
-                    : 'bg-slate-100 text-slate-700 border border-slate-300 hover:bg-slate-200 cursor-pointer'
+                onClick={handleToggleLock}
+                className={`flex items-center space-x-1 px-3 py-1.5 rounded-xl text-xs font-bold transition shadow-2xs cursor-pointer ${
+                  isLocked
+                    ? 'bg-amber-100 text-amber-900 border border-amber-300 hover:bg-amber-200'
+                    : 'bg-slate-100 text-slate-700 border border-slate-300 hover:bg-slate-200'
                 }`}
                 title={isLocked ? "Buka kuncian Show ini" : "Kunci Show ini"}
               >
@@ -685,15 +582,15 @@ export const InputDataSales: React.FC<InputDataSalesProps> = ({
 
               <button
                 type="button"
-                disabled={isShowInputDisabled}
-                onClick={() => !isShowInputDisabled && setIsScanModalOpen(true)}
+                disabled={isLocked}
+                onClick={() => !isLocked && setIsScanModalOpen(true)}
                 className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition shadow-2xs ${
-                  isShowInputDisabled
+                  isLocked
                     ? 'bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed opacity-60'
                     : 'bg-amber-100 text-amber-900 hover:bg-amber-200 border border-amber-300 cursor-pointer'
                 }`}
               >
-                <ScanLine className={`w-4 h-4 ${isShowInputDisabled ? 'text-slate-400' : 'text-amber-700'}`} />
+                <ScanLine className={`w-4 h-4 ${isLocked ? 'text-slate-400' : 'text-amber-700'}`} />
                 <span className="hidden sm:inline">Scan Struk (AI OCR)</span>
               </button>
             </div>
@@ -709,13 +606,13 @@ export const InputDataSales: React.FC<InputDataSalesProps> = ({
                 <input
                   type="text"
                   inputMode="numeric"
-                  disabled={isShowInputDisabled}
-                  readOnly={isShowInputDisabled}
+                  disabled={isLocked}
+                  readOnly={isLocked}
                   value={omsetCinemaStr}
                   onChange={handleCinemaChange}
                   placeholder="0"
                   className={`w-full px-3 py-2.5 rounded-xl border text-sm font-extrabold transition outline-hidden ${
-                    isShowInputDisabled
+                    isLocked
                       ? 'bg-[#F3F4F6] text-slate-500 border-slate-200 cursor-not-allowed select-none'
                       : 'bg-white text-slate-900 border-slate-300 focus:border-amber-400 focus:ring-2 focus:ring-amber-200'
                   }`}
@@ -731,13 +628,13 @@ export const InputDataSales: React.FC<InputDataSalesProps> = ({
                 <input
                   type="text"
                   inputMode="numeric"
-                  disabled={isShowInputDisabled}
-                  readOnly={isShowInputDisabled}
+                  disabled={isLocked}
+                  readOnly={isLocked}
                   value={omsetFnBStr}
                   onChange={handleFnBChange}
                   placeholder="0"
                   className={`w-full px-3 py-2.5 rounded-xl border text-sm font-extrabold transition outline-hidden ${
-                    isShowInputDisabled
+                    isLocked
                       ? 'bg-[#F3F4F6] text-slate-500 border-slate-200 cursor-not-allowed select-none'
                       : 'bg-white text-slate-900 border-slate-300 focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100'
                   }`}
@@ -754,8 +651,8 @@ export const InputDataSales: React.FC<InputDataSalesProps> = ({
                   type="number"
                   inputMode="numeric"
                   min="0"
-                  disabled={isShowInputDisabled}
-                  readOnly={isShowInputDisabled}
+                  disabled={isLocked}
+                  readOnly={isLocked}
                   value={bill || ''}
                   onChange={(e) => {
                     isDirtyRef.current = true;
@@ -765,7 +662,7 @@ export const InputDataSales: React.FC<InputDataSalesProps> = ({
                   }}
                   placeholder="0"
                   className={`w-full px-3 py-2.5 rounded-xl border text-sm font-extrabold transition outline-hidden ${
-                    isShowInputDisabled
+                    isLocked
                       ? 'bg-[#F3F4F6] text-slate-500 border-slate-200 cursor-not-allowed select-none'
                       : 'bg-white text-slate-900 border-slate-300 focus:border-amber-400 focus:ring-2 focus:ring-amber-200'
                   }`}
@@ -782,8 +679,8 @@ export const InputDataSales: React.FC<InputDataSalesProps> = ({
                   type="number"
                   inputMode="numeric"
                   min="0"
-                  disabled={isShowInputDisabled}
-                  readOnly={isShowInputDisabled}
+                  disabled={isLocked}
+                  readOnly={isLocked}
                   value={penonton || ''}
                   onChange={(e) => {
                     isDirtyRef.current = true;
@@ -793,7 +690,7 @@ export const InputDataSales: React.FC<InputDataSalesProps> = ({
                   }}
                   placeholder="0"
                   className={`w-full px-3 py-2.5 rounded-xl border text-sm font-extrabold transition outline-hidden ${
-                    isShowInputDisabled
+                    isLocked
                       ? 'bg-[#F3F4F6] text-slate-500 border-slate-200 cursor-not-allowed select-none'
                       : 'bg-white text-slate-900 border-slate-300 focus:border-amber-400 focus:ring-2 focus:ring-amber-200'
                   }`}
@@ -805,26 +702,20 @@ export const InputDataSales: React.FC<InputDataSalesProps> = ({
           {/* Action Save Button: SIMPAN DATA */}
           <div className="mt-5 pt-4 border-t border-amber-200/80 flex items-center justify-between">
             <span className="text-xs text-amber-900 font-bold">
-              {isQuoteBlocked
-                ? `🔒 Silakan pilih "Tidak ada kata-kata" atau "Tulis kata-kata" terlebih dahulu untuk mulai input Show ${activeShow}.`
-                : isLocked
+              {isLocked
                 ? `🔒 Show ${activeShow} saat ini dikunci. Klik "Terbuka (Bisa Edit)" jika ingin mengubah.`
                 : `✏️ Data Show ${activeShow} siap disimpan.`}
             </span>
 
             <button
               type="button"
-              disabled={isShowInputDisabled}
+              disabled={isLocked}
               onClick={() => {
-                if (isQuoteBlocked) {
-                  setIsQuoteModalOpen(true);
-                  return;
-                }
                 if (isLocked) return;
                 setIsConfirmModalOpen(true);
               }}
               className={`px-5 py-2.5 rounded-xl font-black text-xs transition flex items-center space-x-2 shadow-md ${
-                isShowInputDisabled
+                isLocked
                   ? 'bg-slate-200 text-slate-400 cursor-not-allowed'
                   : 'bg-amber-500 hover:bg-amber-400 text-slate-950 cursor-pointer scale-[1.01]'
               }`}
@@ -1104,200 +995,6 @@ export const InputDataSales: React.FC<InputDataSalesProps> = ({
           onApplyData={handleApplyOcrData}
         />
       )}
-
-      {/* Modal Kata-kata Hari Ini (Wajib 1x per hari per outlet sebelum input Show 1-5) */}
-      {isQuoteModalOpen && isQuoteBlocked && (() => {
-        const negativeCheck = detectNegativeWords(quoteDraft);
-        const dailyGreeting = getDailyPositiveMessage(selectedDate);
-        const displayTeamName = (selectedOutlet?.name || 'Cinema XXI')
-          .replace(/^(CAFE|HS)\s+/i, '')
-          .trim();
-
-        const handleSkipQuote = () => {
-          StorageService.saveDailyQuoteResponse({
-            outletId: selectedOutletId,
-            outletName: selectedOutlet?.name || selectedOutletId,
-            date: selectedDate,
-            status: 'skipped',
-            quoteText: '',
-            authorName: currentUser?.name || 'Tim Outlet',
-            authorRole: currentUser?.role || 'manager',
-          });
-          setDailyQuoteResponse(
-            StorageService.getDailyQuoteResponse(selectedOutletId, selectedDate)
-          );
-          setIsQuoteModalOpen(false);
-        };
-
-        const handleSubmitQuote = (e: React.FormEvent) => {
-          e.preventDefault();
-          const trimmed = quoteDraft.trim();
-          if (!trimmed) {
-            setQuoteError('Silakan tulis kata-kata penyemangat terlebih dahulu.');
-            return;
-          }
-          const check = detectNegativeWords(trimmed);
-          if (check.isNegative) {
-            setQuoteError(
-              `Notice: Kalimat terdeteksi mengandung kata bernuansa negatif (${check.matchedWords.join(
-                ', '
-              )}). Mohon ganti dengan kata-kata yang positif ya!`
-            );
-            return;
-          }
-
-          StorageService.saveDailyQuoteResponse({
-            outletId: selectedOutletId,
-            outletName: selectedOutlet?.name || selectedOutletId,
-            date: selectedDate,
-            status: 'submitted',
-            quoteText: trimmed,
-            authorName: currentUser?.name || 'Tim Outlet',
-            authorRole: currentUser?.role || 'manager',
-          });
-          setDailyQuoteResponse(
-            StorageService.getDailyQuoteResponse(selectedOutletId, selectedDate)
-          );
-          setIsQuoteModalOpen(false);
-        };
-
-        return (
-          <div className="fixed inset-0 z-50 bg-slate-950/65 backdrop-blur-xs flex items-center justify-center p-4">
-            <div className="bg-white rounded-3xl border border-purple-200 shadow-2xl max-w-lg w-full overflow-hidden">
-              {/* Top Greeting Header */}
-              <div className="bg-gradient-to-br from-[#3D1A5E] via-[#581c87] to-[#4c1d95] text-white p-6">
-                <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-white/15 text-amber-300 text-[10px] font-extrabold uppercase tracking-wider mb-3">
-                  <Sparkles className="w-3.5 h-3.5" />
-                  <span>Sapaan Harian &bull; {selectedDate}</span>
-                </div>
-                <div className="flex items-start gap-3">
-                  <div className="p-2.5 rounded-2xl bg-amber-400 text-slate-950 shrink-0 shadow-sm">
-                    <MessageSquareHeart className="w-6 h-6" />
-                  </div>
-                  <div className="space-y-2">
-                    <h3 className="text-base sm:text-lg font-black leading-snug">
-                      Hallo Team {displayTeamName}, apa kata-kata untuk hari ini?
-                    </h3>
-                    <div className="p-3 rounded-2xl bg-white/10 border border-white/15 text-xs text-purple-100 leading-relaxed">
-                      <span className="font-bold text-amber-300">Dari aku:</span>{' '}
-                      {dailyGreeting}
-                      <div className="mt-1 font-extrabold text-white">Dari kamu?</div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Action Choices / Input Box */}
-              <div className="p-6 space-y-4 text-slate-800">
-                {quoteModalMode === 'choice' ? (
-                  <div className="space-y-3">
-                    <p className="text-xs text-slate-600 leading-relaxed">
-                      Pilih salah satu opsi di bawah ini untuk membuka akses input{' '}
-                      <strong>Show 1 s/d Show 5</strong> hari ini (1 kali per hari per outlet).
-                    </p>
-
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
-                      <button
-                        type="button"
-                        onClick={handleSkipQuote}
-                        className="px-4 py-3.5 rounded-2xl border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 font-extrabold text-xs transition cursor-pointer text-center"
-                      >
-                        Tidak ada kata-kata
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setQuoteModalMode('write');
-                          setQuoteError('');
-                        }}
-                        className="px-4 py-3.5 rounded-2xl bg-amber-400 hover:bg-amber-500 text-slate-950 font-black text-xs shadow-sm transition cursor-pointer flex items-center justify-center gap-1.5"
-                      >
-                        <MessageSquareHeart className="w-4 h-4" />
-                        <span>Tulis kata-kata</span>
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <form onSubmit={handleSubmitQuote} className="space-y-3.5">
-                    <div>
-                      <label className="block text-xs font-extrabold text-slate-700 mb-1.5">
-                        Tulis Kata-kata Positif Hari Ini (dapat dilihat seluruh outlet)
-                      </label>
-                      <textarea
-                        rows={3}
-                        autoFocus
-                        value={quoteDraft}
-                        onChange={(e) => {
-                          setQuoteDraft(e.target.value);
-                          if (quoteError) setQuoteError('');
-                        }}
-                        placeholder="Contoh: Semangat tim! Hari ini pasti ramai dan target tercapai!"
-                        className={`w-full px-3.5 py-2.5 rounded-2xl border text-xs font-medium outline-hidden transition ${
-                          negativeCheck.isNegative
-                            ? 'border-rose-400 bg-rose-50/40 focus:ring-2 focus:ring-rose-200'
-                            : 'border-slate-300 bg-white focus:border-purple-500 focus:ring-2 focus:ring-purple-200'
-                        }`}
-                      />
-                    </div>
-
-                    {/* Notice otomatis jika terdeteksi kalimat negatif */}
-                    {(negativeCheck.isNegative || quoteError) && (
-                      <div className="p-3 rounded-2xl bg-rose-50 border border-rose-300 text-rose-800 flex items-start gap-2.5 text-xs">
-                        <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
-                        <div className="leading-snug">
-                          <strong className="block text-rose-900">
-                            Notice: Kalimat Negatif Terdeteksi!
-                          </strong>
-                          {negativeCheck.isNegative ? (
-                            <span>
-                              Terdeteksi kata bernuansa negatif (
-                              <strong>{negativeCheck.matchedWords.join(', ')}</strong>). Mohon ubah
-                              menjadi kalimat yang positif dan menyemangati seluruh tim outlet ya.
-                            </span>
-                          ) : (
-                            <span>{quoteError}</span>
-                          )}
-                        </div>
-                      </div>
-                    )}
-
-                    <div className="flex flex-wrap items-center justify-between gap-2 pt-2">
-                      <button
-                        type="button"
-                        onClick={handleSkipQuote}
-                        className="px-3.5 py-2 rounded-xl text-xs font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 cursor-pointer transition-colors"
-                      >
-                        Tidak ada kata-kata
-                      </button>
-
-                      <div className="flex items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setQuoteModalMode('choice');
-                            setQuoteError('');
-                          }}
-                          className="px-3.5 py-2 rounded-xl text-xs font-bold text-slate-600 hover:bg-slate-100 cursor-pointer"
-                        >
-                          Kembali
-                        </button>
-                        <button
-                          type="submit"
-                          disabled={negativeCheck.isNegative || !quoteDraft.trim()}
-                          className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-black bg-purple-700 hover:bg-purple-800 text-white shadow-sm disabled:opacity-45 disabled:cursor-not-allowed cursor-pointer transition-colors"
-                        >
-                          <Send className="w-3.5 h-3.5" />
-                          <span>Kirim &amp; Mulai Input Sales</span>
-                        </button>
-                      </div>
-                    </div>
-                  </form>
-                )}
-              </div>
-            </div>
-          </div>
-        );
-      })()}
     </div>
   );
 };

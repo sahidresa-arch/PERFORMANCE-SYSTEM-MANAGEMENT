@@ -27,6 +27,9 @@ import {
   MaintenanceMonthEntry,
   MaintenanceScheduleRecord,
   DailyQuoteRecord,
+  IotRoomType,
+  IotSensorDevice,
+  IotTelemetryReading,
 } from '../types';
 import {
   INITIAL_AREAS,
@@ -63,6 +66,8 @@ const KEYS = {
   DAILY_SECTION_SALES: 'cinema_xxi_daily_section_sales',
   MAINTENANCE: 'cinema_xxi_maintenance_records',
   DAILY_QUOTES: 'cinema_xxi_daily_quotes',
+  IOT_DEVICES: 'cinema_xxi_iot_devices',
+  IOT_READINGS: 'cinema_xxi_iot_readings',
 };
 
 const RECENT_INSPECTIONS_KEY = 'cinema_xxi_recent_inspections_v2';
@@ -4800,4 +4805,401 @@ export const StorageService = {
 
     return nextList.filter((q) => !q.deleted);
   },
+
+  // =========================================================
+  // IOT MONITORING SUHU & KELEMBABAN RUANGAN
+  // =========================================================
+
+  getDefaultPilotIotDevices(): IotSensorDevice[] {
+    const baseTs = '2026-01-01T00:00:00.000Z';
+    const pilotOutletId = 'the-park-sawangan-xxi';
+    const sawangan = INITIAL_OUTLETS.find((o) => o.id === pilotOutletId);
+    const studios = sawangan?.studios || [
+      { name: 'Studio 1', capacity: 278 },
+      { name: 'Studio 2', capacity: 220 },
+      { name: 'Studio 3', capacity: 180 },
+      { name: 'Studio 4', capacity: 158 },
+      { name: 'Studio 5', capacity: 148 },
+    ];
+
+    const devices: IotSensorDevice[] = [
+      {
+        id: 'dev-tps-server-01',
+        outletId: pilotOutletId,
+        deviceId: 'ESP32-TPS-SERVER-01',
+        roomName: 'Ruang Server',
+        roomType: 'server',
+        connectionType: 'ethernet',
+        sensorModel: 'ESP32 + SHT31 (Switch Hub)',
+        occupancyOverridePct: null,
+        notes: 'Unit uji coba pertama (Switch Hub Internet)',
+        lastTemperature: null,
+        lastHumidity: null,
+        lastSeenAt: null,
+        lastSource: null,
+        signalRssi: null,
+        updatedAt: baseTs,
+      },
+      {
+        id: 'dev-tps-proj-01',
+        outletId: pilotOutletId,
+        deviceId: 'ESP32-TPS-PROJ-01',
+        roomName: 'Ruang Projector',
+        roomType: 'projector',
+        connectionType: 'wifi',
+        sensorModel: 'ESP32 + SHT31',
+        occupancyOverridePct: null,
+        notes: 'Pantau suhu & kelembaban (RH%) khusus ruang proyektor',
+        lastTemperature: null,
+        lastHumidity: null,
+        lastSeenAt: null,
+        lastSource: null,
+        signalRssi: null,
+        updatedAt: baseTs,
+      },
+      {
+        id: 'dev-tps-lobby-01',
+        outletId: pilotOutletId,
+        deviceId: 'ESP32-TPS-LOBBY-01',
+        roomName: 'Lobi Utama',
+        roomType: 'lobby',
+        connectionType: 'wifi',
+        sensorModel: 'ESP32 + SHT31',
+        occupancyOverridePct: null,
+        notes: 'Area lobi & box office',
+        lastTemperature: null,
+        lastHumidity: null,
+        lastSeenAt: null,
+        lastSource: null,
+        signalRssi: null,
+        updatedAt: baseTs,
+      },
+      ...studios.map((st, idx) => ({
+        id: `dev-tps-std-${idx + 1}`,
+        outletId: pilotOutletId,
+        deviceId: `ESP32-TPS-STD${idx + 1}-01`,
+        roomName: st.name,
+        roomType: 'studio' as IotRoomType,
+        connectionType: 'wifi' as const,
+        sensorModel: 'ESP32 + SHT31',
+        occupancyOverridePct: null,
+        notes: `Kapasitas ${st.capacity} kursi (SOP otomatis 22–23.5°C jika okupansi > 50%)`,
+        lastTemperature: null,
+        lastHumidity: null,
+        lastSeenAt: null,
+        lastSource: null,
+        signalRssi: null,
+        updatedAt: baseTs,
+      })),
+    ];
+
+    return devices;
+  },
+
+  evaluateIotSop(roomType: IotRoomType, occupancyPct: number | null) {
+    const isHighOccStudio =
+      roomType === 'studio' && occupancyPct !== null && Number.isFinite(occupancyPct) && occupancyPct > 50;
+    const sopMinTemp = isHighOccStudio ? 22.0 : 23.0;
+    const sopMaxTemp = isHighOccStudio ? 23.5 : 24.0;
+    const monitorHumidity = roomType === 'projector';
+    const sopMinHumidity = 40;
+    const sopMaxHumidity = 60;
+    return {
+      isHighOccStudio,
+      sopMinTemp,
+      sopMaxTemp,
+      monitorHumidity,
+      sopMinHumidity,
+      sopMaxHumidity,
+    };
+  },
+
+  getStudioOccupancyPct(
+    outletId: string,
+    roomName: string,
+    date: string
+  ): { pct: number | null; capacity: number; peakAudience: number; showLabel: string } {
+    if (!outletId || !roomName) {
+      return { pct: null, capacity: 0, peakAudience: 0, showLabel: '' };
+    }
+    const outlets = this.getOutlets();
+    const outlet = outlets.find((o) => o.id === outletId);
+    const normRoom = roomName.trim().toLowerCase().replace(/\s+/g, ' ');
+    const studioMeta = outlet?.studios?.find(
+      (s) => s.name.trim().toLowerCase().replace(/\s+/g, ' ') === normRoom
+    );
+    const records = this.getOccupancyRecord(outletId, date);
+    if (!records || records.length === 0) {
+      return { pct: null, capacity: studioMeta?.capacity || 0, peakAudience: 0, showLabel: '' };
+    }
+    const row = records.find(
+      (r) => (r.studioName || '').trim().toLowerCase().replace(/\s+/g, ' ') === normRoom
+    );
+    if (!row) {
+      return { pct: null, capacity: studioMeta?.capacity || 0, peakAudience: 0, showLabel: '' };
+    }
+    const cap = Number(row.capacity || studioMeta?.capacity || 0);
+    if (cap <= 0 || !row.shows) {
+      return { pct: null, capacity: cap, peakAudience: 0, showLabel: '' };
+    }
+    let peakAudience = 0;
+    let peakShow = '';
+    Object.entries(row.shows).forEach(([showNum, val]) => {
+      const n = Number(val || 0);
+      if (n > peakAudience) {
+        peakAudience = n;
+        peakShow = `Show ${showNum}`;
+      }
+    });
+    if (peakAudience <= 0) {
+      return { pct: 0, capacity: cap, peakAudience: 0, showLabel: 'Belum ada penonton' };
+    }
+    const pct = Math.min(100, Math.round((peakAudience / cap) * 1000) / 10);
+    return { pct, capacity: cap, peakAudience, showLabel: peakShow };
+  },
+
+  getIotDevices(includeDeleted = false): IotSensorDevice[] {
+    const raw = localStorage.getItem(KEYS.IOT_DEVICES);
+    if (!raw) {
+      const defaults = this.getDefaultPilotIotDevices();
+      try {
+        localStorage.setItem(KEYS.IOT_DEVICES, JSON.stringify(defaults));
+      } catch {
+        // ignore quota errors
+      }
+      return defaults;
+    }
+    try {
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return [];
+      return includeDeleted ? parsed : parsed.filter((d) => d && !d.deleted);
+    } catch {
+      return [];
+    }
+  },
+
+  saveIotDevice(
+    input: Omit<IotSensorDevice, 'updatedAt'> & { updatedAt?: string },
+    syncToRemote = true
+  ): IotSensorDevice[] {
+    const all = this.getIotDevices(true);
+    const nowIso = new Date().toISOString();
+    const normDeviceId = (input.deviceId || '').trim().toUpperCase();
+    const nextItem: IotSensorDevice = {
+      ...input,
+      deviceId: normDeviceId || input.id.toUpperCase(),
+      updatedAt: input.updatedAt || nowIso,
+      deleted: false,
+    };
+
+    const idx = all.findIndex((d) => d.id === nextItem.id || d.deviceId === nextItem.deviceId);
+    if (idx >= 0) {
+      all[idx] = { ...all[idx], ...nextItem, id: all[idx].id };
+    } else {
+      all.push(nextItem);
+    }
+
+    localStorage.setItem(KEYS.IOT_DEVICES, JSON.stringify(all));
+    this.broadcastChange('iot-monitoring');
+
+    if (syncToRemote) {
+      import('./supabase')
+        .then((m) => {
+          if (typeof (m as any).syncAdditionalModulesToSupabase === 'function') {
+            void (m as any).syncAdditionalModulesToSupabase(['iot_monitoring']);
+          }
+        })
+        .catch(() => {});
+    }
+
+    return all.filter((d) => !d.deleted);
+  },
+
+  deleteIotDevice(id: string): IotSensorDevice[] {
+    const all = this.getIotDevices(true);
+    const nowIso = new Date().toISOString();
+    const next = all.map((d) => (d.id === id ? { ...d, deleted: true, updatedAt: nowIso } : d));
+    localStorage.setItem(KEYS.IOT_DEVICES, JSON.stringify(next));
+    this.broadcastChange('iot-monitoring');
+
+    import('./supabase')
+      .then((m) => {
+        if (typeof (m as any).syncAdditionalModulesToSupabase === 'function') {
+          void (m as any).syncAdditionalModulesToSupabase(['iot_monitoring']);
+        }
+      })
+      .catch(() => {});
+
+    return next.filter((d) => !d.deleted);
+  },
+
+  getIotReadings(deviceId?: string): IotTelemetryReading[] {
+    const raw = localStorage.getItem(KEYS.IOT_READINGS);
+    if (!raw) return [];
+    try {
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return [];
+      const list = deviceId
+        ? parsed.filter((r: IotTelemetryReading) => r && r.deviceId === deviceId)
+        : parsed;
+      return list.sort((a: IotTelemetryReading, b: IotTelemetryReading) =>
+        String(b.recordedAt || '').localeCompare(String(a.recordedAt || ''))
+      );
+    } catch {
+      return [];
+    }
+  },
+
+  recordIotTelemetry(payload: {
+    outletId?: string;
+    deviceId: string;
+    roomName?: string;
+    roomType?: IotRoomType;
+    temperature: number;
+    humidity?: number | null;
+    source?: 'hardware' | 'simulation' | 'manual';
+    signalRssi?: number | null;
+    occupancyPct?: number | null;
+    recordedAt?: string;
+    dateForOccupancy?: string;
+    syncToRemote?: boolean;
+  }): { device: IotSensorDevice; reading: IotTelemetryReading } {
+    const allDevices = this.getIotDevices(true);
+    const normDevId = String(payload.deviceId || '').trim().toUpperCase();
+    const existingIdx = allDevices.findIndex(
+      (d) => d.deviceId.toUpperCase() === normDevId || d.id === payload.deviceId
+    );
+    const nowIso = payload.recordedAt || new Date().toISOString();
+    const tempRounded = Math.round(Number(payload.temperature) * 10) / 10;
+    const humRounded =
+      payload.humidity !== undefined && payload.humidity !== null && !Number.isNaN(Number(payload.humidity))
+        ? Math.round(Number(payload.humidity) * 10) / 10
+        : null;
+
+    let device: IotSensorDevice;
+    if (existingIdx >= 0) {
+      device = {
+        ...allDevices[existingIdx],
+        deleted: false,
+        lastTemperature: tempRounded,
+        lastHumidity: allDevices[existingIdx].roomType === 'projector' ? humRounded : null,
+        lastSeenAt: nowIso,
+        lastSource: payload.source || 'simulation',
+        signalRssi: payload.signalRssi ?? allDevices[existingIdx].signalRssi ?? null,
+        updatedAt: nowIso,
+      };
+      allDevices[existingIdx] = device;
+    } else {
+      const rType: IotRoomType = payload.roomType || 'server';
+      device = {
+        id: `dev-${normDevId.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`,
+        outletId: payload.outletId || 'the-park-sawangan-xxi',
+        deviceId: normDevId,
+        roomName: payload.roomName || normDevId,
+        roomType: rType,
+        connectionType: 'wifi',
+        sensorModel: 'ESP32 + SHT31',
+        occupancyOverridePct: null,
+        lastTemperature: tempRounded,
+        lastHumidity: rType === 'projector' ? humRounded : null,
+        lastSeenAt: nowIso,
+        lastSource: payload.source || 'simulation',
+        signalRssi: payload.signalRssi ?? null,
+        updatedAt: nowIso,
+      };
+      allDevices.push(device);
+    }
+
+    localStorage.setItem(KEYS.IOT_DEVICES, JSON.stringify(allDevices));
+
+    // Resolve occupancy for SOP evaluation
+    const checkDate = payload.dateForOccupancy || nowIso.slice(0, 10);
+    let resolvedOccPct: number | null = payload.occupancyPct ?? device.occupancyOverridePct ?? null;
+    if (resolvedOccPct === null && device.roomType === 'studio') {
+      resolvedOccPct = this.getStudioOccupancyPct(device.outletId, device.roomName, checkDate).pct;
+    }
+    const sop = this.evaluateIotSop(device.roomType, resolvedOccPct);
+    const isTempWithinSop = tempRounded >= sop.sopMinTemp && tempRounded <= sop.sopMaxTemp;
+    const isHumidityWithinSop =
+      sop.monitorHumidity && humRounded !== null
+        ? humRounded >= sop.sopMinHumidity && humRounded <= sop.sopMaxHumidity
+        : null;
+
+    const reading: IotTelemetryReading = {
+      id: `iot_${device.deviceId}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      outletId: device.outletId,
+      deviceId: device.deviceId,
+      roomName: device.roomName,
+      roomType: device.roomType,
+      temperature: tempRounded,
+      humidity: sop.monitorHumidity ? humRounded : null,
+      source: payload.source || 'simulation',
+      occupancyPct: device.roomType === 'studio' ? resolvedOccPct : null,
+      sopMinTemp: sop.sopMinTemp,
+      sopMaxTemp: sop.sopMaxTemp,
+      isTempWithinSop,
+      isHumidityWithinSop,
+      recordedAt: nowIso,
+    };
+
+    const existingReadings = this.getIotReadings();
+    const perDeviceCount = new Map<string, number>();
+    const bounded = [reading, ...existingReadings]
+      .filter((r) => {
+        const cur = perDeviceCount.get(r.deviceId) || 0;
+        if (cur >= 30) return false;
+        perDeviceCount.set(r.deviceId, cur + 1);
+        return true;
+      })
+      .slice(0, 240);
+
+    localStorage.setItem(KEYS.IOT_READINGS, JSON.stringify(bounded));
+    this.broadcastChange('iot-monitoring');
+
+    if (payload.syncToRemote !== false) {
+      import('./supabase')
+        .then((m) => {
+          if (typeof (m as any).syncAdditionalModulesToSupabase === 'function') {
+            void (m as any).syncAdditionalModulesToSupabase(['iot_monitoring']);
+          }
+        })
+        .catch(() => {});
+    }
+
+    return { device, reading };
+  },
+
+  resetIotTelemetryForOutlet(outletId?: string): void {
+    const allDevices = this.getIotDevices(true);
+    const nowIso = new Date().toISOString();
+    const updatedDevices = allDevices.map((d) => {
+      if (outletId && d.outletId !== outletId) return d;
+      return {
+        ...d,
+        lastTemperature: null,
+        lastHumidity: null,
+        lastSeenAt: null,
+        lastSource: null,
+        signalRssi: null,
+        updatedAt: nowIso,
+      };
+    });
+    localStorage.setItem(KEYS.IOT_DEVICES, JSON.stringify(updatedDevices));
+
+    const existingReadings = this.getIotReadings();
+    const filteredReadings = outletId
+      ? existingReadings.filter((r) => r.outletId !== outletId)
+      : [];
+    localStorage.setItem(KEYS.IOT_READINGS, JSON.stringify(filteredReadings));
+    this.broadcastChange('iot-monitoring');
+
+    import('./supabase')
+      .then((m) => {
+        if (typeof (m as any).syncAdditionalModulesToSupabase === 'function') {
+          void (m as any).syncAdditionalModulesToSupabase(['iot_monitoring']);
+        }
+      })
+      .catch(() => {});
+  },
 };
+

@@ -32,7 +32,7 @@ import {
   Droplets,
   Sun,
   MapPin,
-  MessageSquareHeart,
+  Thermometer,
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -453,19 +453,19 @@ export const Sidebar: React.FC<SidebarProps> = ({
               </>
             ))}
 
-            {/* 7. LOST N FOUND STANDALONE MENU */}
+            {/* 7. MONITORING SUHU & KELEMBABAN STANDALONE MENU */}
+            <div>
+              {renderStandaloneMainButton('iot_monitoring', 'Monitoring Suhu', Thermometer)}
+            </div>
+
+            {/* 8. LOST N FOUND STANDALONE MENU */}
             <div>
               {renderStandaloneMainButton('lost_and_found', 'Lost N Found', PackageSearch)}
             </div>
 
-            {/* 8. GOOGLE REVIEW STANDALONE MENU */}
+            {/* 9. GOOGLE REVIEW STANDALONE MENU */}
             <div>
               {renderStandaloneMainButton('google_review', 'Google Review', MapPin)}
-            </div>
-
-            {/* 9. KATA-KATA HARI INI STANDALONE MENU */}
-            <div>
-              {renderStandaloneMainButton('kata_hari_ini', 'Kata-kata Hari Ini', MessageSquareHeart)}
             </div>
 
             {/* Admin Management */}

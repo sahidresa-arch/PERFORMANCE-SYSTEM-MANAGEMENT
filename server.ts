@@ -86,6 +86,7 @@ const MERGE_BY_ID_ROWS = new Set([
   '__SYSTEM_SYNC_LOST_FOUND__',
   '__SYSTEM_SYNC_MAINTENANCE__',
   '__SYSTEM_SYNC_DAILY_QUOTES__',
+  '__SYSTEM_SYNC_IOT_MONITORING__',
 ]);
 
 const MERGE_BY_OUTLET_DATE_ROWS = new Set([
@@ -799,6 +800,169 @@ async function startServer() {
     } catch (err: any) {
       res.status(500).json({ data: null, error: { message: err?.message || 'Query error' } });
     }
+  });
+
+  // 5. IoT Telemetry Ingestion & Readings Endpoints (ESP32 Hardware & Web)
+  app.post('/api/iot/telemetry', (req, res) => {
+    try {
+      const body = req.body || {};
+      const rawDeviceId = String(body.deviceId || body.device_id || '').trim().toUpperCase();
+      const tempVal = Number(body.temperature ?? body.temp);
+      if (!rawDeviceId || Number.isNaN(tempVal)) {
+        res.status(400).json({ ok: false, error: 'deviceId dan temperature (angka) wajib diisi.' });
+        return;
+      }
+
+      const nowIso = new Date().toISOString();
+      const rowId = '__SYSTEM_SYNC_IOT_MONITORING__';
+      const existingRow = syncStore.cinema_sales[rowId] || {
+        id: rowId,
+        outlet_id: '__SYSTEM_SYNC__',
+        date: '2026-01-01',
+        shows: [],
+        updated_at: nowIso,
+      };
+      const shows: any[] = Array.isArray(existingRow.shows) ? [...existingRow.shows] : [];
+
+      const devKey = `iotdev_${rawDeviceId}`;
+      const existingDevIdx = shows.findIndex((s) => s && s.id === devKey);
+      const existingDev = existingDevIdx >= 0 ? shows[existingDevIdx]?.payload : null;
+
+      const roomType = String(body.roomType || body.room_type || existingDev?.roomType || 'server');
+      const roomName = String(body.roomName || body.room_name || existingDev?.roomName || rawDeviceId);
+      const outletId = String(body.outletId || body.outlet_id || existingDev?.outletId || 'the-park-sawangan-xxi');
+      const tempRounded = Math.round(tempVal * 10) / 10;
+      const rawHum = body.humidity ?? body.hum;
+      const humRounded =
+        roomType === 'projector' && rawHum !== undefined && rawHum !== null && !Number.isNaN(Number(rawHum))
+          ? Math.round(Number(rawHum) * 10) / 10
+          : null;
+      const rssiVal = body.rssi !== undefined && body.rssi !== null && !Number.isNaN(Number(body.rssi))
+        ? Number(body.rssi)
+        : existingDev?.signalRssi ?? null;
+
+      const occVal =
+        body.occupancyPct !== undefined && body.occupancyPct !== null && !Number.isNaN(Number(body.occupancyPct))
+          ? Number(body.occupancyPct)
+          : existingDev?.occupancyOverridePct ?? null;
+      const isHighOccStudio = roomType === 'studio' && occVal !== null && occVal > 50;
+      const sopMinTemp = isHighOccStudio ? 22.0 : 23.0;
+      const sopMaxTemp = isHighOccStudio ? 23.5 : 24.0;
+      const isTempWithinSop = tempRounded >= sopMinTemp && tempRounded <= sopMaxTemp;
+      const isHumidityWithinSop =
+        roomType === 'projector' && humRounded !== null ? humRounded >= 40 && humRounded <= 60 : null;
+
+      const nextDevice = {
+        id: existingDev?.id || `dev-${rawDeviceId.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`,
+        outletId,
+        deviceId: rawDeviceId,
+        roomName,
+        roomType,
+        connectionType: body.connectionType || existingDev?.connectionType || 'ethernet',
+        sensorModel: body.sensorModel || existingDev?.sensorModel || 'ESP32 + SHT31',
+        occupancyOverridePct: existingDev?.occupancyOverridePct ?? null,
+        notes: existingDev?.notes || '',
+        lastTemperature: tempRounded,
+        lastHumidity: humRounded,
+        lastSeenAt: nowIso,
+        lastSource: body.source || 'hardware',
+        signalRssi: rssiVal,
+        updatedAt: nowIso,
+        deleted: false,
+      };
+
+      const devWrapper = {
+        id: devKey,
+        recordType: 'device',
+        updatedAt: nowIso,
+        payload: nextDevice,
+      };
+      if (existingDevIdx >= 0) {
+        shows[existingDevIdx] = devWrapper;
+      } else {
+        shows.push(devWrapper);
+      }
+
+      const reading = {
+        id: `iot_${rawDeviceId}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        outletId,
+        deviceId: rawDeviceId,
+        roomName,
+        roomType,
+        temperature: tempRounded,
+        humidity: humRounded,
+        source: body.source || 'hardware',
+        occupancyPct: roomType === 'studio' ? occVal : null,
+        sopMinTemp,
+        sopMaxTemp,
+        isTempWithinSop,
+        isHumidityWithinSop,
+        recordedAt: nowIso,
+      };
+
+      const histKey = `iothist_${rawDeviceId}`;
+      const histIdx = shows.findIndex((s) => s && s.id === histKey);
+      const prevReadings = histIdx >= 0 && Array.isArray(shows[histIdx]?.readings) ? shows[histIdx].readings : [];
+      const histWrapper = {
+        id: histKey,
+        recordType: 'history',
+        deviceId: rawDeviceId,
+        updatedAt: nowIso,
+        readings: [reading, ...prevReadings].slice(0, 30),
+      };
+      if (histIdx >= 0) {
+        shows[histIdx] = histWrapper;
+      } else {
+        shows.push(histWrapper);
+      }
+
+      syncStore.cinema_sales[rowId] = {
+        id: rowId,
+        outlet_id: '__SYSTEM_SYNC__',
+        date: '2026-01-01',
+        shows,
+        updated_at: nowIso,
+      };
+
+      scheduleSaveStoreToDisk();
+      broadcastSseEvent({
+        type: 'ROW_UPDATED',
+        table: 'cinema_sales',
+        id: rowId,
+        updated_at: nowIso,
+        outlet_id: '__SYSTEM_SYNC__',
+        date: '2026-01-01',
+        clientId: null,
+      });
+
+      res.json({
+        ok: true,
+        deviceId: rawDeviceId,
+        roomName,
+        temperature: tempRounded,
+        humidity: humRounded,
+        sopMinTemp,
+        sopMaxTemp,
+        isTempWithinSop,
+        isHumidityWithinSop,
+        recordedAt: nowIso,
+      });
+    } catch (err: any) {
+      res.status(500).json({ ok: false, error: err?.message || 'IoT telemetry error' });
+    }
+  });
+
+  app.get('/api/iot/readings', (_req, res) => {
+    const row = syncStore.cinema_sales['__SYSTEM_SYNC_IOT_MONITORING__'];
+    const shows: any[] = Array.isArray(row?.shows) ? row.shows : [];
+    const devices = shows
+      .filter((s) => s && s.recordType === 'device' && s.payload && !s.payload.deleted)
+      .map((s) => s.payload);
+    const readings = shows
+      .filter((s) => s && s.recordType === 'history' && Array.isArray(s.readings))
+      .flatMap((s) => s.readings)
+      .sort((a: any, b: any) => String(b.recordedAt || '').localeCompare(String(a.recordedAt || '')));
+    res.json({ ok: true, devices, readings, updatedAt: row?.updated_at || null });
   });
 
   // Mount Vite in development or static dist in production
