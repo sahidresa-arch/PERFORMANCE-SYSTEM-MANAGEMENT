@@ -665,73 +665,81 @@ export const BeritaAcaraModal: React.FC<BeritaAcaraModalProps> = ({
 
     const pageWidth = doc.internal.pageSize.getWidth();
     const pageHeight = doc.internal.pageSize.getHeight();
-    const marginX = 20;
+    const marginX = 18;
+    const bottomMargin = 12;
     const contentWidth = pageWidth - marginX * 2;
-    let y = 18;
+    let y = 13;
+
+    const totalDataRows = isGabungan
+      ? combinedRows.length
+      : isKarpet
+      ? carpetRows.length
+      : chairRows.length;
+    const isCompact = totalDataRows >= 8;
 
     const ensureSpace = (neededMm: number) => {
-      if (y + neededMm > pageHeight - 20) {
+      if (y + neededMm > pageHeight - bottomMargin) {
         doc.addPage();
-        y = 20;
+        y = 15;
       }
     };
 
     // === KOP SURAT (Font lebih besar dari teks isi) ===
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(16);
+    doc.setFontSize(15);
     doc.setTextColor(15, 23, 42);
     const kopTitleLines = doc.splitTextToSize(
       (kopOutletName || displayName).toUpperCase(),
       contentWidth
     );
     doc.text(kopTitleLines, pageWidth / 2, y, { align: 'center' });
-    y += kopTitleLines.length * 6.5;
+    y += kopTitleLines.length * 5.8;
 
     doc.setFont('helvetica', 'normal');
-    doc.setFontSize(11.5);
+    doc.setFontSize(10.5);
     doc.setTextColor(51, 65, 85);
     const addrText = kopAddress.trim() || 'Alamat outlet belum tersedia';
-    const addrLines = doc.splitTextToSize(addrText, contentWidth - 10);
+    const addrLines = doc.splitTextToSize(addrText, contentWidth - 8);
     doc.text(addrLines, pageWidth / 2, y, { align: 'center' });
-    y += addrLines.length * 5.2 + 2;
+    y += addrLines.length * 4.5 + 1.5;
 
     // Garis Bawah Kop Surat Resmi (Double line)
     doc.setDrawColor(15, 23, 42);
-    doc.setLineWidth(0.9);
+    doc.setLineWidth(0.8);
     doc.line(marginX, y, pageWidth - marginX, y);
-    y += 1.2;
+    y += 1.1;
     doc.setLineWidth(0.3);
     doc.line(marginX, y, pageWidth - marginX, y);
-    y += 10;
+    y += isCompact ? 6 : 7.5;
 
     // === JUDUL BERITA ACARA ===
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(isGabungan ? 11.5 : 12.5);
+    doc.setFontSize(isGabungan ? 11 : 12);
     doc.setTextColor(15, 23, 42);
     doc.text(documentTitle, pageWidth / 2, y, { align: 'center' });
     const titleWidth = doc.getTextWidth(documentTitle);
     doc.setLineWidth(0.4);
     doc.line(
       (pageWidth - titleWidth) / 2,
-      y + 1.5,
+      y + 1.4,
       (pageWidth + titleWidth) / 2,
-      y + 1.5
+      y + 1.4
     );
-    y += 11;
+    y += isCompact ? 6.5 : 8;
 
     // === KEPADA YTH ===
     doc.setFont('helvetica', 'normal');
-    doc.setFontSize(10.5);
+    doc.setFontSize(9.8);
     doc.text('Kepada Yth.', marginX, y);
-    y += 5.5;
+    y += 4.5;
     doc.setFont('helvetica', 'bold');
     doc.text('Team QC di Jakarta', marginX, y);
-    y += 9;
+    y += isCompact ? 5.5 : 6.5;
 
     // === IDENTITAS PENGAJU ===
     doc.setFont('helvetica', 'normal');
     doc.text('Yang bertanda tangan di bawah ini:', marginX, y);
-    y += 6.5;
+    y += 5;
 
     const labelX = marginX + 4;
     const colonX = marginX + 34;
@@ -744,20 +752,20 @@ export const BeritaAcaraModal: React.FC<BeritaAcaraModalProps> = ({
       doc.setFont('helvetica', 'bold');
       const wrapped = doc.splitTextToSize(value || '-', contentWidth - 40);
       doc.text(wrapped, valX, y);
-      y += wrapped.length * 5.5 + 0.5;
+      y += wrapped.length * 4.8 + 0.3;
     };
 
     drawField('Nama', managerName.trim() || '.................................');
     drawField('Jabatan', managerJabatan.trim() || 'Cinema Manager');
     drawField('Outlet', outletFieldName.trim() || displayName);
-    y += 4;
+    y += isCompact ? 2.5 : 3.5;
 
     // === PARAGRAF PERMOHONAN SOP ===
     doc.setFont('helvetica', 'normal');
-    doc.setFontSize(10.5);
+    doc.setFontSize(9.8);
     const bodyLines = doc.splitTextToSize(sopConditionSentence, contentWidth);
     doc.text(bodyLines, marginX, y);
-    y += bodyLines.length * 5.3 + 4;
+    y += bodyLines.length * 4.5 + 2.5;
 
     if (isGabungan) {
       const notes: string[] = [];
@@ -776,34 +784,49 @@ export const BeritaAcaraModal: React.FC<BeritaAcaraModalProps> = ({
         );
       }
       if (notes.length > 0) {
-        doc.setFontSize(9.2);
+        doc.setFontSize(8.6);
         doc.setTextColor(71, 85, 105);
         notes.forEach((line) => {
           const wrappedInfo = doc.splitTextToSize(line, contentWidth);
           doc.text(wrappedInfo, marginX, y);
-          y += wrappedInfo.length * 4.6;
+          y += wrappedInfo.length * 4.0;
         });
-        y += 4;
+        y += 2.5;
         doc.setTextColor(15, 23, 42);
-        doc.setFontSize(10.5);
+        doc.setFontSize(9.8);
       }
     } else if (activeSingleStatus.lastDate || activeSingleStatus.expDate) {
-      doc.setFontSize(9.5);
+      doc.setFontSize(8.8);
       doc.setTextColor(71, 85, 105);
       const infoLine = `Catatan Jadwal SOP: Pencucian terakhir ${formatDateIndonesian(
         activeSingleStatus.lastDate
       )} | Jatuh tempo SOP ${formatDateIndonesian(activeSingleStatus.expDate)}.`;
       const wrappedInfo = doc.splitTextToSize(infoLine, contentWidth);
       doc.text(wrappedInfo, marginX, y);
-      y += wrappedInfo.length * 4.8 + 4;
+      y += wrappedInfo.length * 4.2 + 2.5;
       doc.setTextColor(15, 23, 42);
-      doc.setFontSize(10.5);
+      doc.setFontSize(9.8);
     }
 
     // === RINCIAN ===
     doc.setFont('helvetica', 'bold');
+    doc.setFontSize(9.8);
     doc.text('Dengan rincian sebagai berikut:', marginX, y);
-    y += 6.5;
+    y += 4.8;
+
+    // Hitung ruang tersisa agar tabel + penutup + blok TTD muat dalam 1 halaman A4
+    doc.setFont('helvetica', 'italic');
+    doc.setFontSize(8.8);
+    const noteLinesPreview = additionalNote.trim()
+      ? doc.splitTextToSize(`Keterangan Tambahan: ${additionalNote.trim()}`, contentWidth)
+      : [];
+    const noteHeightMm = noteLinesPreview.length > 0 ? noteLinesPreview.length * 4.2 + 3 : 0;
+    const footerBlockHeightMm = 50 + noteHeightMm;
+    const availableForTableMm = Math.max(24, pageHeight - bottomMargin - footerBlockHeightMm - y);
+    const totalTableRows = Math.max(1, totalDataRows) + 2; // Header + Data + Total
+    const rowH = Math.max(4.6, Math.min(7.0, (availableForTableMm - 4.5) / totalTableRows));
+    const tableFontSize = rowH >= 6.4 ? 9.4 : rowH >= 5.4 ? 8.8 : 8.0;
+    const textOffsetY = rowH * 0.67;
 
     const drawRincianTable = (
       rows: { label: string; valueText: string }[],
@@ -812,7 +835,6 @@ export const BeritaAcaraModal: React.FC<BeritaAcaraModalProps> = ({
     ) => {
       const col1W = contentWidth * 0.62;
       const col2W = contentWidth - col1W;
-      const rowH = 8;
 
       // Table Header
       ensureSpace(rowH * 2);
@@ -822,9 +844,9 @@ export const BeritaAcaraModal: React.FC<BeritaAcaraModalProps> = ({
       doc.rect(marginX, y, col1W, rowH, 'FD');
       doc.rect(marginX + col1W, y, col2W, rowH, 'FD');
       doc.setFont('helvetica', 'bold');
-      doc.setFontSize(10);
-      doc.text(isKarpet ? 'Area / Bagian Karpet' : 'Studio / Area Kursi', marginX + 3, y + 5.5);
-      doc.text(isKarpet ? 'Luas Karpet (m²)' : 'Jumlah Kursi', marginX + col1W + col2W - 3, y + 5.5, {
+      doc.setFontSize(tableFontSize);
+      doc.text(isKarpet ? 'Area / Bagian Karpet' : 'Studio / Area Kursi', marginX + 3, y + textOffsetY);
+      doc.text(isKarpet ? 'Luas Karpet (m²)' : 'Jumlah Kursi', marginX + col1W + col2W - 3, y + textOffsetY, {
         align: 'right',
       });
       y += rowH;
@@ -836,8 +858,8 @@ export const BeritaAcaraModal: React.FC<BeritaAcaraModalProps> = ({
         doc.setDrawColor(203, 213, 225);
         doc.rect(marginX, y, col1W, rowH, 'D');
         doc.rect(marginX + col1W, y, col2W, rowH, 'D');
-        doc.text(r.label || '-', marginX + 3, y + 5.5);
-        doc.text(r.valueText, marginX + col1W + col2W - 3, y + 5.5, {
+        doc.text(r.label || '-', marginX + 3, y + textOffsetY);
+        doc.text(r.valueText, marginX + col1W + col2W - 3, y + textOffsetY, {
           align: 'right',
         });
         y += rowH;
@@ -850,18 +872,17 @@ export const BeritaAcaraModal: React.FC<BeritaAcaraModalProps> = ({
       doc.rect(marginX, y, col1W, rowH, 'FD');
       doc.rect(marginX + col1W, y, col2W, rowH, 'FD');
       doc.setFont('helvetica', 'bold');
-      doc.text(totalLabel, marginX + 3, y + 5.5);
-      doc.text(totalValueText, marginX + col1W + col2W - 3, y + 5.5, {
+      doc.text(totalLabel, marginX + 3, y + textOffsetY);
+      doc.text(totalValueText, marginX + col1W + col2W - 3, y + textOffsetY, {
         align: 'right',
       });
-      y += rowH + 6;
+      y += rowH + 4.5;
     };
 
     if (isGabungan) {
       const col1W = contentWidth * 0.48;
       const col2W = contentWidth * 0.27;
       const col3W = contentWidth - col1W - col2W;
-      const rowH = 8;
 
       ensureSpace(rowH * 2);
       doc.setFillColor(241, 245, 249);
@@ -871,10 +892,10 @@ export const BeritaAcaraModal: React.FC<BeritaAcaraModalProps> = ({
       doc.rect(marginX + col1W, y, col2W, rowH, 'FD');
       doc.rect(marginX + col1W + col2W, y, col3W, rowH, 'FD');
       doc.setFont('helvetica', 'bold');
-      doc.setFontSize(10);
-      doc.text('Area / Ruangan', marginX + 3, y + 5.5);
-      doc.text('Luas Karpet (m²)', marginX + col1W + col2W - 3, y + 5.5, { align: 'right' });
-      doc.text('Jumlah Kursi', marginX + col1W + col2W + col3W - 3, y + 5.5, {
+      doc.setFontSize(tableFontSize);
+      doc.text('Area / Ruangan', marginX + 3, y + textOffsetY);
+      doc.text('Luas Karpet (m²)', marginX + col1W + col2W - 3, y + textOffsetY, { align: 'right' });
+      doc.text('Jumlah Kursi', marginX + col1W + col2W + col3W - 3, y + textOffsetY, {
         align: 'right',
       });
       y += rowH;
@@ -886,14 +907,14 @@ export const BeritaAcaraModal: React.FC<BeritaAcaraModalProps> = ({
         doc.rect(marginX, y, col1W, rowH, 'D');
         doc.rect(marginX + col1W, y, col2W, rowH, 'D');
         doc.rect(marginX + col1W + col2W, y, col3W, rowH, 'D');
-        doc.text(r.label || '-', marginX + 3, y + 5.5);
-        doc.text(r.areaSqm.trim() ? `${r.areaSqm} m²` : '-', marginX + col1W + col2W - 3, y + 5.5, {
+        doc.text(r.label || '-', marginX + 3, y + textOffsetY);
+        doc.text(r.areaSqm.trim() ? `${r.areaSqm} m²` : '-', marginX + col1W + col2W - 3, y + textOffsetY, {
           align: 'right',
         });
         doc.text(
           r.seats.trim() ? `${r.seats} kursi` : '-',
           marginX + col1W + col2W + col3W - 3,
-          y + 5.5,
+          y + textOffsetY,
           { align: 'right' }
         );
         y += rowH;
@@ -906,20 +927,20 @@ export const BeritaAcaraModal: React.FC<BeritaAcaraModalProps> = ({
       doc.rect(marginX + col1W, y, col2W, rowH, 'FD');
       doc.rect(marginX + col1W + col2W, y, col3W, rowH, 'FD');
       doc.setFont('helvetica', 'bold');
-      doc.text('Total', marginX + 3, y + 5.5);
+      doc.text('Total', marginX + 3, y + textOffsetY);
       doc.text(
         totalCombinedSqm > 0 ? `${Math.round(totalCombinedSqm * 100) / 100} m²` : '- m²',
         marginX + col1W + col2W - 3,
-        y + 5.5,
+        y + textOffsetY,
         { align: 'right' }
       );
       doc.text(
         totalCombinedSeats > 0 ? `${totalCombinedSeats} kursi` : '- kursi',
         marginX + col1W + col2W + col3W - 3,
-        y + 5.5,
+        y + textOffsetY,
         { align: 'right' }
       );
-      y += rowH + 6;
+      y += rowH + 4.5;
     } else if (isKarpet) {
       drawRincianTable(
         carpetRows.map((r) => ({
@@ -940,27 +961,23 @@ export const BeritaAcaraModal: React.FC<BeritaAcaraModalProps> = ({
       );
     }
 
-    if (additionalNote.trim()) {
-      ensureSpace(14);
+    if (noteLinesPreview.length > 0) {
+      ensureSpace(noteLinesPreview.length * 4.2 + 3);
       doc.setFont('helvetica', 'italic');
-      doc.setFontSize(9.5);
-      const noteLines = doc.splitTextToSize(
-        `Keterangan Tambahan: ${additionalNote.trim()}`,
-        contentWidth
-      );
-      doc.text(noteLines, marginX, y);
-      y += noteLines.length * 4.8 + 4;
+      doc.setFontSize(8.8);
+      doc.text(noteLinesPreview, marginX, y);
+      y += noteLinesPreview.length * 4.2 + 3;
     }
 
-    // === PENUTUP ===
-    ensureSpace(65);
+    // === PENUTUP & TANDA TANGAN (Dijaga agar tetap dalam 1 halaman) ===
+    ensureSpace(44);
     doc.setFont('helvetica', 'normal');
-    doc.setFontSize(10.5);
+    doc.setFontSize(9.8);
     const closingText =
       'Demikian berita acara ini kami buat dengan data yang sebenar-benarnya, terima kasih.';
     const closingLines = doc.splitTextToSize(closingText, contentWidth);
     doc.text(closingLines, marginX, y);
-    y += closingLines.length * 5.5 + 8;
+    y += closingLines.length * 4.6 + 4.5;
 
     // === TEMPAT & TANGGAL ===
     const dateLine = `${cityName.trim() || 'Bogor'}, ${
@@ -968,7 +985,7 @@ export const BeritaAcaraModal: React.FC<BeritaAcaraModalProps> = ({
     }`;
     doc.setFont('helvetica', 'normal');
     doc.text(dateLine, marginX, y);
-    y += 7;
+    y += 5.5;
 
     // === BLOK TANDA TANGAN (Yang membuat | Mengetahui: Area Manager & Regional Manager) ===
     const colW = contentWidth / 3;
@@ -978,11 +995,11 @@ export const BeritaAcaraModal: React.FC<BeritaAcaraModalProps> = ({
     const mengetahuiCenter = marginX + colW * 2;
 
     doc.setFont('helvetica', 'normal');
-    doc.setFontSize(10.5);
+    doc.setFontSize(9.8);
     doc.text('Yang membuat,', c1Center, y, { align: 'center' });
     doc.text('Mengetahui,', mengetahuiCenter, y, { align: 'center' });
-    y += 5;
-    doc.setFontSize(9.5);
+    y += 4.5;
+    doc.setFontSize(8.8);
     doc.setTextColor(71, 85, 105);
     doc.text(managerJabatan.trim() || 'Manager Outlet', c1Center, y, {
       align: 'center',
@@ -990,12 +1007,15 @@ export const BeritaAcaraModal: React.FC<BeritaAcaraModalProps> = ({
     doc.text('Area Manager', c2Center, y, { align: 'center' });
     doc.text('Regional Manager', c3Center, y, { align: 'center' });
 
+    const remainingForSig = Math.max(15, pageHeight - bottomMargin - y - 4);
+    const sigBoxH = Math.min(20, remainingForSig);
+
     // Embed Tanda Tangan Digital Cinema Manager tepat di atas nama pada kolom 'Yang membuat'
     if (signatureDataUrl) {
       try {
         const props = doc.getImageProperties(signatureDataUrl);
-        const maxW = 38;
-        const maxH = 19;
+        const maxW = 36;
+        const maxH = Math.max(12, sigBoxH - 3.5);
         const scale = Math.min(
           maxW / (props.width || 460),
           maxH / (props.height || 150)
@@ -1003,18 +1023,17 @@ export const BeritaAcaraModal: React.FC<BeritaAcaraModalProps> = ({
         const drawW = (props.width || 460) * scale;
         const drawH = (props.height || 150) * scale;
         const sigX = c1Center - drawW / 2;
-        const sigY = y + 2.5 + (maxH - drawH) / 2;
+        const sigY = y + 2 + (maxH - drawH) / 2;
         doc.addImage(signatureDataUrl, 'PNG', sigX, sigY, drawW, drawH);
       } catch {
-        // Fallback safely if image properties fail
-        doc.addImage(signatureDataUrl, 'PNG', c1Center - 18, y + 3, 36, 15);
+        doc.addImage(signatureDataUrl, 'PNG', c1Center - 17, y + 2.5, 34, Math.min(14, sigBoxH - 4));
       }
     }
 
-    y += 24;
+    y += sigBoxH;
     doc.setTextColor(15, 23, 42);
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(10);
+    doc.setFontSize(9.5);
 
     const sign1 = `( ${managerName.trim() || '..........................'} )`;
     const sign2 = `( ${areaManagerName.trim() || 'Bpk. Fachri'} )`;
