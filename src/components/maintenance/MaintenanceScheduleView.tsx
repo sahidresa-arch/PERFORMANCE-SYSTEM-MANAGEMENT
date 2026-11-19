@@ -19,6 +19,8 @@ import {
   Flame,
   MapPin,
   Download,
+  ArrowUpDown,
+  Pencil,
 } from 'lucide-react';
 import * as XLSXStyleModule from 'xlsx-js-style';
 import {
@@ -182,6 +184,8 @@ interface ComputedOutletMaintenanceStatus {
   daysRemaining: number; // positif = sisa hari, negatif = lewat hari
   daysElapsed: number;
   latestMonthEntry: MaintenanceMonthEntry | null;
+  latestRecordYear?: number;
+  latestRecordMonth?: number;
 }
 
 function computeOutletCategoryStatus(
@@ -199,9 +203,13 @@ function computeOutletCategoryStatus(
   );
 
   let latestEntry: MaintenanceMonthEntry | null = null;
+  let latestRecordYear: number | undefined;
+  let latestRecordMonth: number | undefined;
+
   allCategoryRecords.forEach((rec) => {
-    Object.values(rec.months || {}).forEach((entry) => {
+    Object.entries(rec.months || {}).forEach(([monthKey, entry]) => {
       if (!entry) return;
+      const monthNum = Number(monthKey);
       const compareKey =
         category === 'apar'
           ? entry.customExpiryDate?.trim() || entry.date || ''
@@ -213,6 +221,8 @@ function computeOutletCategoryStatus(
         : '';
       if (compareKey && (!latestEntry || compareKey >= latestKey)) {
         latestEntry = entry;
+        latestRecordYear = rec.year;
+        latestRecordMonth = !isNaN(monthNum) && monthNum >= 1 && monthNum <= 12 ? monthNum : 1;
       }
     });
   });
@@ -249,6 +259,8 @@ function computeOutletCategoryStatus(
       daysRemaining: 0,
       daysElapsed: 0,
       latestMonthEntry: validEntry,
+      latestRecordYear,
+      latestRecordMonth,
     };
   }
 
@@ -270,7 +282,16 @@ function computeOutletCategoryStatus(
     daysRemaining,
     daysElapsed,
     latestMonthEntry: validEntry,
+    latestRecordYear,
+    latestRecordMonth,
   };
+}
+
+function formatIsoToIndoDate(iso?: string | null): string {
+  if (!iso) return '-';
+  const parts = iso.trim().split('-');
+  if (parts.length !== 3) return iso.trim();
+  return `${parts[2]}/${parts[1]}/${parts[0]}`;
 }
 
 export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = ({
@@ -282,6 +303,7 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
   const [aparAreaFilter, setAparAreaFilter] = useState<
     'all' | 'area-bogor-1-depok' | 'area-bogor-2' | 'unassigned'
   >('all');
+  const [aparSortMode, setAparSortMode] = useState<'name' | 'exp_asc'>('name');
   const [searchQuery, setSearchQuery] = useState('');
   const [pageSize, setPageSize] = useState<number>(10);
   const [currentPage, setCurrentPage] = useState<number>(1);
@@ -292,12 +314,13 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
     StorageService.getMaintenanceRecords()
   );
 
-  // Modal Input/Edit Bulan
+  // Modal Input/Edit Bulan atau APAR
   const [activeCellModal, setActiveCellModal] = useState<{
     outlet: Outlet;
     displayName: string;
     outletClass: 'A' | 'B' | 'C';
     month: number; // 1..12
+    sourceYear?: number;
     existingEntry: MaintenanceMonthEntry | null;
   } | null>(null);
 
@@ -364,7 +387,7 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
   useEffect(() => {
     setCurrentPage(1);
     setStatusFilter('all');
-  }, [activeCategory, selectedYear, searchQuery, pageSize, aparAreaFilter]);
+  }, [activeCategory, selectedYear, searchQuery, pageSize, aparAreaFilter, aparSortMode]);
 
   // Sync listener
   useEffect(() => {
@@ -445,9 +468,9 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
         };
       case 'apar':
         return {
-          title: `Kalender Expired APAR - ${selectedYear}`,
+          title: 'Daftar Masa Berlaku (Exp) APAR Outlet',
           subtitle:
-            'Ketuk pada kolom bulan atau gunakan Input Massal APAR untuk mencatat Jumlah APAR, Merk APAR, dan Tanggal Expired (Exp) masing-masing outlet. Status aman & alarm H-30 dihitung langsung dari sisa hari menuju tanggal Exp terhitung dari hari ini.',
+            'Monitoring seluruh data Jumlah Tabung, Merk APAR, dan Tanggal Expired lintas tahun dalam satu tabel. Status aman & alarm H-30 dihitung langsung dari sisa hari menuju Tanggal Exp terhitung dari hari ini.',
           actionOverdue: 'APAR EXPIRED!',
           actionWarning: 'SEGERA EXP!',
           unitIcon: '🧯',
@@ -645,10 +668,10 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
     };
   }, [activeMenu, visibleOutlets, records, todayStr]);
 
-  // Apply search & status filter
+  // Apply search, status filter & APAR sorting
   const filteredRows = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
-    return outletRows.filter((row) => {
+    const list = outletRows.filter((row) => {
       if (statusFilter !== 'all' && row.computedStatus.status !== statusFilter) {
         return false;
       }
@@ -659,7 +682,24 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
         row.outletClass.toLowerCase() === q
       );
     });
-  }, [outletRows, searchQuery, statusFilter]);
+
+    if (activeCategory === 'apar' && aparSortMode === 'exp_asc') {
+      return [...list].sort((a, b) => {
+        const expA = a.computedStatus.expDate;
+        const expB = b.computedStatus.expDate;
+        if (expA && expB) {
+          const cmp = expA.localeCompare(expB);
+          if (cmp !== 0) return cmp;
+          return a.displayName.localeCompare(b.displayName);
+        }
+        if (expA && !expB) return -1;
+        if (!expA && expB) return 1;
+        return a.displayName.localeCompare(b.displayName);
+      });
+    }
+
+    return list;
+  }, [outletRows, searchQuery, statusFilter, activeCategory, aparSortMode]);
 
   // Pagination
   const totalItems = filteredRows.length;
@@ -786,21 +826,23 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
     return defaultAreas;
   };
 
-  // Open cell modal
+  // Open cell / direct APAR modal
   const handleOpenCellModal = (
     outlet: Outlet,
     displayName: string,
     outletClass: 'A' | 'B' | 'C',
     month: number,
-    existingEntry: MaintenanceMonthEntry | null
+    existingEntry: MaintenanceMonthEntry | null,
+    sourceYear?: number
   ) => {
+    const resolvedSourceYear = sourceYear ?? selectedYear;
     const sopDays = getSopDays(activeCategory, outletClass);
     const defaultMonthStr = String(month).padStart(2, '0');
     const defaultDate =
-      existingEntry?.date || `${selectedYear}-${defaultMonthStr}-01`;
+      existingEntry?.date || `${resolvedSourceYear}-${defaultMonthStr}-01`;
     const defaultExp =
       activeCategory === 'apar'
-        ? existingEntry?.customExpiryDate || `${selectedYear}-${defaultMonthStr}-01`
+        ? existingEntry?.customExpiryDate || ''
         : existingEntry?.customExpiryDate || addDaysToDateString(defaultDate, sopDays);
 
     setFormDate(defaultDate);
@@ -872,6 +914,7 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
       displayName,
       outletClass,
       month,
+      sourceYear: resolvedSourceYear,
       existingEntry,
     });
   };
@@ -1077,9 +1120,10 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
       updatedAt: new Date().toISOString(),
     };
 
+    const originYear = activeCellModal.sourceYear ?? selectedYear;
     const targetYear =
       activeCategory === 'apar'
-        ? Number(cleanExpDate.split('-')[0]) || selectedYear
+        ? Number(cleanExpDate.split('-')[0]) || originYear
         : selectedYear;
     const targetMonth =
       activeCategory === 'apar'
@@ -1089,12 +1133,12 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
     if (
       activeCategory === 'apar' &&
       activeCellModal.existingEntry &&
-      (targetYear !== selectedYear || targetMonth !== activeCellModal.month)
+      (targetYear !== originYear || targetMonth !== activeCellModal.month)
     ) {
       StorageService.saveMaintenanceMonthEntry(
         activeCellModal.outlet.id,
         activeCategory,
-        selectedYear,
+        originYear,
         activeCellModal.month,
         null
       );
@@ -1113,10 +1157,11 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
 
   const handleDeleteCellEntry = () => {
     if (!activeCellModal) return;
+    const originYear = activeCellModal.sourceYear ?? selectedYear;
     const updated = StorageService.saveMaintenanceMonthEntry(
       activeCellModal.outlet.id,
       activeCategory,
-      selectedYear,
+      originYear,
       activeCellModal.month,
       null
     );
@@ -1198,6 +1243,24 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
         parts.length === 3 && !isNaN(parts[1]) && parts[1] >= 1 && parts[1] <= 12
           ? parts[1]
           : 1;
+
+      const existingOutletRow = outletRows.find((r) => r.outlet.id === row.outletId);
+      const prevYear = existingOutletRow?.computedStatus.latestRecordYear;
+      const prevMonth = existingOutletRow?.computedStatus.latestRecordMonth;
+
+      if (
+        prevYear !== undefined &&
+        prevMonth !== undefined &&
+        (prevYear !== targetYear || prevMonth !== targetMonth)
+      ) {
+        latestRecords = StorageService.saveMaintenanceMonthEntry(
+          row.outletId,
+          'apar',
+          prevYear,
+          prevMonth,
+          null
+        );
+      }
 
       const existingRec = latestRecords.find(
         (r) =>
@@ -1286,7 +1349,7 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
 
     const sheetData: any[][] = [
       ['REKAP DATA APAR - CINEMA XXI', '', '', ''],
-      [`Filter Area: ${areaLabel}   |   Tahun: ${selectedYear}`, '', '', ''],
+      [`Filter Area: ${areaLabel}   |   Monitoring Lintas Tahun`, '', '', ''],
       [
         `Total Outlet: ${exportRows.length}   |   Terisi: ${filledCount} Outlet   |   Total APAR: ${totalTabung} Tabung   |   Diunduh: ${headerDateStr}`,
         '',
@@ -1511,7 +1574,7 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
         ? 'Belum_Masuk_Area'
         : 'Semua_Area';
 
-    XLSX.writeFile(wb, `Rekap_Data_APAR_${areaSlug}_${selectedYear}.xlsx`);
+    XLSX.writeFile(wb, `Rekap_Data_APAR_${areaSlug}.xlsx`);
   };
 
   // Alarm list (Outlets that are overdue or approaching SOP limit)
@@ -1525,34 +1588,41 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
 
   return (
     <div className="w-full space-y-4 pb-8">
-      {/* Top Bar: Tahun Berjalan & Status Legends */}
+      {/* Top Bar: Tahun Berjalan (Non-APAR) / Info Lintas Tahun (APAR) & Status Legends */}
       <div className="bg-white rounded-2xl border border-slate-200/90 shadow-xs px-4 py-3 flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <span className="text-[11px] font-bold tracking-wider text-slate-500 uppercase">
-            TAHUN BERJALAN:
-          </span>
-          <div className="inline-flex items-center bg-slate-50 border border-slate-200 rounded-full px-1.5 py-0.5">
-            <button
-              type="button"
-              onClick={() => setSelectedYear((y) => y - 1)}
-              className="p-1 text-slate-500 hover:text-slate-800 hover:bg-slate-200/60 rounded-full transition-colors cursor-pointer"
-              title="Tahun Sebelumnya"
-            >
-              <ChevronLeft className="w-3.5 h-3.5" />
-            </button>
-            <span className="px-3 text-xs font-extrabold text-slate-800 tabular-nums">
-              {selectedYear}
-            </span>
-            <button
-              type="button"
-              onClick={() => setSelectedYear((y) => y + 1)}
-              className="p-1 text-slate-500 hover:text-slate-800 hover:bg-slate-200/60 rounded-full transition-colors cursor-pointer"
-              title="Tahun Berikutnya"
-            >
-              <ChevronRight className="w-3.5 h-3.5" />
-            </button>
+        {activeCategory === 'apar' ? (
+          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-rose-50/90 border border-rose-200/90 text-rose-800 text-[11px] font-extrabold">
+            <Flame className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+            <span>MONITORING LINTAS TAHUN (SEMUA DATA EXP APAR)</span>
           </div>
-        </div>
+        ) : (
+          <div className="flex items-center gap-3">
+            <span className="text-[11px] font-bold tracking-wider text-slate-500 uppercase">
+              TAHUN BERJALAN:
+            </span>
+            <div className="inline-flex items-center bg-slate-50 border border-slate-200 rounded-full px-1.5 py-0.5">
+              <button
+                type="button"
+                onClick={() => setSelectedYear((y) => y - 1)}
+                className="p-1 text-slate-500 hover:text-slate-800 hover:bg-slate-200/60 rounded-full transition-colors cursor-pointer"
+                title="Tahun Sebelumnya"
+              >
+                <ChevronLeft className="w-3.5 h-3.5" />
+              </button>
+              <span className="px-3 text-xs font-extrabold text-slate-800 tabular-nums">
+                {selectedYear}
+              </span>
+              <button
+                type="button"
+                onClick={() => setSelectedYear((y) => y + 1)}
+                className="p-1 text-slate-500 hover:text-slate-800 hover:bg-slate-200/60 rounded-full transition-colors cursor-pointer"
+                title="Tahun Berikutnya"
+              >
+                <ChevronRight className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Status Legend Pills (Clickable to filter) */}
         <div className="flex flex-wrap items-center gap-2">
@@ -1913,6 +1983,25 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
                 )}
               </div>
 
+              {activeCategory === 'apar' && (
+                <div className="inline-flex items-center gap-1.5 bg-slate-50/80 border border-slate-200 rounded-xl px-3 py-1.5">
+                  <ArrowUpDown className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                  <span className="text-[10px] font-bold uppercase text-slate-500">
+                    URUTKAN:
+                  </span>
+                  <select
+                    value={aparSortMode}
+                    onChange={(e) =>
+                      setAparSortMode(e.target.value as 'name' | 'exp_asc')
+                    }
+                    className="text-xs font-extrabold text-slate-800 bg-transparent focus:outline-none cursor-pointer"
+                  >
+                    <option value="name">Nama Outlet A–Z</option>
+                    <option value="exp_asc">Exp Terdekat</option>
+                  </select>
+                </div>
+              )}
+
               <div className="inline-flex items-center gap-1.5 bg-slate-50/80 border border-slate-200 rounded-xl px-3 py-1.5">
                 <span className="text-[10px] font-bold uppercase text-slate-500">
                   TAMPILKAN:
@@ -1935,40 +2024,60 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
 
         {/* Schedule Table */}
         <div className="overflow-x-auto">
-          <table className="w-full border-collapse min-w-[1180px]">
+          <table
+            className={`w-full border-collapse ${
+              activeCategory === 'apar' ? 'min-w-[960px]' : 'min-w-[1180px]'
+            }`}
+          >
             <thead>
-              <tr className="bg-slate-50/70 border-b border-slate-200 text-[10px] font-extrabold text-slate-500 uppercase tracking-wider">
-                <th
-                  className={`py-3 pl-4 pr-2 text-left w-[230px] ${
-                    activeCategory === 'apar' ? 'border-r border-slate-200/90' : ''
-                  }`}
-                >
-                  OUTLET
-                </th>
-                {activeCategory !== 'apar' && (
+              {activeCategory === 'apar' ? (
+                <tr className="bg-slate-50/70 border-b border-slate-200 text-[10px] font-extrabold text-slate-500 uppercase tracking-wider">
+                  <th className="py-3 pl-4 pr-3 text-left min-w-[230px] border-r border-slate-200/90">
+                    NAMA OUTLET
+                  </th>
+                  <th className="py-3 px-3 text-center w-[135px] border-r border-slate-200/90">
+                    JUMLAH APAR
+                  </th>
+                  <th className="py-3 px-3 text-center w-[165px] border-r border-slate-200/90">
+                    MERK APAR
+                  </th>
+                  <th className="py-3 px-3 text-center w-[165px] border-r border-slate-200/90">
+                    TANGGAL EXP APAR
+                  </th>
+                  <th className="py-3 px-3 text-center w-[195px] border-r border-slate-200/90">
+                    SOP ALARM & STATUS
+                  </th>
+                  <th className="py-3 px-3 text-center w-[170px] border-r border-slate-200/90">
+                    KETERANGAN
+                  </th>
+                  <th className="py-3 px-3 text-center w-[110px]">AKSI</th>
+                </tr>
+              ) : (
+                <tr className="bg-slate-50/70 border-b border-slate-200 text-[10px] font-extrabold text-slate-500 uppercase tracking-wider">
+                  <th className="py-3 pl-4 pr-2 text-left w-[230px]">OUTLET</th>
                   <th className="py-3 px-2 text-center w-[64px] border-r border-slate-200/90">
                     KELAS
                   </th>
-                )}
-                {MONTH_LABELS.map((mLabel) => (
-                  <th
-                    key={mLabel}
-                    className="py-3 px-1 text-center w-[56px] border-r border-slate-200/90"
-                  >
-                    {mLabel}
+                  {MONTH_LABELS.map((mLabel) => (
+                    <th
+                      key={mLabel}
+                      className="py-3 px-1 text-center w-[56px] border-r border-slate-200/90"
+                    >
+                      {mLabel}
+                    </th>
+                  ))}
+                  <th className="py-3 px-3 text-center w-[195px] border-r border-slate-200/90">
+                    SOP ALARM & STATUS
                   </th>
-                ))}
-                <th className="py-3 px-3 text-center w-[195px] border-r border-slate-200/90">
-                  SOP ALARM & STATUS
-                </th>
-                <th className="py-3 px-3 text-center w-[170px]">KETERANGAN</th>
-              </tr>
+                  <th className="py-3 px-3 text-center w-[170px]">KETERANGAN</th>
+                </tr>
+              )}
             </thead>
             <tbody className="divide-y divide-slate-200/90 text-xs">
               {paginatedRows.length === 0 ? (
                 <tr>
                   <td
-                    colSpan={activeCategory === 'apar' ? 15 : 16}
+                    colSpan={activeCategory === 'apar' ? 7 : 16}
                     className="py-12 text-center text-slate-400 font-medium"
                   >
                     Tidak ada outlet yang sesuai dengan pencarian / filter status.
@@ -1978,158 +2087,176 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
                 paginatedRows.map(
                   ({ outlet, displayName, outletClass, yearRecord, computedStatus }) => {
                     const { status, lastDate, expDate, daysRemaining } = computedStatus;
+                    const aparEntry = computedStatus.latestMonthEntry;
 
                     return (
                       <tr
                         key={outlet.id}
                         className="hover:bg-slate-50/50 transition-colors group"
                       >
-                        {/* OUTLET NAME & Tgl / Exp Subtext */}
-                        <td
-                          className={`py-3.5 pl-4 pr-2 align-middle ${
-                            activeCategory === 'apar'
-                              ? 'border-r border-slate-200/90'
-                              : ''
-                          }`}
-                        >
-                          <div className="font-extrabold text-[11px] sm:text-xs text-slate-900 uppercase tracking-tight leading-snug">
-                            {displayName}
-                          </div>
-                          {activeCategory === 'apar' &&
-                            computedStatus.latestMonthEntry && (
-                              <div className="flex flex-wrap items-center gap-1 mt-1">
-                                {computedStatus.latestMonthEntry.quantity &&
-                                  computedStatus.latestMonthEntry.quantity > 0 && (
-                                    <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-rose-50 text-rose-700 border border-rose-200 text-[10px] font-extrabold tabular-nums">
-                                      {computedStatus.latestMonthEntry.quantity} Tabung
-                                    </span>
-                                  )}
-                                {computedStatus.latestMonthEntry.aparBrand && (
-                                  <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-slate-100 text-slate-700 border border-slate-200 text-[10px] font-bold">
-                                    Merk: {computedStatus.latestMonthEntry.aparBrand}
-                                  </span>
-                                )}
+                        {activeCategory === 'apar' ? (
+                          <>
+                            {/* NAMA OUTLET */}
+                            <td className="py-3.5 pl-4 pr-3 align-middle border-r border-slate-200/90">
+                              <div className="font-extrabold text-[11px] sm:text-xs text-slate-900 uppercase tracking-tight leading-snug">
+                                {displayName}
                               </div>
-                            )}
-                          {activeCategory === 'apar' ? (
-                            expDate && (
-                              <div className="text-[10px] font-medium text-slate-500 mt-0.5 tabular-nums">
-                                Exp APAR: {expDate}
-                              </div>
-                            )
-                          ) : (
-                            lastDate &&
-                            expDate && (
-                              <div className="text-[10px] font-medium text-slate-500 mt-0.5 tabular-nums">
-                                Tgl: {lastDate} | Exp: {expDate}
-                              </div>
-                            )
-                          )}
-                        </td>
-
-                        {/* KELAS BADGE */}
-                        {activeCategory !== 'apar' && (
-                          <td className="py-3.5 px-2 text-center align-middle border-r border-slate-200/90">
-                            <span
-                              className={`inline-flex items-center justify-center min-w-[26px] px-2 py-0.5 rounded-md text-[11px] font-extrabold border ${
-                                outletClass === 'A'
-                                  ? 'bg-amber-50 text-amber-700 border-amber-300'
-                                  : outletClass === 'B'
-                                  ? 'bg-blue-50/80 text-blue-700 border-blue-200'
-                                  : 'bg-slate-50 text-slate-600 border-slate-300'
-                              }`}
-                            >
-                              {outletClass}
-                            </span>
-                          </td>
-                        )}
-
-                        {/* 12 MONTH CELLS */}
-                        {MONTH_LABELS.map((_, idx) => {
-                          const monthNum = idx + 1;
-                          const cellEntry = yearRecord.months?.[monthNum] || null;
-                          const dayNumber = cellEntry?.date
-                            ? cellEntry.date.split('-')[2] || '01'
-                            : null;
-
-                          // Style badge inside cell based on overall SOP status or green if safe
-                          let cellBadgeClass =
-                            'bg-emerald-50 text-emerald-800 border-emerald-200';
-                          if (
-                            cellEntry &&
-                            computedStatus.latestMonthEntry?.date === cellEntry.date
-                          ) {
-                            if (status === 'overdue') {
-                              cellBadgeClass =
-                                'bg-amber-50 text-amber-900 border-amber-200/90';
-                            } else if (status === 'warning') {
-                              cellBadgeClass =
-                                'bg-amber-50 text-amber-900 border-amber-300';
-                            }
-                          }
-
-                          return (
-                            <td
-                              key={monthNum}
-                              onClick={() =>
-                                handleOpenCellModal(
-                                  outlet,
-                                  displayName,
-                                  outletClass,
-                                  monthNum,
-                                  cellEntry
-                                )
-                              }
-                              title={
-                                cellEntry
-                                  ? `${displayName} (${MONTH_FULL_NAMES[idx]} ${selectedYear})${
-                                      activeCategory === 'apar'
-                                        ? cellEntry.customExpiryDate
-                                          ? `\nExp APAR: ${cellEntry.customExpiryDate}`
-                                          : ''
-                                        : `\nTanggal: ${cellEntry.date}`
-                                    }${
-                                      cellEntry.aparBrand
-                                        ? `\nMerk APAR: ${cellEntry.aparBrand}`
-                                        : ''
-                                    }${
-                                      cellEntry.quantity
-                                        ? `\nJumlah: ${cellEntry.quantity}${
-                                            activeCategory === 'apar' ? ' Tabung' : ''
-                                          }`
-                                        : ''
-                                    }${
-                                      activeCategory !== 'apar' && cellEntry.customExpiryDate
-                                        ? `\nExp: ${cellEntry.customExpiryDate}`
-                                        : ''
-                                    }${cellEntry.notes ? `\nCatatan: ${cellEntry.notes}` : ''}`
-                                  : `Klik untuk mencatat jadwal ${MONTH_FULL_NAMES[idx]} ${selectedYear} pada ${displayName}`
-                              }
-                              className="py-2.5 px-1 text-center align-middle border-r border-slate-200/90 cursor-pointer hover:bg-amber-50/40 transition-colors relative"
-                            >
-                              {cellEntry && dayNumber ? (
-                                <div
-                                  className={`inline-flex items-center justify-center gap-1 px-1.5 py-1 rounded-md border text-[10px] font-extrabold leading-none shadow-2xs ${cellBadgeClass}`}
-                                >
-                                  <span className="tabular-nums">{dayNumber}</span>
-                                  {cellEntry.quantity && cellEntry.quantity > 0 && (
-                                    <span className="inline-flex items-center gap-0.5 text-[9px] font-bold text-amber-700">
-                                      <span>{categoryMeta.unitIcon}</span>
-                                      <span className="tabular-nums">
-                                        {cellEntry.quantity}
-                                        {activeCategory === 'karpet' ? ' m²' : ''}
-                                      </span>
-                                    </span>
-                                  )}
-                                </div>
-                              ) : (
-                                <div className="w-full h-7 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
-                                  <Plus className="w-3 h-3 text-slate-300 hover:text-amber-500" />
+                              {aparEntry?.notes && (
+                                <div className="text-[10px] text-slate-500 mt-0.5 truncate max-w-[260px]">
+                                  Catatan: {aparEntry.notes}
                                 </div>
                               )}
                             </td>
-                          );
-                        })}
+
+                            {/* JUMLAH APAR */}
+                            <td className="py-3.5 px-3 text-center align-middle border-r border-slate-200/90">
+                              {aparEntry?.quantity && aparEntry.quantity > 0 ? (
+                                <span className="inline-flex items-center justify-center px-2.5 py-1 rounded-full bg-rose-50 text-rose-700 border border-rose-200 text-[11px] font-extrabold tabular-nums">
+                                  {aparEntry.quantity} Tabung
+                                </span>
+                              ) : (
+                                <span className="text-slate-300 font-semibold">-</span>
+                              )}
+                            </td>
+
+                            {/* MERK APAR */}
+                            <td className="py-3.5 px-3 text-center align-middle border-r border-slate-200/90">
+                              {aparEntry?.aparBrand ? (
+                                <span className="inline-flex items-center justify-center px-2.5 py-1 rounded-md bg-slate-100 text-slate-800 border border-slate-200 text-[11px] font-bold">
+                                  {aparEntry.aparBrand}
+                                </span>
+                              ) : (
+                                <span className="text-slate-300 font-semibold">-</span>
+                              )}
+                            </td>
+
+                            {/* TANGGAL EXP APAR */}
+                            <td className="py-3.5 px-3 text-center align-middle border-r border-slate-200/90">
+                              {expDate ? (
+                                <span
+                                  className={`inline-flex items-center justify-center gap-1 px-2.5 py-1 rounded-md border text-[11px] font-extrabold tabular-nums ${
+                                    status === 'overdue'
+                                      ? 'bg-rose-50 text-rose-700 border-rose-200'
+                                      : status === 'warning'
+                                      ? 'bg-amber-50 text-amber-800 border-amber-300'
+                                      : 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                  }`}
+                                >
+                                  <Calendar className="w-3 h-3 shrink-0 opacity-80" />
+                                  <span>{formatIsoToIndoDate(expDate)}</span>
+                                </span>
+                              ) : (
+                                <span className="text-[11px] text-slate-400 italic">
+                                  Belum diisi
+                                </span>
+                              )}
+                            </td>
+                          </>
+                        ) : (
+                          <>
+                            {/* OUTLET NAME & Tgl / Exp Subtext */}
+                            <td className="py-3.5 pl-4 pr-2 align-middle">
+                              <div className="font-extrabold text-[11px] sm:text-xs text-slate-900 uppercase tracking-tight leading-snug">
+                                {displayName}
+                              </div>
+                              {lastDate && expDate && (
+                                <div className="text-[10px] font-medium text-slate-500 mt-0.5 tabular-nums">
+                                  Tgl: {lastDate} | Exp: {expDate}
+                                </div>
+                              )}
+                            </td>
+
+                            {/* KELAS BADGE */}
+                            <td className="py-3.5 px-2 text-center align-middle border-r border-slate-200/90">
+                              <span
+                                className={`inline-flex items-center justify-center min-w-[26px] px-2 py-0.5 rounded-md text-[11px] font-extrabold border ${
+                                  outletClass === 'A'
+                                    ? 'bg-amber-50 text-amber-700 border-amber-300'
+                                    : outletClass === 'B'
+                                    ? 'bg-blue-50/80 text-blue-700 border-blue-200'
+                                    : 'bg-slate-50 text-slate-600 border-slate-300'
+                                }`}
+                              >
+                                {outletClass}
+                              </span>
+                            </td>
+
+                            {/* 12 MONTH CELLS */}
+                            {MONTH_LABELS.map((_, idx) => {
+                              const monthNum = idx + 1;
+                              const cellEntry = yearRecord.months?.[monthNum] || null;
+                              const dayNumber = cellEntry?.date
+                                ? cellEntry.date.split('-')[2] || '01'
+                                : null;
+
+                              // Style badge inside cell based on overall SOP status or green if safe
+                              let cellBadgeClass =
+                                'bg-emerald-50 text-emerald-800 border-emerald-200';
+                              if (
+                                cellEntry &&
+                                computedStatus.latestMonthEntry?.date === cellEntry.date
+                              ) {
+                                if (status === 'overdue') {
+                                  cellBadgeClass =
+                                    'bg-amber-50 text-amber-900 border-amber-200/90';
+                                } else if (status === 'warning') {
+                                  cellBadgeClass =
+                                    'bg-amber-50 text-amber-900 border-amber-300';
+                                }
+                              }
+
+                              return (
+                                <td
+                                  key={monthNum}
+                                  onClick={() =>
+                                    handleOpenCellModal(
+                                      outlet,
+                                      displayName,
+                                      outletClass,
+                                      monthNum,
+                                      cellEntry
+                                    )
+                                  }
+                                  title={
+                                    cellEntry
+                                      ? `${displayName} (${MONTH_FULL_NAMES[idx]} ${selectedYear})\nTanggal: ${cellEntry.date}${
+                                          cellEntry.quantity
+                                            ? `\nJumlah: ${cellEntry.quantity}`
+                                            : ''
+                                        }${
+                                          cellEntry.customExpiryDate
+                                            ? `\nExp: ${cellEntry.customExpiryDate}`
+                                            : ''
+                                        }${cellEntry.notes ? `\nCatatan: ${cellEntry.notes}` : ''}`
+                                      : `Klik untuk mencatat jadwal ${MONTH_FULL_NAMES[idx]} ${selectedYear} pada ${displayName}`
+                                  }
+                                  className="py-2.5 px-1 text-center align-middle border-r border-slate-200/90 cursor-pointer hover:bg-amber-50/40 transition-colors relative"
+                                >
+                                  {cellEntry && dayNumber ? (
+                                    <div
+                                      className={`inline-flex items-center justify-center gap-1 px-1.5 py-1 rounded-md border text-[10px] font-extrabold leading-none shadow-2xs ${cellBadgeClass}`}
+                                    >
+                                      <span className="tabular-nums">{dayNumber}</span>
+                                      {cellEntry.quantity && cellEntry.quantity > 0 && (
+                                        <span className="inline-flex items-center gap-0.5 text-[9px] font-bold text-amber-700">
+                                          <span>{categoryMeta.unitIcon}</span>
+                                          <span className="tabular-nums">
+                                            {cellEntry.quantity}
+                                            {activeCategory === 'karpet' ? ' m²' : ''}
+                                          </span>
+                                        </span>
+                                      )}
+                                    </div>
+                                  ) : (
+                                    <div className="w-full h-7 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                                      <Plus className="w-3 h-3 text-slate-300 hover:text-amber-500" />
+                                    </div>
+                                  )}
+                                </td>
+                              );
+                            })}
+                          </>
+                        )}
 
                         {/* SOP ALARM & STATUS */}
                         <td className="py-3 px-2.5 text-center align-middle border-r border-slate-200/90">
@@ -2232,7 +2359,13 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
                         </td>
 
                         {/* KETERANGAN */}
-                        <td className="py-3 px-2.5 text-center align-middle">
+                        <td
+                          className={`py-3 px-2.5 text-center align-middle ${
+                            activeCategory === 'apar'
+                              ? 'border-r border-slate-200/90'
+                              : ''
+                          }`}
+                        >
                           {yearRecord.keterangan ? (
                             <button
                               type="button"
@@ -2261,6 +2394,42 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
                             </button>
                           )}
                         </td>
+
+                        {/* AKSI LANGSUNG KHUSUS APAR */}
+                        {activeCategory === 'apar' && (
+                          <td className="py-3 px-2.5 text-center align-middle">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                handleOpenCellModal(
+                                  outlet,
+                                  displayName,
+                                  outletClass,
+                                  computedStatus.latestRecordMonth ?? 1,
+                                  aparEntry,
+                                  computedStatus.latestRecordYear ?? selectedYear
+                                )
+                              }
+                              className={`inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-extrabold border transition-colors cursor-pointer ${
+                                aparEntry
+                                  ? 'bg-slate-900 hover:bg-slate-800 text-amber-300 border-slate-700'
+                                  : 'bg-amber-400 hover:bg-amber-500 text-slate-950 border-amber-500/50 shadow-2xs'
+                              }`}
+                            >
+                              {aparEntry ? (
+                                <>
+                                  <Pencil className="w-3 h-3" />
+                                  <span>Edit</span>
+                                </>
+                              ) : (
+                                <>
+                                  <Plus className="w-3 h-3" />
+                                  <span>Input</span>
+                                </>
+                              )}
+                            </button>
+                          </td>
+                        )}
                       </tr>
                     );
                   }
@@ -2350,7 +2519,9 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
                     </span>
                   )}
                   <span className="text-xs font-bold text-amber-300">
-                    {MONTH_FULL_NAMES[activeCellModal.month - 1]} {selectedYear}
+                    {activeCategory === 'apar'
+                      ? 'DATA APAR OUTLET'
+                      : `${MONTH_FULL_NAMES[activeCellModal.month - 1]} ${selectedYear}`}
                   </span>
                 </div>
                 <h3 className="text-sm font-extrabold mt-1 uppercase tracking-wide">
@@ -2804,7 +2975,9 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
 
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1">
-                  Catatan Bulan Ini (Opsional)
+                  {activeCategory === 'apar'
+                    ? 'Catatan (Opsional)'
+                    : 'Catatan Bulan Ini (Opsional)'}
                 </label>
                 <input
                   type="text"
@@ -2842,7 +3015,9 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
                     className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-extrabold text-slate-950 bg-amber-400 hover:bg-amber-500 shadow-xs transition-colors cursor-pointer"
                   >
                     <Save className="w-3.5 h-3.5" />
-                    <span>Simpan Jadwal</span>
+                    <span>
+                      {activeCategory === 'apar' ? 'Simpan Data APAR' : 'Simpan Jadwal'}
+                    </span>
                   </button>
                 </div>
               </div>
@@ -2876,7 +3051,9 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
             <form onSubmit={handleSaveKeterangan} className="p-5 space-y-4">
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1.5">
-                  Keterangan Outlet ({selectedYear})
+                  {activeCategory === 'apar'
+                    ? 'Keterangan Outlet'
+                    : `Keterangan Outlet (${selectedYear})`}
                 </label>
                 <textarea
                   rows={3}
