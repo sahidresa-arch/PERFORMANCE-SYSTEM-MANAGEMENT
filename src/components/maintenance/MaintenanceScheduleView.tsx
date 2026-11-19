@@ -18,7 +18,9 @@ import {
   FileText,
   Flame,
   MapPin,
+  Download,
 } from 'lucide-react';
+import * as XLSXStyleModule from 'xlsx-js-style';
 import {
   User,
   Outlet,
@@ -199,15 +201,23 @@ function computeOutletCategoryStatus(
   let latestEntry: MaintenanceMonthEntry | null = null;
   allCategoryRecords.forEach((rec) => {
     Object.values(rec.months || {}).forEach((entry) => {
-      if (entry && entry.date) {
-        if (!latestEntry || entry.date >= latestEntry.date) {
-          latestEntry = entry;
-        }
+      if (!entry) return;
+      const compareKey =
+        category === 'apar'
+          ? entry.customExpiryDate?.trim() || entry.date || ''
+          : entry.date || '';
+      const latestKey = latestEntry
+        ? category === 'apar'
+          ? latestEntry.customExpiryDate?.trim() || latestEntry.date || ''
+          : latestEntry.date || ''
+        : '';
+      if (compareKey && (!latestEntry || compareKey >= latestKey)) {
+        latestEntry = entry;
       }
     });
   });
 
-  if (!latestEntry || !(latestEntry as MaintenanceMonthEntry).date) {
+  if (!latestEntry) {
     return {
       status: 'empty',
       lastDate: null,
@@ -220,13 +230,30 @@ function computeOutletCategoryStatus(
   }
 
   const validEntry = latestEntry as MaintenanceMonthEntry;
-  const lastDate = validEntry.date;
+  const lastDate = validEntry.date || null;
   const expDate =
-    validEntry.customExpiryDate && validEntry.customExpiryDate.trim()
+    category === 'apar'
+      ? validEntry.customExpiryDate?.trim() || null
+      : validEntry.customExpiryDate && validEntry.customExpiryDate.trim()
       ? validEntry.customExpiryDate.trim()
-      : addDaysToDateString(lastDate, sopDays);
+      : lastDate
+      ? addDaysToDateString(lastDate, sopDays)
+      : null;
+
+  if (!expDate) {
+    return {
+      status: 'empty',
+      lastDate,
+      expDate: null,
+      sopDays,
+      daysRemaining: 0,
+      daysElapsed: 0,
+      latestMonthEntry: validEntry,
+    };
+  }
+
   const daysRemaining = diffDaysBetween(todayStr, expDate);
-  const daysElapsed = diffDaysBetween(lastDate, todayStr);
+  const daysElapsed = lastDate ? diffDaysBetween(lastDate, todayStr) : 0;
 
   let status: SopStatusType = 'safe';
   if (daysRemaining < 0) {
@@ -302,9 +329,6 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
       qty: string;
       expDate: string;
       brand: string;
-      serviceDate: string;
-      hadExisting: boolean;
-      existingDate?: string;
     }>
   >([]);
 
@@ -421,11 +445,11 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
         };
       case 'apar':
         return {
-          title: `Kalender Service & Expired APAR - ${selectedYear}`,
+          title: `Kalender Expired APAR - ${selectedYear}`,
           subtitle:
-            'Ketuk pada kolom bulan untuk mencatat Jumlah APAR, Merk APAR, Tanggal Service, dan Tanggal Expired (Exp) masing-masing outlet. Alarm pengingat otomatis aktif H-30 sebelum Exp APAR.',
+            'Ketuk pada kolom bulan atau gunakan Input Massal APAR untuk mencatat Jumlah APAR, Merk APAR, dan Tanggal Expired (Exp) masing-masing outlet. Status aman & alarm H-30 dihitung langsung dari sisa hari menuju tanggal Exp terhitung dari hari ini.',
           actionOverdue: 'APAR EXPIRED!',
-          actionWarning: 'SEGERA SERVICE!',
+          actionWarning: 'SEGERA EXP!',
           unitIcon: '🧯',
           qtyLabel: 'Jumlah APAR (Tabung)',
           qtyPlaceholder: 'Contoh: 12',
@@ -775,7 +799,9 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
     const defaultDate =
       existingEntry?.date || `${selectedYear}-${defaultMonthStr}-01`;
     const defaultExp =
-      existingEntry?.customExpiryDate || addDaysToDateString(defaultDate, sopDays);
+      activeCategory === 'apar'
+        ? existingEntry?.customExpiryDate || `${selectedYear}-${defaultMonthStr}-01`
+        : existingEntry?.customExpiryDate || addDaysToDateString(defaultDate, sopDays);
 
     setFormDate(defaultDate);
 
@@ -997,7 +1023,17 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
 
   const handleSaveCellEntry = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!activeCellModal || !formDate) return;
+    if (!activeCellModal) return;
+
+    const cleanExpDate = formExpDate.trim();
+    if (activeCategory === 'apar') {
+      if (!cleanExpDate) return;
+    } else if (!formDate) {
+      return;
+    }
+
+    const effectiveEntryDate =
+      activeCategory === 'apar' ? cleanExpDate : formDate;
 
     const cleanedAparUnits =
       activeCategory === 'apar' && aparUnits.length > 0
@@ -1022,7 +1058,7 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
         : undefined;
 
     const entry: MaintenanceMonthEntry = {
-      date: formDate,
+      date: effectiveEntryDate,
       quantity: parsedQty && !isNaN(parsedQty) && parsedQty > 0 ? parsedQty : undefined,
       aparBrand:
         activeCategory === 'apar' && formAparBrand.trim()
@@ -1035,17 +1071,40 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
       selectedStudios:
         activeCategory === 'kursi_studio' ? selectedStudios : undefined,
       carpetAreas: cleanedCarpetAreas,
-      customExpiryDate: formExpDate.trim() || undefined,
+      customExpiryDate: cleanExpDate || undefined,
       notes: formNotes.trim() || undefined,
       updatedBy: currentUser.name,
       updatedAt: new Date().toISOString(),
     };
 
+    const targetYear =
+      activeCategory === 'apar'
+        ? Number(cleanExpDate.split('-')[0]) || selectedYear
+        : selectedYear;
+    const targetMonth =
+      activeCategory === 'apar'
+        ? Number(cleanExpDate.split('-')[1]) || activeCellModal.month
+        : activeCellModal.month;
+
+    if (
+      activeCategory === 'apar' &&
+      activeCellModal.existingEntry &&
+      (targetYear !== selectedYear || targetMonth !== activeCellModal.month)
+    ) {
+      StorageService.saveMaintenanceMonthEntry(
+        activeCellModal.outlet.id,
+        activeCategory,
+        selectedYear,
+        activeCellModal.month,
+        null
+      );
+    }
+
     const updated = StorageService.saveMaintenanceMonthEntry(
       activeCellModal.outlet.id,
       activeCategory,
-      selectedYear,
-      activeCellModal.month,
+      targetYear,
+      targetMonth,
       entry
     );
     setRecords(updated);
@@ -1097,9 +1156,6 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
         qty: latest?.quantity && latest.quantity > 0 ? String(latest.quantity) : '',
         expDate: row.computedStatus.expDate || '',
         brand: latest?.aparBrand || '',
-        serviceDate: row.computedStatus.lastDate || '',
-        hadExisting: Boolean(latest?.date),
-        existingDate: latest?.date,
       };
     });
     setBulkAparRows(rows);
@@ -1113,18 +1169,10 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
       qty: string;
       expDate: string;
       brand: string;
-      serviceDate: string;
     }>
   ) => {
     setBulkAparRows((prev) =>
-      prev.map((row) => {
-        if (row.outletId !== outletId) return row;
-        const next = { ...row, ...patch };
-        if (patch.serviceDate && !patch.expDate && !row.expDate) {
-          next.expDate = addDaysToDateString(patch.serviceDate, 365);
-        }
-        return next;
-      })
+      prev.map((row) => (row.outletId === outletId ? { ...row, ...patch } : row))
     );
   };
 
@@ -1137,16 +1185,13 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
       const hasQty = !isNaN(qtyNum) && qtyNum > 0;
       const cleanBrand = row.brand.trim();
       const cleanExp = row.expDate.trim();
-      const cleanService = row.serviceDate.trim();
 
-      if (!hasQty && !cleanBrand && !cleanExp && !cleanService) {
+      if (!hasQty && !cleanBrand && !cleanExp) {
         return;
       }
 
-      const effectiveServiceDate =
-        cleanService ||
-        (cleanExp ? addDaysToDateString(cleanExp, -365) : `${selectedYear}-01-01`);
-      const parts = effectiveServiceDate.split('-').map(Number);
+      const effectiveDate = cleanExp || `${selectedYear}-01-01`;
+      const parts = effectiveDate.split('-').map(Number);
       const targetYear =
         parts.length === 3 && !isNaN(parts[0]) ? parts[0] : selectedYear;
       const targetMonth =
@@ -1164,11 +1209,10 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
 
       const entry: MaintenanceMonthEntry = {
         ...(existingEntry || {}),
-        date: effectiveServiceDate,
+        date: effectiveDate,
         quantity: hasQty ? qtyNum : undefined,
         aparBrand: cleanBrand || undefined,
-        customExpiryDate:
-          cleanExp || addDaysToDateString(effectiveServiceDate, 365),
+        customExpiryDate: cleanExp || undefined,
         updatedBy: currentUser.name,
         updatedAt: new Date().toISOString(),
       };
@@ -1184,6 +1228,290 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
 
     setRecords(latestRecords);
     setShowBulkAparModal(false);
+  };
+
+  const handleDownloadAparXls = () => {
+    const XLSX: any =
+      (XLSXStyleModule as any).default?.utils
+        ? (XLSXStyleModule as any).default
+        : XLSXStyleModule;
+
+    const areaLabel =
+      aparAreaFilter === 'area-bogor-1-depok'
+        ? 'AREA BOGOR 1 & DEPOK'
+        : aparAreaFilter === 'area-bogor-2'
+        ? 'AREA BOGOR 2'
+        : aparAreaFilter === 'unassigned'
+        ? 'BELUM MASUK AREA'
+        : 'SEMUA AREA';
+
+    const formatIndoDate = (iso?: string | null): string => {
+      if (!iso) return '';
+      const parts = iso.trim().split('-');
+      if (parts.length !== 3) return iso.trim();
+      return `${parts[2]}/${parts[1]}/${parts[0]}`;
+    };
+
+    const exportRows = filteredRows.map((row) => {
+      const latest = row.computedStatus.latestMonthEntry;
+      const qty =
+        latest?.quantity !== undefined && Number(latest.quantity) > 0
+          ? Number(latest.quantity)
+          : '';
+      const brand = latest?.aparBrand ? latest.aparBrand.trim() : '';
+      const exp = formatIndoDate(row.computedStatus.expDate);
+      return {
+        outletName: row.displayName,
+        qty,
+        brand,
+        exp,
+      };
+    });
+
+    const totalTabung = exportRows.reduce(
+      (sum, r) => sum + (typeof r.qty === 'number' ? r.qty : 0),
+      0
+    );
+    const filledCount = exportRows.filter(
+      (r) => typeof r.qty === 'number' || r.brand !== '' || r.exp !== ''
+    ).length;
+
+    const headerDateStr = new Date().toLocaleString('id-ID', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+
+    const sheetData: any[][] = [
+      ['REKAP DATA APAR - CINEMA XXI', '', '', ''],
+      [`Filter Area: ${areaLabel}   |   Tahun: ${selectedYear}`, '', '', ''],
+      [
+        `Total Outlet: ${exportRows.length}   |   Terisi: ${filledCount} Outlet   |   Total APAR: ${totalTabung} Tabung   |   Diunduh: ${headerDateStr}`,
+        '',
+        '',
+        '',
+      ],
+      [],
+      ['Nama Outlet', 'Jumlah APAR', 'Merk APAR', 'Exp APAR'],
+      ...exportRows.map((r) => [r.outletName, r.qty, r.brand, r.exp]),
+    ];
+
+    const firstDataRowExcel = 6; // 1-indexed row in Excel
+    const lastDataRowExcel = 5 + exportRows.length;
+
+    if (exportRows.length > 0) {
+      sheetData.push([
+        `TOTAL (${exportRows.length} OUTLET)`,
+        {
+          t: 'n',
+          v: totalTabung,
+          f: `SUM(B${firstDataRowExcel}:B${lastDataRowExcel})`,
+        },
+        `Terisi: ${filledCount} Outlet`,
+        '-',
+      ]);
+    }
+
+    const ws = XLSX.utils.aoa_to_sheet(sheetData);
+
+    const thinCellBorder = {
+      top: { style: 'thin', color: { rgb: '94A3B8' } },
+      bottom: { style: 'thin', color: { rgb: '94A3B8' } },
+      left: { style: 'thin', color: { rgb: '94A3B8' } },
+      right: { style: 'thin', color: { rgb: '94A3B8' } },
+    };
+
+    const headerBorder = {
+      top: { style: 'medium', color: { rgb: '0F172A' } },
+      bottom: { style: 'medium', color: { rgb: '0F172A' } },
+      left: { style: 'thin', color: { rgb: '475569' } },
+      right: { style: 'thin', color: { rgb: '475569' } },
+    };
+
+    const totalBorder = {
+      top: { style: 'medium', color: { rgb: '0F172A' } },
+      bottom: { style: 'medium', color: { rgb: '0F172A' } },
+      left: { style: 'thin', color: { rgb: '0F172A' } },
+      right: { style: 'thin', color: { rgb: '0F172A' } },
+    };
+
+    const bannerBorder = {
+      top: { style: 'thin', color: { rgb: 'CBD5E1' } },
+      bottom: { style: 'thin', color: { rgb: 'CBD5E1' } },
+      left: { style: 'thin', color: { rgb: 'CBD5E1' } },
+      right: { style: 'thin', color: { rgb: 'CBD5E1' } },
+    };
+
+    // Style Banner Rows (Row 0..2, Col 0..3)
+    for (let c = 0; c <= 3; c++) {
+      const ref0 = XLSX.utils.encode_cell({ r: 0, c });
+      if (ws[ref0]) {
+        ws[ref0].s = {
+          font: { name: 'Calibri', sz: 13, bold: true, color: { rgb: 'FFFFFF' } },
+          fill: { fgColor: { rgb: '4A1D6A' } },
+          alignment: { horizontal: 'center', vertical: 'center' },
+          border: {
+            top: { style: 'medium', color: { rgb: '3B0764' } },
+            bottom: { style: 'thin', color: { rgb: '3B0764' } },
+            left: { style: c === 0 ? 'medium' : 'thin', color: { rgb: '3B0764' } },
+            right: { style: c === 3 ? 'medium' : 'thin', color: { rgb: '3B0764' } },
+          },
+        };
+      }
+      const ref1 = XLSX.utils.encode_cell({ r: 1, c });
+      if (ws[ref1]) {
+        ws[ref1].s = {
+          font: { name: 'Calibri', sz: 10, bold: true, color: { rgb: '4A1D6A' } },
+          fill: { fgColor: { rgb: 'F3E8FF' } },
+          alignment: { horizontal: 'center', vertical: 'center' },
+          border: bannerBorder,
+        };
+      }
+      const ref2 = XLSX.utils.encode_cell({ r: 2, c });
+      if (ws[ref2]) {
+        ws[ref2].s = {
+          font: { name: 'Calibri', sz: 9.5, color: { rgb: '334155' } },
+          fill: { fgColor: { rgb: 'F8FAFC' } },
+          alignment: { horizontal: 'center', vertical: 'center' },
+          border: bannerBorder,
+        };
+      }
+    }
+
+    // Style Table Header (Row index 4)
+    for (let c = 0; c <= 3; c++) {
+      const ref = XLSX.utils.encode_cell({ r: 4, c });
+      if (ws[ref]) {
+        ws[ref].s = {
+          font: { name: 'Calibri', sz: 10.5, bold: true, color: { rgb: 'FFFFFF' } },
+          fill: { fgColor: { rgb: '1E293B' } },
+          alignment: {
+            horizontal: c === 0 ? 'left' : 'center',
+            vertical: 'center',
+          },
+          border: {
+            ...headerBorder,
+            left: { style: c === 0 ? 'medium' : 'thin', color: { rgb: '0F172A' } },
+            right: { style: c === 3 ? 'medium' : 'thin', color: { rgb: '0F172A' } },
+          },
+        };
+      }
+    }
+
+    // Style Data Rows (Row index 5 .. 5 + exportRows.length - 1)
+    for (let i = 0; i < exportRows.length; i++) {
+      const r = 5 + i;
+      const isAlt = i % 2 === 1;
+      const rowFill = { fgColor: { rgb: isAlt ? 'F8FAFC' : 'FFFFFF' } };
+
+      for (let c = 0; c <= 3; c++) {
+        const ref = XLSX.utils.encode_cell({ r, c });
+        if (!ws[ref]) {
+          ws[ref] = { t: 's', v: '' };
+        }
+        ws[ref].s = {
+          font: {
+            name: 'Calibri',
+            sz: 10,
+            bold: c === 0,
+            color: { rgb: '0F172A' },
+          },
+          fill: rowFill,
+          alignment: {
+            horizontal: c === 0 ? 'left' : 'center',
+            vertical: 'center',
+          },
+          border: {
+            ...thinCellBorder,
+            left: { style: c === 0 ? 'medium' : 'thin', color: { rgb: c === 0 ? '0F172A' : '94A3B8' } },
+            right: { style: c === 3 ? 'medium' : 'thin', color: { rgb: c === 3 ? '0F172A' : '94A3B8' } },
+          },
+          ...(c === 1 && typeof ws[ref].v === 'number' ? { numFmt: '#,##0' } : {}),
+        };
+      }
+    }
+
+    // Style Total Footer Row
+    if (exportRows.length > 0) {
+      const totalRowIdx = 5 + exportRows.length;
+      for (let c = 0; c <= 3; c++) {
+        const ref = XLSX.utils.encode_cell({ r: totalRowIdx, c });
+        if (!ws[ref]) {
+          ws[ref] = { t: 's', v: '' };
+        }
+        ws[ref].s = {
+          font: { name: 'Calibri', sz: 10.5, bold: true, color: { rgb: '0F172A' } },
+          fill: { fgColor: { rgb: 'FEF3C7' } },
+          alignment: {
+            horizontal: c === 0 ? 'left' : 'center',
+            vertical: 'center',
+          },
+          border: {
+            ...totalBorder,
+            left: { style: c === 0 ? 'medium' : 'thin', color: { rgb: '0F172A' } },
+            right: { style: c === 3 ? 'medium' : 'thin', color: { rgb: '0F172A' } },
+          },
+          ...(c === 1 ? { numFmt: '#,##0' } : {}),
+        };
+      }
+    }
+
+    // Hitung lebar kolom otomatis agar seluruh isi tabel rapi & tidak terpotong
+    const maxOutletLen = exportRows.reduce(
+      (max, r) => Math.max(max, r.outletName.length),
+      'Nama Outlet'.length
+    );
+    const maxBrandLen = exportRows.reduce(
+      (max, r) => Math.max(max, r.brand.length),
+      'Merk APAR'.length
+    );
+
+    ws['!cols'] = [
+      { wch: Math.max(maxOutletLen + 6, 38) },
+      { wch: 16 },
+      { wch: Math.max(maxBrandLen + 6, 26) },
+      { wch: 18 },
+    ];
+
+    // Tinggi baris rapi (banner, header tabel, baris data, total)
+    ws['!rows'] = [
+      { hpt: 28 },
+      { hpt: 20 },
+      { hpt: 20 },
+      { hpt: 10 },
+      { hpt: 24 },
+      ...exportRows.map(() => ({ hpt: 20 })),
+      ...(exportRows.length > 0 ? [{ hpt: 23 }] : []),
+    ];
+
+    // Merge judul & info meta selebar 4 kolom tabel (A..D)
+    ws['!merges'] = [
+      { s: { r: 0, c: 0 }, e: { r: 0, c: 3 } },
+      { s: { r: 1, c: 0 }, e: { r: 1, c: 3 } },
+      { s: { r: 2, c: 0 }, e: { r: 2, c: 3 } },
+    ];
+
+    if (exportRows.length > 0) {
+      ws['!autofilter'] = { ref: `A5:D${lastDataRowExcel}` };
+    }
+
+    ws['!views'] = [{ showGridLines: true }];
+
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Data APAR');
+
+    const areaSlug =
+      aparAreaFilter === 'area-bogor-1-depok'
+        ? 'Bogor_1_Depok'
+        : aparAreaFilter === 'area-bogor-2'
+        ? 'Bogor_2'
+        : aparAreaFilter === 'unassigned'
+        ? 'Belum_Masuk_Area'
+        : 'Semua_Area';
+
+    XLSX.writeFile(wb, `Rekap_Data_APAR_${areaSlug}_${selectedYear}.xlsx`);
   };
 
   // Alarm list (Outlets that are overdue or approaching SOP limit)
@@ -1485,13 +1813,22 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
                   </span>
                 </span>
               </div>
-              <div className="flex flex-wrap items-center gap-2.5">
-                <div className="text-[11px] font-semibold text-slate-500 flex items-center gap-1.5">
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="text-[11px] font-semibold text-slate-500 flex items-center gap-1.5 mr-1">
                   <Clock className="w-3.5 h-3.5 text-amber-500" />
                   <span>
-                    Data mencakup Jumlah Tabung, Merk APAR, Tanggal Service &amp; Exp APAR (Alarm H-30).
+                    Data mencakup Jumlah Tabung, Merk APAR &amp; Exp APAR (Alarm H-30 dihitung dari sisa hari menuju Exp).
                   </span>
                 </div>
+                <button
+                  type="button"
+                  onClick={handleDownloadAparXls}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[11px] font-extrabold bg-emerald-600 hover:bg-emerald-700 text-white border border-emerald-700 shadow-2xs transition-colors cursor-pointer"
+                  title="Unduh rekap APAR (.xls) sesuai filter saat ini"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>Download XLS</span>
+                </button>
                 <button
                   type="button"
                   onClick={handleOpenBulkAparModal}
@@ -1674,12 +2011,19 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
                                 )}
                               </div>
                             )}
-                          {lastDate && expDate && (
-                            <div className="text-[10px] font-medium text-slate-500 mt-0.5 tabular-nums">
-                              {activeCategory === 'apar'
-                                ? `Service: ${lastDate} | Exp: ${expDate}`
-                                : `Tgl: ${lastDate} | Exp: ${expDate}`}
-                            </div>
+                          {activeCategory === 'apar' ? (
+                            expDate && (
+                              <div className="text-[10px] font-medium text-slate-500 mt-0.5 tabular-nums">
+                                Exp APAR: {expDate}
+                              </div>
+                            )
+                          ) : (
+                            lastDate &&
+                            expDate && (
+                              <div className="text-[10px] font-medium text-slate-500 mt-0.5 tabular-nums">
+                                Tgl: {lastDate} | Exp: {expDate}
+                              </div>
+                            )
                           )}
                         </td>
 
@@ -1738,9 +2082,13 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
                               }
                               title={
                                 cellEntry
-                                  ? `${displayName} (${MONTH_FULL_NAMES[idx]} ${selectedYear})\n${
-                                      activeCategory === 'apar' ? 'Tgl Service' : 'Tanggal'
-                                    }: ${cellEntry.date}${
+                                  ? `${displayName} (${MONTH_FULL_NAMES[idx]} ${selectedYear})${
+                                      activeCategory === 'apar'
+                                        ? cellEntry.customExpiryDate
+                                          ? `\nExp APAR: ${cellEntry.customExpiryDate}`
+                                          : ''
+                                        : `\nTanggal: ${cellEntry.date}`
+                                    }${
                                       cellEntry.aparBrand
                                         ? `\nMerk APAR: ${cellEntry.aparBrand}`
                                         : ''
@@ -1751,7 +2099,7 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
                                           }`
                                         : ''
                                     }${
-                                      cellEntry.customExpiryDate
+                                      activeCategory !== 'apar' && cellEntry.customExpiryDate
                                         ? `\nExp: ${cellEntry.customExpiryDate}`
                                         : ''
                                     }${cellEntry.notes ? `\nCatatan: ${cellEntry.notes}` : ''}`
@@ -1794,9 +2142,13 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
                           {status === 'overdue' && (
                             <div className="flex flex-col items-center gap-1.5">
                               <div
-                                title={`Jadwal terakhir: ${lastDate} | Batas SOP: ${expDate} (Terlewat ${Math.abs(
-                                  daysRemaining
-                                )} hari)`}
+                                title={
+                                  activeCategory === 'apar'
+                                    ? `Exp APAR: ${expDate} (Terlewat ${Math.abs(daysRemaining)} hari dari hari ini)`
+                                    : `Jadwal terakhir: ${lastDate} | Batas SOP: ${expDate} (Terlewat ${Math.abs(
+                                        daysRemaining
+                                      )} hari)`
+                                }
                                 className="inline-flex items-center justify-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-extrabold bg-rose-50 text-rose-700 border border-rose-300 shadow-2xs w-full max-w-[175px] truncate"
                               >
                                 <AlertTriangle className="w-3 h-3 text-rose-600 shrink-0" />
@@ -1829,7 +2181,11 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
                           {status === 'warning' && (
                             <div className="flex flex-col items-center gap-1.5">
                               <div
-                                title={`Jadwal terakhir: ${lastDate} | Jatuh tempo: ${expDate} (Sisa ${daysRemaining} hari lagi)`}
+                                title={
+                                  activeCategory === 'apar'
+                                    ? `Exp APAR: ${expDate} (Sisa ${daysRemaining} hari dari hari ini)`
+                                    : `Jadwal terakhir: ${lastDate} | Jatuh tempo: ${expDate} (Sisa ${daysRemaining} hari lagi)`
+                                }
                                 className="inline-flex items-center justify-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-extrabold bg-amber-50 text-amber-800 border border-amber-300 shadow-2xs w-full max-w-[175px] truncate animate-pulse"
                               >
                                 <Bell className="w-3 h-3 text-amber-600 shrink-0" />
@@ -1860,7 +2216,11 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
 
                           {status === 'safe' && (
                             <div
-                              title={`Jadwal terakhir: ${lastDate} | Jatuh tempo berikutnya: ${expDate} (Sisa ${daysRemaining} hari)`}
+                              title={
+                                activeCategory === 'apar'
+                                  ? `Exp APAR: ${expDate} (Sisa ${daysRemaining} hari dari hari ini)`
+                                  : `Jadwal terakhir: ${lastDate} | Jatuh tempo berikutnya: ${expDate} (Sisa ${daysRemaining} hari)`
+                              }
                               className="inline-flex items-center justify-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-extrabold bg-emerald-50 text-emerald-700 border border-emerald-200 w-full max-w-[175px] truncate"
                             >
                               <CheckCircle2 className="w-3 h-3 text-emerald-600 shrink-0" />
@@ -2010,36 +2370,47 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
               <div className="p-3 rounded-xl bg-amber-50/80 border border-amber-200/80 flex items-start gap-2.5 text-[11px] text-amber-900">
                 <Info className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
                 <div>
-                  <span className="font-bold">Standar Siklus SOP: </span>
-                  <span>
-                    {getSopDays(activeCategory, activeCellModal.outletClass)} Hari
-                  </span>
-                  <p className="text-[10px] text-amber-700 mt-0.5">
-                    Sistem akan memberikan alarm pengingat otomatis ketika mendekati atau melewati tanggal jatuh tempo / expired.
-                  </p>
+                  {activeCategory === 'apar' ? (
+                    <>
+                      <span className="font-bold">Batas Aman &amp; Alarm APAR: </span>
+                      <span>Alarm H-30 sebelum Tanggal Exp</span>
+                      <p className="text-[10px] text-amber-700 mt-0.5">
+                        Status Aman SOP, Mendekati Exp (H-30), dan Expired dihitung langsung dari sisa hari menuju Tanggal Exp APAR terhitung dari hari ini.
+                      </p>
+                    </>
+                  ) : (
+                    <>
+                      <span className="font-bold">Standar Siklus SOP: </span>
+                      <span>
+                        {getSopDays(activeCategory, activeCellModal.outletClass)} Hari
+                      </span>
+                      <p className="text-[10px] text-amber-700 mt-0.5">
+                        Sistem akan memberikan alarm pengingat otomatis ketika mendekati atau melewati tanggal jatuh tempo / expired.
+                      </p>
+                    </>
+                  )}
                 </div>
               </div>
 
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
-                  {activeCategory === 'apar'
-                    ? 'Tanggal Service / Isi Ulang APAR'
-                    : 'Tanggal Pelaksanaan / Pergantian'}{' '}
-                  <span className="text-rose-500">*</span>
-                </label>
-                <input
-                  type="date"
-                  required
-                  value={formDate}
-                  onChange={(e) => handleFormDateChange(e.target.value)}
-                  className="w-full px-3 py-2 text-xs font-semibold border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500"
-                />
-              </div>
+              {activeCategory !== 'apar' && (
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    Tanggal Pelaksanaan / Pergantian <span className="text-rose-500">*</span>
+                  </label>
+                  <input
+                    type="date"
+                    required
+                    value={formDate}
+                    onChange={(e) => handleFormDateChange(e.target.value)}
+                    className="w-full px-3 py-2 text-xs font-semibold border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500"
+                  />
+                </div>
+              )}
 
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1">
                   {activeCategory === 'apar'
-                    ? 'Tanggal Exp APAR (Kadaluarsa / Service Berikutnya)'
+                    ? 'Tanggal Exp APAR'
                     : 'Tanggal Expired / Jadwal Berikutnya (SOP)'}
                   {activeCategory === 'apar' && <span className="text-rose-500"> *</span>}
                 </label>
@@ -2051,8 +2422,9 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
                   className="w-full px-3 py-2 text-xs font-semibold border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500"
                 />
                 <p className="text-[10px] text-slate-400 mt-1">
-                  Terisi otomatis +{getSopDays(activeCategory, activeCellModal.outletClass)} hari dari tanggal{' '}
-                  {activeCategory === 'apar' ? 'service (dapat diubah sesuai stiker/label Exp tabung APAR)' : 'pelaksanaan (dapat disesuaikan manual)'}.
+                  {activeCategory === 'apar'
+                    ? 'Sesuaikan dengan stiker/label Exp tabung APAR. Sisa hari dihitung otomatis dari hari ini ke tanggal Exp ini.'
+                    : `Terisi otomatis +${getSopDays(activeCategory, activeCellModal.outletClass)} hari dari tanggal pelaksanaan (dapat disesuaikan manual).`}
                 </p>
               </div>
 
@@ -2714,7 +3086,7 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
                   <Info className="w-4 h-4 text-amber-600 shrink-0" />
                   <span>
                     Isi langsung <strong>Jumlah APAR</strong>, <strong>Exp APAR</strong>, dan{' '}
-                    <strong>Merk APAR</strong>. Jika <strong>Tgl Service</strong> dikosongkan, sistem otomatis menghitung 1 tahun (365 hari) sebelum Exp APAR.
+                    <strong>Merk APAR</strong>. Status aman &amp; alarm H-30 dihitung dari sisa hari menuju <strong>Exp APAR</strong> terhitung dari hari ini.
                   </span>
                 </div>
                 <div className="relative w-full sm:w-60">
@@ -2739,15 +3111,14 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
                   <option value="Viking" />
                 </datalist>
 
-                <table className="w-full text-left border-collapse min-w-[700px]">
+                <table className="w-full text-left border-collapse min-w-[600px]">
                   <thead>
                     <tr className="bg-slate-50 border-b border-slate-200 text-[10px] font-extrabold uppercase tracking-wider text-slate-600">
                       <th className="py-2.5 px-3 w-10 text-center">No</th>
                       <th className="py-2.5 px-3">Nama Outlet</th>
-                      <th className="py-2.5 px-3 w-28">Jumlah APAR</th>
-                      <th className="py-2.5 px-3 w-40">Exp APAR</th>
-                      <th className="py-2.5 px-3 w-44">Merk APAR</th>
-                      <th className="py-2.5 px-3 w-40">Tgl Service (Opsional)</th>
+                      <th className="py-2.5 px-3 w-32">Jumlah APAR</th>
+                      <th className="py-2.5 px-3 w-44">Exp APAR</th>
+                      <th className="py-2.5 px-3 w-48">Merk APAR</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 text-xs">
@@ -2805,18 +3176,6 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
                             }
                             placeholder="Servvo / Gunnebo..."
                             className="w-full px-2.5 py-1.5 text-xs font-semibold border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500"
-                          />
-                        </td>
-                        <td className="py-2 px-3">
-                          <input
-                            type="date"
-                            value={row.serviceDate}
-                            onChange={(e) =>
-                              handleUpdateBulkAparRow(row.outletId, {
-                                serviceDate: e.target.value,
-                              })
-                            }
-                            className="w-full px-2.5 py-1.5 text-xs border border-slate-200 rounded-lg text-slate-600 focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500"
                           />
                         </td>
                       </tr>
