@@ -178,9 +178,10 @@ function smartMergeSalesRow(existingRow: any, incomingRow: any): any {
       const key = getCanonicalKey(item);
       if (key) {
         const prev = mergedMap.get(key);
+        const incomingItemTs = item.updatedAt || incomingRow.updated_at;
         if (!prev) {
           mergedMap.set(key, item);
-        } else if (isNewerOrEqualIso(item.updatedAt, prev.updatedAt)) {
+        } else if (isNewerOrEqualIso(incomingItemTs, prev.updatedAt)) {
           mergedMap.set(key, item);
         }
       }
@@ -392,6 +393,86 @@ async function hydrateStoreFromLiveWorkers(force = false): Promise<void> {
   } finally {
     isLiveBridgePulling = false;
   }
+}
+
+async function pullSpecificSalesRowsFromLiveWorkers(rowIds: string[]): Promise<{
+  rows: any[];
+  workerHits: number;
+  changed: boolean;
+}> {
+  const uniqueIds = Array.from(new Set(rowIds.filter(Boolean)));
+  if (uniqueIds.length === 0) {
+    return { rows: [], workerHits: 0, changed: false };
+  }
+
+  let changed = false;
+  let workerHits = 0;
+
+  const settled = await Promise.allSettled(
+    LIVE_WORKER_ENDPOINTS.map(async (endpoint) => {
+      const resp = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          table: 'cinema_sales',
+          columns: 'id,outlet_id,date,shows,updated_at',
+          inFilter: { col: 'id', vals: uniqueIds },
+        }),
+        signal: AbortSignal.timeout(5500),
+      });
+      if (!resp.ok) return [];
+      const ct = resp.headers.get('content-type') || '';
+      if (!ct.includes('application/json')) return [];
+      const json: any = await resp.json();
+      return Array.isArray(json?.data) ? json.data : [];
+    })
+  );
+
+  for (const res of settled) {
+    if (res.status !== 'fulfilled' || !Array.isArray(res.value)) continue;
+    if (res.value.length > 0) workerHits += 1;
+    for (const incRow of res.value) {
+      if (!incRow || !incRow.id) continue;
+      const id = String(incRow.id);
+      const existing = syncStore.cinema_sales[id];
+      if (!existing) {
+        syncStore.cinema_sales[id] = incRow;
+        changed = true;
+      } else {
+        const prevSerializedLen = Array.isArray(existing.shows) ? existing.shows.length : 0;
+        const prevTs = existing.updated_at;
+        const merged = isNewerOrEqualIso(incRow.updated_at, existing.updated_at)
+          ? smartMergeSalesRow(existing, incRow)
+          : smartMergeSalesRow(incRow, existing);
+        syncStore.cinema_sales[id] = merged;
+        const nextLen = Array.isArray(merged?.shows) ? merged.shows.length : 0;
+        if (
+          nextLen !== prevSerializedLen ||
+          merged?.updated_at !== prevTs ||
+          JSON.stringify(merged?.shows || []) !== JSON.stringify(existing.shows || [])
+        ) {
+          changed = true;
+        }
+      }
+    }
+  }
+
+  if (changed) {
+    scheduleSaveStoreToDisk();
+    broadcastSseEvent({
+      type: 'SYNC_UPDATE',
+      table: 'cinema_sales',
+      ids: uniqueIds,
+      clientId: 'live-bridge',
+      ts: new Date().toISOString(),
+    });
+  }
+
+  const mergedRows = uniqueIds
+    .map((id) => syncStore.cinema_sales[id])
+    .filter(Boolean);
+
+  return { rows: mergedRows, workerHits, changed };
 }
 
 hydrateStoreFromLiveWorkers(true).catch(() => {});
@@ -725,6 +806,62 @@ async function startServer() {
       res.json({ data: responseMeta, error: null });
     } catch (err: any) {
       res.status(500).json({ data: null, error: { message: err?.message || 'Internal Server Error' } });
+    }
+  });
+
+  // 3b. Force Immediate Hydration from Live Workers (fast targeted pull by default)
+  app.post('/api/sync/pull-live', async (req, res) => {
+    try {
+      const reqBody = req.body || {};
+      const runFull = reqBody.full === true;
+      const requestedIds: string[] =
+        Array.isArray(reqBody.ids) && reqBody.ids.length > 0
+          ? reqBody.ids.map((x: any) => String(x))
+          : [
+              '__SYSTEM_SYNC_MAINTENANCE__',
+              '__SYSTEM_SYNC_OUTLETS__',
+              '__SYSTEM_SYNC_AREAS__',
+            ];
+
+      let workerHits = 0;
+      let returnedRows: any[] = [];
+
+      if (runFull) {
+        await hydrateStoreFromLiveWorkers(true);
+        returnedRows = requestedIds
+          .map((id) => syncStore.cinema_sales[id])
+          .filter(Boolean);
+      } else {
+        const pullRes = await pullSpecificSalesRowsFromLiveWorkers(requestedIds);
+        workerHits = pullRes.workerHits;
+        returnedRows = pullRes.rows;
+      }
+
+      const maintRow = syncStore.cinema_sales['__SYSTEM_SYNC_MAINTENANCE__'];
+      const shows: any[] = Array.isArray(maintRow?.shows) ? maintRow.shows : [];
+      const aparOutlets = new Set(
+        shows
+          .filter(
+            (x) =>
+              x &&
+              x.category === 'apar' &&
+              x.months &&
+              Object.values(x.months).some(
+                (m: any) => m && (m.customExpiryDate || m.quantity || m.aparBrand)
+              )
+          )
+          .map((x) => x.outletId)
+      );
+      res.json({
+        ok: true,
+        updated_at: maintRow?.updated_at || null,
+        maintenanceCount: shows.length,
+        aparOutletCount: aparOutlets.size,
+        workerHits,
+        rows: returnedRows,
+      });
+    } catch (err: any) {
+      res.status(500).json({ ok: false, error: err?.message || 'Pull live error' });
     }
   });
 

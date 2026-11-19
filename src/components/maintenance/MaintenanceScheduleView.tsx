@@ -21,6 +21,7 @@ import {
   Download,
   ArrowUpDown,
   Pencil,
+  RefreshCw,
 } from 'lucide-react';
 import * as XLSXStyleModule from 'xlsx-js-style';
 import {
@@ -33,6 +34,7 @@ import {
   MaintenanceScheduleRecord,
 } from '../../types';
 import { StorageService } from '../../lib/storage';
+import { pullMaintenanceNow } from '../../lib/supabase';
 import { APAR_EXTRA_OUTLETS } from '../../lib/data/aparExtraOutlets';
 import {
   BeritaAcaraModal,
@@ -313,6 +315,8 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
   const [records, setRecords] = useState<MaintenanceScheduleRecord[]>(() =>
     StorageService.getMaintenanceRecords()
   );
+  const [isSyncingLive, setIsSyncingLive] = useState(false);
+  const [syncLiveFeedback, setSyncLiveFeedback] = useState<string | null>(null);
 
   // Modal Input/Edit Bulan atau APAR
   const [activeCellModal, setActiveCellModal] = useState<{
@@ -389,7 +393,7 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
     setStatusFilter('all');
   }, [activeCategory, selectedYear, searchQuery, pageSize, aparAreaFilter, aparSortMode]);
 
-  // Sync listener
+  // Sync listener & automatic live pull when opening APAR
   useEffect(() => {
     const refreshData = () => {
       setOutlets(StorageService.getOutlets());
@@ -402,6 +406,47 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
       window.removeEventListener('storage', refreshData);
     };
   }, []);
+
+  useEffect(() => {
+    if (activeCategory !== 'apar') return;
+    let active = true;
+    pullMaintenanceNow().then((res) => {
+      if (!active) return;
+      if (res.ok && res.updated) {
+        setRecords(StorageService.getMaintenanceRecords());
+      }
+    });
+    return () => {
+      active = false;
+    };
+  }, [activeCategory]);
+
+  const handleSyncLiveApar = async () => {
+    if (isSyncingLive) return;
+    setIsSyncingLive(true);
+    setSyncLiveFeedback(null);
+    try {
+      const res = await pullMaintenanceNow();
+      setOutlets(StorageService.getOutlets());
+      setRecords(StorageService.getMaintenanceRecords());
+      if (res.ok) {
+        setSyncLiveFeedback(
+          res.updated
+            ? `Data diperbarui (${res.aparOutletCount} outlet APAR · ${res.totalAparQty} tabung)`
+            : `Sudah terbaru (${res.aparOutletCount} outlet APAR · ${res.totalAparQty} tabung)`
+        );
+      } else {
+        setSyncLiveFeedback('Gagal terhubung ke server live');
+      }
+    } catch {
+      setSyncLiveFeedback('Gagal terhubung ke server live');
+    } finally {
+      setIsSyncingLive(false);
+      setTimeout(() => {
+        setSyncLiveFeedback(null);
+      }, 4500);
+    }
+  };
 
   // Category Metadata (Title, Subtitle, Action Text, Unit Icon)
   const categoryMeta = useMemo(() => {
@@ -1884,12 +1929,31 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
                 </span>
               </div>
               <div className="flex flex-wrap items-center gap-2">
-                <div className="text-[11px] font-semibold text-slate-500 flex items-center gap-1.5 mr-1">
-                  <Clock className="w-3.5 h-3.5 text-amber-500" />
-                  <span>
-                    Data mencakup Jumlah Tabung, Merk APAR &amp; Exp APAR (Alarm H-30 dihitung dari sisa hari menuju Exp).
+                {syncLiveFeedback ? (
+                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-sky-50 border border-sky-200 text-sky-800 text-[11px] font-bold">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-sky-600 shrink-0" />
+                    <span>{syncLiveFeedback}</span>
                   </span>
-                </div>
+                ) : (
+                  <div className="text-[11px] font-semibold text-slate-500 flex items-center gap-1.5 mr-1">
+                    <Clock className="w-3.5 h-3.5 text-amber-500" />
+                    <span>
+                      Data mencakup Jumlah Tabung, Merk APAR &amp; Exp APAR (Alarm H-30 dihitung dari sisa hari menuju Exp).
+                    </span>
+                  </div>
+                )}
+                <button
+                  type="button"
+                  onClick={handleSyncLiveApar}
+                  disabled={isSyncingLive}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[11px] font-extrabold bg-sky-600 hover:bg-sky-700 disabled:opacity-60 text-white border border-sky-700 shadow-2xs transition-colors cursor-pointer"
+                  title="Tarik paksa data APAR terbaru dari server Live"
+                >
+                  <RefreshCw
+                    className={`w-3.5 h-3.5 ${isSyncingLive ? 'animate-spin' : ''}`}
+                  />
+                  <span>{isSyncingLive ? 'Menyinkronkan...' : 'Sync Data Live'}</span>
+                </button>
                 <button
                   type="button"
                   onClick={handleDownloadAparXls}

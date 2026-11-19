@@ -304,12 +304,13 @@ async function callInternalSyncQuery(payload: any): Promise<any> {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(5500),
       });
       if (resp.ok && (resp.headers.get('content-type') || '').includes('application/json')) {
         return await resp.json();
       }
     } catch {
-      // ignore network error
+      // ignore network error or timeout
     }
     return null;
   };
@@ -3277,6 +3278,169 @@ export async function pullIotMonitoringNow(): Promise<boolean> {
   }
 }
 
+function hasFilledMaintenanceMonths(rec: any): boolean {
+  if (!rec || !rec.months || typeof rec.months !== 'object') return false;
+  return Object.values(rec.months).some(
+    (m: any) => m && (m.customExpiryDate || m.quantity || m.aparBrand || m.date)
+  );
+}
+
+function applyRemoteMaintenanceRowToLocal(maintRow: any): boolean {
+  if (!maintRow || !Array.isArray(maintRow.shows)) return false;
+  const localMaint = StorageService.getMaintenanceRecords();
+  const map = new Map<string, any>();
+  localMaint.forEach((m) => {
+    if (m && m.id) map.set(m.id, m);
+  });
+  const rowTs = String(maintRow.updated_at || '');
+  maintRow.shows.forEach((rm: any) => {
+    if (rm && rm.outletId && rm.category && rm.year !== undefined) {
+      const id = rm.id || `${rm.outletId}_${rm.category}_${rm.year}`;
+      const existing = map.get(id);
+      if (!existing) {
+        map.set(id, { ...rm, id });
+        return;
+      }
+      const rmTs = String(rm.updatedAt || rowTs || '');
+      const exTs = String(existing.updatedAt || '');
+      if (rmTs >= exTs) {
+        // Avoid accidentally blanking out a filled local record with an un-dated empty placeholder
+        if (!rm.updatedAt && hasFilledMaintenanceMonths(existing) && !hasFilledMaintenanceMonths(rm)) {
+          return;
+        }
+        map.set(id, { ...rm, id });
+      }
+    }
+  });
+  const mergedMaint = Array.from(map.values());
+  const curRaw = localStorage.getItem('cinema_xxi_maintenance_records') || '[]';
+  const nextRaw = JSON.stringify(mergedMaint);
+  if (curRaw !== nextRaw) {
+    localStorage.setItem('cinema_xxi_maintenance_records', nextRaw);
+    StorageService.broadcastChange('maintenance');
+    return true;
+  }
+  return false;
+}
+
+export async function pullMaintenanceNow(): Promise<{
+  ok: boolean;
+  updated: boolean;
+  aparOutletCount: number;
+  totalAparQty: number;
+  newestUpdatedAt: string | null;
+}> {
+  const prevBypass = forceBypassSupaMetaSkip;
+  forceBypassSupaMetaSkip = true;
+  let updated = false;
+  let bridgeOk = false;
+  let newestUpdatedAt: string | null = null;
+
+  try {
+    if (typeof window !== 'undefined') {
+      const host = window.location?.hostname || '';
+      if (!host.includes('bdv3.workers.dev')) {
+        try {
+          const bridgeResp = await fetch('/api/sync/pull-live', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              ids: [
+                '__SYSTEM_SYNC_MAINTENANCE__',
+                '__SYSTEM_SYNC_OUTLETS__',
+                '__SYSTEM_SYNC_AREAS__',
+              ],
+            }),
+            signal: AbortSignal.timeout(10000),
+          });
+          if (bridgeResp.ok) {
+            bridgeOk = true;
+            const bridgeJson: any = await bridgeResp.json();
+            if (bridgeJson?.updated_at) {
+              newestUpdatedAt = String(bridgeJson.updated_at);
+            }
+            const returnedRows: any[] = Array.isArray(bridgeJson?.rows) ? bridgeJson.rows : [];
+            const maintRow = returnedRows.find((r) => r && r.id === '__SYSTEM_SYNC_MAINTENANCE__');
+            if (maintRow) {
+              if (maintRow.updated_at) {
+                recordSyncTimestamp('__SYSTEM_SYNC_MAINTENANCE__', String(maintRow.updated_at), false);
+                newestUpdatedAt = String(maintRow.updated_at);
+              }
+              if (applyRemoteMaintenanceRowToLocal(maintRow)) {
+                updated = true;
+              }
+            }
+          }
+        } catch {
+          // ignore if local server bridge unavailable
+        }
+      }
+    }
+
+    const [outletsUpdated, maintUpdated] = await Promise.all([
+      mergeRemoteOutletsAndAreasToLocal().catch(() => false),
+      mergeRemoteAdditionalModulesToLocal(['__SYSTEM_SYNC_MAINTENANCE__']).catch(() => false),
+    ]);
+    if (outletsUpdated || maintUpdated) {
+      updated = true;
+    }
+
+    const localMaint = StorageService.getMaintenanceRecords();
+    const latestAparByOutlet = new Map<string, { qty: number; updatedAt: string; exp: string }>();
+    localMaint.forEach((r) => {
+      if (!r || r.category !== 'apar' || !r.months) return;
+      const entries = Object.values(r.months).filter(
+        (m: any) => m && (m.customExpiryDate || m.quantity || m.aparBrand)
+      ) as any[];
+      if (entries.length === 0) return;
+      entries.sort((a, b) => {
+        const cmpDate = String(b.customExpiryDate || b.date || '').localeCompare(
+          String(a.customExpiryDate || a.date || '')
+        );
+        if (cmpDate !== 0) return cmpDate;
+        return String(b.updatedAt || '').localeCompare(String(a.updatedAt || ''));
+      });
+      const latestEntry = entries[0];
+      const ts = String(latestEntry.updatedAt || r.updatedAt || '');
+      const exp = String(latestEntry.customExpiryDate || latestEntry.date || '');
+      if (ts && (!newestUpdatedAt || ts > newestUpdatedAt)) {
+        newestUpdatedAt = ts;
+      }
+      const prev = latestAparByOutlet.get(r.outletId);
+      if (!prev || exp > prev.exp || (exp === prev.exp && ts >= prev.updatedAt)) {
+        latestAparByOutlet.set(r.outletId, {
+          qty: Number(latestEntry.quantity) || 0,
+          updatedAt: ts,
+          exp,
+        });
+      }
+    });
+
+    let totalAparQty = 0;
+    latestAparByOutlet.forEach((v) => {
+      totalAparQty += v.qty;
+    });
+
+    return {
+      ok: Boolean(bridgeOk || outletsUpdated || maintUpdated || latestAparByOutlet.size > 0),
+      updated,
+      aparOutletCount: latestAparByOutlet.size,
+      totalAparQty,
+      newestUpdatedAt,
+    };
+  } catch {
+    return {
+      ok: false,
+      updated: false,
+      aparOutletCount: 0,
+      totalAparQty: 0,
+      newestUpdatedAt: null,
+    };
+  } finally {
+    forceBypassSupaMetaSkip = prevBypass;
+  }
+}
+
 let inFlightSalesPull: Promise<boolean> | null = null;
 let lastSalesPullNowMs = 0;
 
@@ -3500,26 +3664,7 @@ export async function mergeRemoteAdditionalModulesToLocal(
 
     const maintRow = data.find((r: any) => r.id === '__SYSTEM_SYNC_MAINTENANCE__');
     if (maintRow && Array.isArray(maintRow.shows)) {
-      const localMaint = StorageService.getMaintenanceRecords();
-      const map = new Map<string, any>();
-      localMaint.forEach((m) => {
-        if (m && m.id) map.set(m.id, m);
-      });
-      maintRow.shows.forEach((rm: any) => {
-        if (rm && rm.outletId && rm.category && rm.year !== undefined) {
-          const id = rm.id || `${rm.outletId}_${rm.category}_${rm.year}`;
-          const existing = map.get(id);
-          if (!existing || (rm.updatedAt || '') >= (existing.updatedAt || '')) {
-            map.set(id, { ...rm, id });
-          }
-        }
-      });
-      const mergedMaint = Array.from(map.values());
-      const curRaw = localStorage.getItem('cinema_xxi_maintenance_records') || '[]';
-      const nextRaw = JSON.stringify(mergedMaint);
-      if (curRaw !== nextRaw) {
-        localStorage.setItem('cinema_xxi_maintenance_records', nextRaw);
-        StorageService.broadcastChange('maintenance');
+      if (applyRemoteMaintenanceRowToLocal(maintRow)) {
         updated = true;
       }
     }
