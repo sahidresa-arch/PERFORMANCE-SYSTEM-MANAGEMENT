@@ -330,7 +330,8 @@ export type MaintenanceCategory =
   | 'karpet'
   | 'filter_fluux'
   | 'filter_sediment'
-  | 'lampu_uv';
+  | 'lampu_uv'
+  | 'apar';
 
 export interface CarpetAreaEntry {
   id: string;
@@ -340,9 +341,19 @@ export interface CarpetAreaEntry {
   isCustom?: boolean;
 }
 
+export interface AparUnitEntry {
+  id: string;
+  brand: string; // Merk APAR (misal: Servvo, Gunnebo, Yamato, Chubb)
+  mediaType?: string; // Jenis media (ABC Powder, CO2, Foam, Clean Agent)
+  location?: string; // Lokasi penempatan (Lobi, Ruang Projector, Server, Cafe, Studio)
+  qty: number; // Jumlah tabung
+}
+
 export interface MaintenanceMonthEntry {
-  date: string; // YYYY-MM-DD (Tanggal pencucian / pergantian)
-  quantity?: number; // Jumlah kursi / luas m² / titik / unit (misal: 1420)
+  date: string; // YYYY-MM-DD (Tanggal pencucian / pergantian / service APAR)
+  quantity?: number; // Jumlah kursi / luas m² / titik / unit / tabung APAR
+  aparBrand?: string; // Merk APAR (khusus kategori apar)
+  aparUnits?: AparUnitEntry[]; // Rincian opsional jika outlet memiliki >1 merk/jenis APAR
   selectedStudios?: string[]; // Daftar nama studio yang diceklis (khusus kursi_studio)
   carpetAreas?: CarpetAreaEntry[]; // Rincian area karpet & luas m² (khusus karpet)
   customExpiryDate?: string; // YYYY-MM-DD (Tanggal expired / jadwal berikutnya)

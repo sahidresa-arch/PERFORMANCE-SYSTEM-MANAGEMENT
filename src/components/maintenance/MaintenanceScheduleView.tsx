@@ -16,16 +16,20 @@ import {
   Clock,
   Info,
   FileText,
+  Flame,
+  MapPin,
 } from 'lucide-react';
 import {
   User,
   Outlet,
   MaintenanceCategory,
   CarpetAreaEntry,
+  AparUnitEntry,
   MaintenanceMonthEntry,
   MaintenanceScheduleRecord,
 } from '../../types';
 import { StorageService } from '../../lib/storage';
+import { APAR_EXTRA_OUTLETS } from '../../lib/data/aparExtraOutlets';
 import {
   BeritaAcaraModal,
   BeritaAcaraMode,
@@ -67,15 +71,36 @@ const MONTH_FULL_NAMES = [
   'Desember',
 ];
 
-function formatOutletDisplayName(outlet: Outlet): string {
+function formatOutletDisplayName(
+  outlet: Outlet,
+  category?: MaintenanceCategory
+): string {
   const raw = (outlet.name || '').trim().toUpperCase();
   if (outlet.id === 'btm-xxi' || raw === 'CAFE BTM XXI') {
-    return 'DELUXE BTM XXI BOGOR';
+    return category === 'apar' ? 'BTM XXI BOGOR' : 'DELUXE BTM XXI BOGOR';
   }
   if (raw.startsWith('CAFE ')) {
-    return raw.replace(/^CAFE\s+/i, 'DELUXE ');
+    const cleanName = raw.replace(/^CAFE\s+/i, '');
+    return category === 'apar' ? cleanName : `DELUXE ${cleanName}`;
+  }
+  if (category === 'apar' && raw.startsWith('DELUXE ')) {
+    return raw.replace(/^DELUXE\s+/i, '');
   }
   return raw;
+}
+
+function isExcludedFromApar(outlet: Outlet): boolean {
+  const upperName = (outlet.name || '').trim().toUpperCase();
+  const lowerId = (outlet.id || '').trim().toLowerCase();
+  const isHs =
+    /^HS\b/.test(upperName) ||
+    /\bHS\b/.test(upperName) ||
+    lowerId.startsWith('hs-');
+  const isPremiere =
+    /^(?:THE\s+)?PREMIERE\b/.test(upperName) ||
+    /\bPREMIERE\b/.test(upperName) ||
+    lowerId.startsWith('premiere-');
+  return isHs || isPremiere;
 }
 
 function getOutletClass(outlet: Outlet): 'A' | 'B' | 'C' {
@@ -105,12 +130,15 @@ function getSopDays(category: MaintenanceCategory, outletClass: 'A' | 'B' | 'C')
       return 30; // 1 Bulan
     case 'lampu_uv':
       return 365; // 1 Tahun
+    case 'apar':
+      return 365; // Standar service/isi ulang berkala APAR 1 Tahun (Exp dapat disesuaikan manual)
   }
 }
 
 function getAlarmThresholdDays(category: MaintenanceCategory): number {
   if (category === 'filter_sediment') return 7; // Alarm 7 hari sebelum expired (siklus 30 hari)
   if (category === 'lampu_uv') return 21; // Alarm 21 hari sebelum expired (siklus 365 hari)
+  if (category === 'apar') return 30; // Alarm 30 hari sebelum Exp APAR agar pengisian/service sempat diproses
   return 14; // Alarm 14 hari sebelum expired
 }
 
@@ -224,6 +252,9 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
 }) => {
   const [selectedYear, setSelectedYear] = useState<number>(() => new Date().getFullYear());
   const [filterAirTab, setFilterAirTab] = useState<'filter_fluux' | 'filter_sediment'>('filter_fluux');
+  const [aparAreaFilter, setAparAreaFilter] = useState<
+    'all' | 'area-bogor-1-depok' | 'area-bogor-2' | 'unassigned'
+  >('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [pageSize, setPageSize] = useState<number>(10);
   const [currentPage, setCurrentPage] = useState<number>(1);
@@ -247,6 +278,8 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
   const [formQty, setFormQty] = useState('');
   const [selectedStudios, setSelectedStudios] = useState<string[]>([]);
   const [carpetAreas, setCarpetAreas] = useState<CarpetAreaEntry[]>([]);
+  const [formAparBrand, setFormAparBrand] = useState('');
+  const [aparUnits, setAparUnits] = useState<AparUnitEntry[]>([]);
   const [formExpDate, setFormExpDate] = useState('');
   const [formNotes, setFormNotes] = useState('');
 
@@ -257,6 +290,23 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
     currentKeterangan: string;
   } | null>(null);
   const [keteranganText, setKeteranganText] = useState('');
+
+  // Modal Input Massal Khusus APAR
+  const [showBulkAparModal, setShowBulkAparModal] = useState(false);
+  const [bulkAparSearch, setBulkAparSearch] = useState('');
+  const [bulkAparRows, setBulkAparRows] = useState<
+    Array<{
+      outletId: string;
+      displayName: string;
+      outletClass: 'A' | 'B' | 'C';
+      qty: string;
+      expDate: string;
+      brand: string;
+      serviceDate: string;
+      hadExisting: boolean;
+      existingDate?: string;
+    }>
+  >([]);
 
   // Modal Pilihan Jenis Berita Acara (Tunggal vs Gabungan Karpet & Kursi)
   const [beritaAcaraChooser, setBeritaAcaraChooser] = useState<{
@@ -282,6 +332,7 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
     if (activeMenu === 'maintenance_karpet') return 'karpet';
     if (activeMenu === 'maintenance_filter_air') return filterAirTab;
     if (activeMenu === 'maintenance_lampu_uv') return 'lampu_uv';
+    if (activeMenu === 'maintenance_apar') return 'apar';
     return 'kursi_studio';
   }, [activeMenu, filterAirTab]);
 
@@ -289,7 +340,7 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
   useEffect(() => {
     setCurrentPage(1);
     setStatusFilter('all');
-  }, [activeCategory, selectedYear, searchQuery, pageSize]);
+  }, [activeCategory, selectedYear, searchQuery, pageSize, aparAreaFilter]);
 
   // Sync listener
   useEffect(() => {
@@ -368,12 +419,39 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
           qtyPlaceholder: 'Contoh: 2',
           isWashType: false,
         };
+      case 'apar':
+        return {
+          title: `Kalender Service & Expired APAR - ${selectedYear}`,
+          subtitle:
+            'Ketuk pada kolom bulan untuk mencatat Jumlah APAR, Merk APAR, Tanggal Service, dan Tanggal Expired (Exp) masing-masing outlet. Alarm pengingat otomatis aktif H-30 sebelum Exp APAR.',
+          actionOverdue: 'APAR EXPIRED!',
+          actionWarning: 'SEGERA SERVICE!',
+          unitIcon: '🧯',
+          qtyLabel: 'Jumlah APAR (Tabung)',
+          qtyPlaceholder: 'Contoh: 12',
+          isWashType: false,
+        };
     }
   }, [activeCategory, selectedYear]);
 
-  // Filter outlets by user role and sort alphabetically by displayName (matching screenshot)
-  const visibleOutlets = useMemo(() => {
-    let list = outlets.filter((o) => {
+  // Base outlets permitted by role (includes APAR_EXTRA_OUTLETS ONLY when activeCategory === 'apar')
+  const roleAllowedOutlets = useMemo(() => {
+    const sourceOutlets: Outlet[] = [...outlets];
+    if (activeCategory === 'apar') {
+      const existingNormalizedNames = new Set(
+        outlets.map((o) => formatOutletDisplayName(o, 'apar'))
+      );
+      APAR_EXTRA_OUTLETS.forEach((extra) => {
+        if (!existingNormalizedNames.has(extra.name.trim().toUpperCase())) {
+          sourceOutlets.push(extra);
+        }
+      });
+    }
+
+    return sourceOutlets.filter((o) => {
+      if (activeCategory === 'apar' && isExcludedFromApar(o)) {
+        return false;
+      }
       const roleStr = String(currentUser.role);
       if ((roleStr === 'outlet' || roleStr === 'outlet_manager') && currentUser.outletId) {
         return o.id === currentUser.outletId;
@@ -383,15 +461,56 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
       }
       return true;
     });
+  }, [outlets, currentUser, activeCategory]);
+
+  // Counts per Area for APAR Area Filter dropdown
+  const aparAreaCounts = useMemo(() => {
+    if (activeCategory !== 'apar') {
+      return { all: 0, bogor1: 0, bogor2: 0, unassigned: 0 };
+    }
+    let bogor1 = 0;
+    let bogor2 = 0;
+    let unassigned = 0;
+    roleAllowedOutlets.forEach((o) => {
+      if (o.areaId === 'area-bogor-1-depok') bogor1 += 1;
+      else if (o.areaId === 'area-bogor-2') bogor2 += 1;
+      else unassigned += 1;
+    });
+    return {
+      all: roleAllowedOutlets.length,
+      bogor1,
+      bogor2,
+      unassigned,
+    };
+  }, [roleAllowedOutlets, activeCategory]);
+
+  // Filter outlets by user role + APAR area filter, then sort alphabetically by displayName
+  const visibleOutlets = useMemo(() => {
+    const list = roleAllowedOutlets.filter((o) => {
+      if (activeCategory === 'apar') {
+        if (aparAreaFilter === 'area-bogor-1-depok') {
+          return o.areaId === 'area-bogor-1-depok';
+        }
+        if (aparAreaFilter === 'area-bogor-2') {
+          return o.areaId === 'area-bogor-2';
+        }
+        if (aparAreaFilter === 'unassigned') {
+          return (
+            o.areaId !== 'area-bogor-1-depok' && o.areaId !== 'area-bogor-2'
+          );
+        }
+      }
+      return true;
+    });
 
     return list
       .map((outlet) => ({
         outlet,
-        displayName: formatOutletDisplayName(outlet),
+        displayName: formatOutletDisplayName(outlet, activeCategory),
         outletClass: getOutletClass(outlet),
       }))
       .sort((a, b) => a.displayName.localeCompare(b.displayName));
-  }, [outlets, currentUser]);
+  }, [roleAllowedOutlets, activeCategory, aparAreaFilter]);
 
   // Compute status & monthly schedule per outlet
   const todayStr = getTodayDateStr();
@@ -684,9 +803,35 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
         .filter((c) => c.checked)
         .reduce((sum, c) => sum + (Number(c.areaSqm) || 0), 0);
       setFormQty(String(Math.round(totalSqm * 100) / 100));
+    } else if (activeCategory === 'apar') {
+      setSelectedStudios([]);
+      setCarpetAreas([]);
+      const savedUnits = Array.isArray(existingEntry?.aparUnits)
+        ? existingEntry.aparUnits.map((u, idx) => ({
+            id: u.id || `apar_${idx}_${Math.random().toString(36).slice(2, 6)}`,
+            brand: u.brand || '',
+            mediaType: u.mediaType || 'ABC Powder',
+            location: u.location || '',
+            qty: Number(u.qty) || 0,
+          }))
+        : [];
+      setAparUnits(savedUnits);
+      setFormAparBrand(existingEntry?.aparBrand || '');
+      const sumUnits = savedUnits.reduce((acc, u) => acc + (Number(u.qty) || 0), 0);
+      if (savedUnits.length > 0 && sumUnits > 0) {
+        setFormQty(String(sumUnits));
+      } else {
+        setFormQty(
+          existingEntry?.quantity !== undefined && existingEntry.quantity > 0
+            ? String(existingEntry.quantity)
+            : ''
+        );
+      }
     } else {
       setSelectedStudios([]);
       setCarpetAreas([]);
+      setAparUnits([]);
+      setFormAparBrand('');
       setFormQty(
         existingEntry?.quantity !== undefined && existingEntry.quantity > 0
           ? String(existingEntry.quantity)
@@ -796,6 +941,51 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
     syncCarpetAreasAndQty(defaults);
   };
 
+  const syncAparUnitsAndSummary = (nextUnits: AparUnitEntry[]) => {
+    setAparUnits(nextUnits);
+    if (nextUnits.length > 0) {
+      const totalQty = nextUnits.reduce((sum, u) => sum + (Number(u.qty) || 0), 0);
+      const uniqueBrands = Array.from(
+        new Set(
+          nextUnits
+            .map((u) => u.brand.trim())
+            .filter(Boolean)
+        )
+      );
+      setFormQty(totalQty > 0 ? String(totalQty) : '');
+      if (uniqueBrands.length > 0) {
+        setFormAparBrand(uniqueBrands.join(' / '));
+      }
+    }
+  };
+
+  const handleAddAparUnitRow = () => {
+    const next: AparUnitEntry[] = [
+      ...aparUnits,
+      {
+        id: `apar_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        brand: formAparBrand.trim() || 'Servvo',
+        mediaType: 'ABC Powder',
+        location: '',
+        qty: 1,
+      },
+    ];
+    syncAparUnitsAndSummary(next);
+  };
+
+  const handleUpdateAparUnitRow = (
+    id: string,
+    patch: Partial<AparUnitEntry>
+  ) => {
+    const next = aparUnits.map((u) => (u.id === id ? { ...u, ...patch } : u));
+    syncAparUnitsAndSummary(next);
+  };
+
+  const handleRemoveAparUnitRow = (id: string) => {
+    const next = aparUnits.filter((u) => u.id !== id);
+    syncAparUnitsAndSummary(next);
+  };
+
   // Auto-update Expired Date when Execution Date changes in modal
   const handleFormDateChange = (newDate: string) => {
     setFormDate(newDate);
@@ -809,6 +999,19 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
     e.preventDefault();
     if (!activeCellModal || !formDate) return;
 
+    const cleanedAparUnits =
+      activeCategory === 'apar' && aparUnits.length > 0
+        ? aparUnits
+            .filter((u) => u.brand.trim() || u.qty > 0)
+            .map((u) => ({
+              ...u,
+              brand: u.brand.trim() || formAparBrand.trim() || 'APAR',
+              mediaType: (u.mediaType || 'ABC Powder').trim(),
+              location: (u.location || '').trim(),
+              qty: Math.max(0, Number(u.qty) || 0),
+            }))
+        : undefined;
+
     const parsedQty = formQty.trim() ? Number(formQty.trim()) : undefined;
     const cleanedCarpetAreas =
       activeCategory === 'karpet'
@@ -821,6 +1024,14 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
     const entry: MaintenanceMonthEntry = {
       date: formDate,
       quantity: parsedQty && !isNaN(parsedQty) && parsedQty > 0 ? parsedQty : undefined,
+      aparBrand:
+        activeCategory === 'apar' && formAparBrand.trim()
+          ? formAparBrand.trim()
+          : undefined,
+      aparUnits:
+        cleanedAparUnits && cleanedAparUnits.length > 0
+          ? cleanedAparUnits
+          : undefined,
       selectedStudios:
         activeCategory === 'kursi_studio' ? selectedStudios : undefined,
       carpetAreas: cleanedCarpetAreas,
@@ -874,6 +1085,105 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
     );
     setRecords(updated);
     setActiveKeteranganModal(null);
+  };
+
+  const handleOpenBulkAparModal = () => {
+    const rows = outletRows.map((row) => {
+      const latest = row.computedStatus.latestMonthEntry;
+      return {
+        outletId: row.outlet.id,
+        displayName: row.displayName,
+        outletClass: row.outletClass,
+        qty: latest?.quantity && latest.quantity > 0 ? String(latest.quantity) : '',
+        expDate: row.computedStatus.expDate || '',
+        brand: latest?.aparBrand || '',
+        serviceDate: row.computedStatus.lastDate || '',
+        hadExisting: Boolean(latest?.date),
+        existingDate: latest?.date,
+      };
+    });
+    setBulkAparRows(rows);
+    setBulkAparSearch('');
+    setShowBulkAparModal(true);
+  };
+
+  const handleUpdateBulkAparRow = (
+    outletId: string,
+    patch: Partial<{
+      qty: string;
+      expDate: string;
+      brand: string;
+      serviceDate: string;
+    }>
+  ) => {
+    setBulkAparRows((prev) =>
+      prev.map((row) => {
+        if (row.outletId !== outletId) return row;
+        const next = { ...row, ...patch };
+        if (patch.serviceDate && !patch.expDate && !row.expDate) {
+          next.expDate = addDaysToDateString(patch.serviceDate, 365);
+        }
+        return next;
+      })
+    );
+  };
+
+  const handleSaveBulkAparModal = (e: React.FormEvent) => {
+    e.preventDefault();
+    let latestRecords = records;
+
+    bulkAparRows.forEach((row) => {
+      const qtyNum = Number(row.qty);
+      const hasQty = !isNaN(qtyNum) && qtyNum > 0;
+      const cleanBrand = row.brand.trim();
+      const cleanExp = row.expDate.trim();
+      const cleanService = row.serviceDate.trim();
+
+      if (!hasQty && !cleanBrand && !cleanExp && !cleanService) {
+        return;
+      }
+
+      const effectiveServiceDate =
+        cleanService ||
+        (cleanExp ? addDaysToDateString(cleanExp, -365) : `${selectedYear}-01-01`);
+      const parts = effectiveServiceDate.split('-').map(Number);
+      const targetYear =
+        parts.length === 3 && !isNaN(parts[0]) ? parts[0] : selectedYear;
+      const targetMonth =
+        parts.length === 3 && !isNaN(parts[1]) && parts[1] >= 1 && parts[1] <= 12
+          ? parts[1]
+          : 1;
+
+      const existingRec = latestRecords.find(
+        (r) =>
+          r.outletId === row.outletId &&
+          r.category === 'apar' &&
+          r.year === targetYear
+      );
+      const existingEntry = existingRec?.months?.[targetMonth];
+
+      const entry: MaintenanceMonthEntry = {
+        ...(existingEntry || {}),
+        date: effectiveServiceDate,
+        quantity: hasQty ? qtyNum : undefined,
+        aparBrand: cleanBrand || undefined,
+        customExpiryDate:
+          cleanExp || addDaysToDateString(effectiveServiceDate, 365),
+        updatedBy: currentUser.name,
+        updatedAt: new Date().toISOString(),
+      };
+
+      latestRecords = StorageService.saveMaintenanceMonthEntry(
+        row.outletId,
+        'apar',
+        targetYear,
+        targetMonth,
+        entry
+      );
+    });
+
+    setRecords(latestRecords);
+    setShowBulkAparModal(false);
   };
 
   // Alarm list (Outlets that are overdue or approaching SOP limit)
@@ -1151,6 +1461,49 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
             </div>
           )}
 
+          {activeCategory === 'apar' && (
+            <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-100">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-extrabold">
+                  <Flame className="w-3.5 h-3.5 text-rose-600" />
+                  <span>Total APAR Terdata:</span>
+                  <span className="tabular-nums">
+                    {outletRows.reduce(
+                      (acc, r) => acc + (Number(r.computedStatus.latestMonthEntry?.quantity) || 0),
+                      0
+                    )}{' '}
+                    Tabung
+                  </span>
+                </span>
+                <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-50 border border-slate-200 text-slate-700 text-[11px] font-semibold">
+                  <span>
+                    Outlet Terisi:{' '}
+                    <strong className="text-slate-900">
+                      {outletRows.filter((r) => r.computedStatus.status !== 'empty').length}
+                    </strong>{' '}
+                    / {outletRows.length}
+                  </span>
+                </span>
+              </div>
+              <div className="flex flex-wrap items-center gap-2.5">
+                <div className="text-[11px] font-semibold text-slate-500 flex items-center gap-1.5">
+                  <Clock className="w-3.5 h-3.5 text-amber-500" />
+                  <span>
+                    Data mencakup Jumlah Tabung, Merk APAR, Tanggal Service &amp; Exp APAR (Alarm H-30).
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleOpenBulkAparModal}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[11px] font-extrabold bg-slate-900 hover:bg-slate-800 text-amber-300 border border-slate-700 shadow-2xs transition-colors cursor-pointer"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Input Massal APAR</span>
+                </button>
+              </div>
+            </div>
+          )}
+
           <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
             <div className="space-y-1">
               <div className="flex items-center gap-2">
@@ -1164,8 +1517,45 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
               </p>
             </div>
 
-            {/* Search & Row Limit Controls */}
+            {/* Search, APAR Area Filter & Row Limit Controls */}
             <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+              {activeCategory === 'apar' &&
+                !currentUser.outletId &&
+                !currentUser.areaId && (
+                  <div className="inline-flex items-center gap-1.5 bg-slate-50/80 border border-slate-200 rounded-xl px-3 py-1.5">
+                    <MapPin className="w-3.5 h-3.5 text-rose-500 shrink-0" />
+                    <span className="text-[10px] font-bold uppercase text-slate-500">
+                      AREA:
+                    </span>
+                    <select
+                      value={aparAreaFilter}
+                      onChange={(e) =>
+                        setAparAreaFilter(
+                          e.target.value as
+                            | 'all'
+                            | 'area-bogor-1-depok'
+                            | 'area-bogor-2'
+                            | 'unassigned'
+                        )
+                      }
+                      className="text-xs font-extrabold text-slate-800 bg-transparent focus:outline-none cursor-pointer"
+                    >
+                      <option value="all">
+                        Semua Area ({aparAreaCounts.all})
+                      </option>
+                      <option value="area-bogor-1-depok">
+                        AREA BOGOR 1 &amp; DEPOK ({aparAreaCounts.bogor1})
+                      </option>
+                      <option value="area-bogor-2">
+                        AREA BOGOR 2 ({aparAreaCounts.bogor2})
+                      </option>
+                      <option value="unassigned">
+                        Belum Masuk Area ({aparAreaCounts.unassigned})
+                      </option>
+                    </select>
+                  </div>
+                )}
+
               <div className="relative">
                 <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
                 <input
@@ -1197,7 +1587,9 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
                 >
                   <option value={10}>10 Outlet</option>
                   <option value={20}>20 Outlet</option>
-                  <option value={50}>Semua ({visibleOutlets.length})</option>
+                  <option value={50}>50 Outlet</option>
+                  <option value={100}>100 Outlet</option>
+                  <option value={9999}>Semua ({filteredRows.length})</option>
                 </select>
               </div>
             </div>
@@ -1209,10 +1601,18 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
           <table className="w-full border-collapse min-w-[1180px]">
             <thead>
               <tr className="bg-slate-50/70 border-b border-slate-200 text-[10px] font-extrabold text-slate-500 uppercase tracking-wider">
-                <th className="py-3 pl-4 pr-2 text-left w-[230px]">OUTLET</th>
-                <th className="py-3 px-2 text-center w-[64px] border-r border-slate-200/90">
-                  KELAS
+                <th
+                  className={`py-3 pl-4 pr-2 text-left w-[230px] ${
+                    activeCategory === 'apar' ? 'border-r border-slate-200/90' : ''
+                  }`}
+                >
+                  OUTLET
                 </th>
+                {activeCategory !== 'apar' && (
+                  <th className="py-3 px-2 text-center w-[64px] border-r border-slate-200/90">
+                    KELAS
+                  </th>
+                )}
                 {MONTH_LABELS.map((mLabel) => (
                   <th
                     key={mLabel}
@@ -1231,7 +1631,7 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
               {paginatedRows.length === 0 ? (
                 <tr>
                   <td
-                    colSpan={16}
+                    colSpan={activeCategory === 'apar' ? 15 : 16}
                     className="py-12 text-center text-slate-400 font-medium"
                   >
                     Tidak ada outlet yang sesuai dengan pencarian / filter status.
@@ -1248,31 +1648,57 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
                         className="hover:bg-slate-50/50 transition-colors group"
                       >
                         {/* OUTLET NAME & Tgl / Exp Subtext */}
-                        <td className="py-3.5 pl-4 pr-2 align-middle">
+                        <td
+                          className={`py-3.5 pl-4 pr-2 align-middle ${
+                            activeCategory === 'apar'
+                              ? 'border-r border-slate-200/90'
+                              : ''
+                          }`}
+                        >
                           <div className="font-extrabold text-[11px] sm:text-xs text-slate-900 uppercase tracking-tight leading-snug">
                             {displayName}
                           </div>
+                          {activeCategory === 'apar' &&
+                            computedStatus.latestMonthEntry && (
+                              <div className="flex flex-wrap items-center gap-1 mt-1">
+                                {computedStatus.latestMonthEntry.quantity &&
+                                  computedStatus.latestMonthEntry.quantity > 0 && (
+                                    <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-rose-50 text-rose-700 border border-rose-200 text-[10px] font-extrabold tabular-nums">
+                                      {computedStatus.latestMonthEntry.quantity} Tabung
+                                    </span>
+                                  )}
+                                {computedStatus.latestMonthEntry.aparBrand && (
+                                  <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-slate-100 text-slate-700 border border-slate-200 text-[10px] font-bold">
+                                    Merk: {computedStatus.latestMonthEntry.aparBrand}
+                                  </span>
+                                )}
+                              </div>
+                            )}
                           {lastDate && expDate && (
                             <div className="text-[10px] font-medium text-slate-500 mt-0.5 tabular-nums">
-                              Tgl: {lastDate} | Exp: {expDate}
+                              {activeCategory === 'apar'
+                                ? `Service: ${lastDate} | Exp: ${expDate}`
+                                : `Tgl: ${lastDate} | Exp: ${expDate}`}
                             </div>
                           )}
                         </td>
 
                         {/* KELAS BADGE */}
-                        <td className="py-3.5 px-2 text-center align-middle border-r border-slate-200/90">
-                          <span
-                            className={`inline-flex items-center justify-center min-w-[26px] px-2 py-0.5 rounded-md text-[11px] font-extrabold border ${
-                              outletClass === 'A'
-                                ? 'bg-amber-50 text-amber-700 border-amber-300'
-                                : outletClass === 'B'
-                                ? 'bg-blue-50/80 text-blue-700 border-blue-200'
-                                : 'bg-slate-50 text-slate-600 border-slate-300'
-                            }`}
-                          >
-                            {outletClass}
-                          </span>
-                        </td>
+                        {activeCategory !== 'apar' && (
+                          <td className="py-3.5 px-2 text-center align-middle border-r border-slate-200/90">
+                            <span
+                              className={`inline-flex items-center justify-center min-w-[26px] px-2 py-0.5 rounded-md text-[11px] font-extrabold border ${
+                                outletClass === 'A'
+                                  ? 'bg-amber-50 text-amber-700 border-amber-300'
+                                  : outletClass === 'B'
+                                  ? 'bg-blue-50/80 text-blue-700 border-blue-200'
+                                  : 'bg-slate-50 text-slate-600 border-slate-300'
+                              }`}
+                            >
+                              {outletClass}
+                            </span>
+                          </td>
+                        )}
 
                         {/* 12 MONTH CELLS */}
                         {MONTH_LABELS.map((_, idx) => {
@@ -1312,9 +1738,17 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
                               }
                               title={
                                 cellEntry
-                                  ? `${displayName} (${MONTH_FULL_NAMES[idx]} ${selectedYear})\nTanggal: ${cellEntry.date}${
+                                  ? `${displayName} (${MONTH_FULL_NAMES[idx]} ${selectedYear})\n${
+                                      activeCategory === 'apar' ? 'Tgl Service' : 'Tanggal'
+                                    }: ${cellEntry.date}${
+                                      cellEntry.aparBrand
+                                        ? `\nMerk APAR: ${cellEntry.aparBrand}`
+                                        : ''
+                                    }${
                                       cellEntry.quantity
-                                        ? `\nJumlah: ${cellEntry.quantity}`
+                                        ? `\nJumlah: ${cellEntry.quantity}${
+                                            activeCategory === 'apar' ? ' Tabung' : ''
+                                          }`
                                         : ''
                                     }${
                                       cellEntry.customExpiryDate
@@ -1500,20 +1934,36 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
               <ChevronLeft className="w-3.5 h-3.5" />
             </button>
 
-            {Array.from({ length: totalPages }, (_, i) => i + 1).map((pageNum) => (
-              <button
-                key={pageNum}
-                type="button"
-                onClick={() => setCurrentPage(pageNum)}
-                className={`w-7 h-7 rounded-lg text-xs font-extrabold flex items-center justify-center transition-colors cursor-pointer ${
-                  safePage === pageNum
-                    ? 'bg-[#F59E0B] text-white shadow-2xs'
-                    : 'border border-slate-200 text-slate-600 hover:bg-slate-50'
-                }`}
-              >
-                {pageNum}
-              </button>
-            ))}
+            {Array.from({ length: totalPages }, (_, i) => i + 1)
+              .filter((pageNum) => {
+                if (totalPages <= 7) return true;
+                if (pageNum === 1 || pageNum === totalPages) return true;
+                return Math.abs(pageNum - safePage) <= 1;
+              })
+              .map((pageNum, idx, arr) => {
+                const prevPage = idx > 0 ? arr[idx - 1] : null;
+                const showEllipsis = prevPage !== null && pageNum - prevPage > 1;
+                return (
+                  <React.Fragment key={pageNum}>
+                    {showEllipsis && (
+                      <span className="px-1 text-xs font-bold text-slate-400 select-none">
+                        ...
+                      </span>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => setCurrentPage(pageNum)}
+                      className={`min-w-7 h-7 px-1.5 rounded-lg text-xs font-extrabold flex items-center justify-center transition-colors cursor-pointer ${
+                        safePage === pageNum
+                          ? 'bg-[#F59E0B] text-white shadow-2xs'
+                          : 'border border-slate-200 text-slate-600 hover:bg-slate-50'
+                      }`}
+                    >
+                      {pageNum}
+                    </button>
+                  </React.Fragment>
+                );
+              })}
 
             <button
               type="button"
@@ -1534,9 +1984,11 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
             <div className="px-5 py-4 bg-slate-900 text-white flex items-center justify-between shrink-0">
               <div>
                 <div className="flex items-center gap-2">
-                  <span className="px-2 py-0.5 rounded text-[10px] font-extrabold bg-amber-400 text-slate-950 uppercase">
-                    KELAS {activeCellModal.outletClass}
-                  </span>
+                  {activeCategory !== 'apar' && (
+                    <span className="px-2 py-0.5 rounded text-[10px] font-extrabold bg-amber-400 text-slate-950 uppercase">
+                      KELAS {activeCellModal.outletClass}
+                    </span>
+                  )}
                   <span className="text-xs font-bold text-amber-300">
                     {MONTH_FULL_NAMES[activeCellModal.month - 1]} {selectedYear}
                   </span>
@@ -1570,7 +2022,10 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
 
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1">
-                  Tanggal Pelaksanaan / Pergantian <span className="text-rose-500">*</span>
+                  {activeCategory === 'apar'
+                    ? 'Tanggal Service / Isi Ulang APAR'
+                    : 'Tanggal Pelaksanaan / Pergantian'}{' '}
+                  <span className="text-rose-500">*</span>
                 </label>
                 <input
                   type="date"
@@ -1583,16 +2038,21 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
 
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1">
-                  Tanggal Expired / Jadwal Berikutnya (SOP)
+                  {activeCategory === 'apar'
+                    ? 'Tanggal Exp APAR (Kadaluarsa / Service Berikutnya)'
+                    : 'Tanggal Expired / Jadwal Berikutnya (SOP)'}
+                  {activeCategory === 'apar' && <span className="text-rose-500"> *</span>}
                 </label>
                 <input
                   type="date"
+                  required={activeCategory === 'apar'}
                   value={formExpDate}
                   onChange={(e) => setFormExpDate(e.target.value)}
                   className="w-full px-3 py-2 text-xs font-semibold border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500"
                 />
                 <p className="text-[10px] text-slate-400 mt-1">
-                  Terisi otomatis +{getSopDays(activeCategory, activeCellModal.outletClass)} hari dari tanggal pelaksanaan (dapat disesuaikan manual).
+                  Terisi otomatis +{getSopDays(activeCategory, activeCellModal.outletClass)} hari dari tanggal{' '}
+                  {activeCategory === 'apar' ? 'service (dapat diubah sesuai stiker/label Exp tabung APAR)' : 'pelaksanaan (dapat disesuaikan manual)'}.
                 </p>
               </div>
 
@@ -1805,6 +2265,153 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
                     <p className="text-[10px] text-slate-400 mt-1">
                       Otomatis menjumlahkan total luas (m²) dari area karpet yang diceklis di atas.
                     </p>
+                  </div>
+                </div>
+              ) : activeCategory === 'apar' ? (
+                <div className="space-y-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 mb-1">
+                        Jumlah APAR (Tabung) <span className="text-rose-500">*</span>
+                      </label>
+                      <input
+                        type="number"
+                        min={1}
+                        required
+                        readOnly={aparUnits.length > 0}
+                        value={formQty}
+                        onChange={(e) => setFormQty(e.target.value)}
+                        placeholder={categoryMeta.qtyPlaceholder}
+                        className={`w-full px-3 py-2 text-xs font-bold border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500 tabular-nums ${
+                          aparUnits.length > 0 ? 'bg-slate-100 text-slate-700 cursor-not-allowed' : ''
+                        }`}
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 mb-1">
+                        Merk APAR <span className="text-rose-500">*</span>
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        value={formAparBrand}
+                        onChange={(e) => setFormAparBrand(e.target.value)}
+                        placeholder="Contoh: Servvo / Gunnebo / Yamato"
+                        className="w-full px-3 py-2 text-xs font-semibold border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Preset Merk Populer */}
+                  <div>
+                    <span className="block text-[10px] font-bold text-slate-500 mb-1">
+                      Pilih Cepat Merk Populer:
+                    </span>
+                    <div className="flex flex-wrap gap-1.5">
+                      {['Servvo', 'Gunnebo', 'Yamato', 'Chubb', 'GuardALL', 'Viking'].map(
+                        (brand) => (
+                          <button
+                            key={brand}
+                            type="button"
+                            onClick={() => setFormAparBrand(brand)}
+                            className={`px-2 py-0.5 rounded-md text-[10px] font-bold border transition-colors cursor-pointer ${
+                              formAparBrand.toLowerCase() === brand.toLowerCase()
+                                ? 'bg-amber-100 text-amber-900 border-amber-400'
+                                : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
+                            }`}
+                          >
+                            {brand}
+                          </button>
+                        )
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Opsional Rincian Multi-Merk / Lokasi Penempatan */}
+                  <div className="pt-1 border-t border-slate-100">
+                    <div className="flex items-center justify-between mb-1.5">
+                      <div>
+                        <span className="text-[11px] font-bold text-slate-700">
+                          Rincian Per-Merk / Area (Opsional)
+                        </span>
+                        <p className="text-[10px] text-slate-400">
+                          Gunakan jika outlet punya lebih dari 1 merk atau jenis media (Powder/CO2).
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={handleAddAparUnitRow}
+                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[10px] font-bold text-amber-800 bg-amber-50 hover:bg-amber-100 border border-amber-300 cursor-pointer shrink-0"
+                      >
+                        <Plus className="w-3 h-3" />
+                        <span>Tambah Rincian</span>
+                      </button>
+                    </div>
+
+                    {aparUnits.length > 0 && (
+                      <div className="space-y-2 p-2.5 rounded-xl bg-slate-50 border border-slate-200/90 max-h-44 overflow-y-auto">
+                        {aparUnits.map((unit) => (
+                          <div
+                            key={unit.id}
+                            className="p-2 rounded-lg bg-white border border-slate-200 space-y-1.5"
+                          >
+                            <div className="flex items-center gap-1.5">
+                              <input
+                                type="text"
+                                value={unit.brand}
+                                onChange={(e) =>
+                                  handleUpdateAparUnitRow(unit.id, { brand: e.target.value })
+                                }
+                                placeholder="Merk (Servvo...)"
+                                className="flex-1 min-w-0 px-2 py-1 text-[11px] font-semibold border border-slate-300 rounded-md"
+                              />
+                              <select
+                                value={unit.mediaType || 'ABC Powder'}
+                                onChange={(e) =>
+                                  handleUpdateAparUnitRow(unit.id, { mediaType: e.target.value })
+                                }
+                                className="px-1.5 py-1 text-[10px] font-semibold border border-slate-300 rounded-md bg-white"
+                              >
+                                <option value="ABC Powder">Powder</option>
+                                <option value="CO2">CO2 (Proj/Server)</option>
+                                <option value="Foam">Foam</option>
+                                <option value="Clean Agent">Clean Agent</option>
+                              </select>
+                              <input
+                                type="number"
+                                min={1}
+                                value={unit.qty || ''}
+                                onChange={(e) =>
+                                  handleUpdateAparUnitRow(unit.id, {
+                                    qty: Math.max(0, Number(e.target.value) || 0),
+                                  })
+                                }
+                                placeholder="Qty"
+                                className="w-14 px-2 py-1 text-[11px] font-bold text-right border border-slate-300 rounded-md tabular-nums"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => handleRemoveAparUnitRow(unit.id)}
+                                className="p-1 text-slate-400 hover:text-rose-600 cursor-pointer"
+                                title="Hapus baris"
+                              >
+                                <X className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                            <input
+                              type="text"
+                              value={unit.location || ''}
+                              onChange={(e) =>
+                                handleUpdateAparUnitRow(unit.id, { location: e.target.value })
+                              }
+                              placeholder="Lokasi (opsional, misal: Lobi, Projector, Dapur Cafe)"
+                              className="w-full px-2 py-1 text-[10px] border border-slate-200 rounded-md bg-slate-50/60"
+                            />
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 </div>
               ) : (
@@ -2072,6 +2679,188 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
             </div>
           </div>
         )}
+
+      {/* Modal Input Massal Khusus Submenu APAR */}
+      {showBulkAparModal && activeCategory === 'apar' && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 backdrop-blur-xs p-3 sm:p-5">
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl w-full max-w-5xl max-h-[92vh] flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+            <div className="px-5 py-4 bg-slate-900 text-white flex items-center justify-between shrink-0">
+              <div>
+                <div className="flex items-center gap-2">
+                  <Flame className="w-4 h-4 text-amber-400" />
+                  <span className="text-[10px] font-extrabold text-amber-400 uppercase tracking-wider">
+                    INPUT MASSAL DATA APAR PER OUTLET
+                  </span>
+                </div>
+                <h3 className="text-sm sm:text-base font-extrabold mt-0.5">
+                  Daftar Outlet, Jumlah APAR, Exp APAR &amp; Merk APAR
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowBulkAparModal(false)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form
+              onSubmit={handleSaveBulkAparModal}
+              className="flex flex-col flex-1 min-h-0"
+            >
+              <div className="px-5 py-2.5 bg-amber-50 border-b border-amber-200/80 text-[11px] text-amber-900 flex flex-wrap items-center justify-between gap-2 shrink-0">
+                <div className="flex items-center gap-2">
+                  <Info className="w-4 h-4 text-amber-600 shrink-0" />
+                  <span>
+                    Isi langsung <strong>Jumlah APAR</strong>, <strong>Exp APAR</strong>, dan{' '}
+                    <strong>Merk APAR</strong>. Jika <strong>Tgl Service</strong> dikosongkan, sistem otomatis menghitung 1 tahun (365 hari) sebelum Exp APAR.
+                  </span>
+                </div>
+                <div className="relative w-full sm:w-60">
+                  <Search className="w-3.5 h-3.5 text-amber-600 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                  <input
+                    type="text"
+                    value={bulkAparSearch}
+                    onChange={(e) => setBulkAparSearch(e.target.value)}
+                    placeholder="Cari outlet di daftar..."
+                    className="w-full pl-8 pr-3 py-1.5 text-xs bg-white border border-amber-300 rounded-lg text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-amber-500/30"
+                  />
+                </div>
+              </div>
+
+              <div className="flex-1 overflow-auto p-4">
+                <datalist id="apar-brand-presets">
+                  <option value="Servvo" />
+                  <option value="Gunnebo" />
+                  <option value="Yamato" />
+                  <option value="Chubb" />
+                  <option value="GuardALL" />
+                  <option value="Viking" />
+                </datalist>
+
+                <table className="w-full text-left border-collapse min-w-[700px]">
+                  <thead>
+                    <tr className="bg-slate-50 border-b border-slate-200 text-[10px] font-extrabold uppercase tracking-wider text-slate-600">
+                      <th className="py-2.5 px-3 w-10 text-center">No</th>
+                      <th className="py-2.5 px-3">Nama Outlet</th>
+                      <th className="py-2.5 px-3 w-28">Jumlah APAR</th>
+                      <th className="py-2.5 px-3 w-40">Exp APAR</th>
+                      <th className="py-2.5 px-3 w-44">Merk APAR</th>
+                      <th className="py-2.5 px-3 w-40">Tgl Service (Opsional)</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 text-xs">
+                    {bulkAparRows
+                      .filter((r) =>
+                        !bulkAparSearch.trim()
+                          ? true
+                          : r.displayName
+                              .toLowerCase()
+                              .includes(bulkAparSearch.trim().toLowerCase())
+                      )
+                      .map((row, idx) => (
+                      <tr key={row.outletId} className="hover:bg-slate-50/70">
+                        <td className="py-2 px-3 text-center font-bold text-slate-400 tabular-nums">
+                          {idx + 1}
+                        </td>
+                        <td className="py-2 px-3 font-extrabold text-slate-800 uppercase">
+                          {row.displayName}
+                        </td>
+                        <td className="py-2 px-3">
+                          <input
+                            type="number"
+                            min={0}
+                            value={row.qty}
+                            onChange={(e) =>
+                              handleUpdateBulkAparRow(row.outletId, {
+                                qty: e.target.value,
+                              })
+                            }
+                            placeholder="0"
+                            className="w-full px-2.5 py-1.5 text-xs font-bold border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500 tabular-nums"
+                          />
+                        </td>
+                        <td className="py-2 px-3">
+                          <input
+                            type="date"
+                            value={row.expDate}
+                            onChange={(e) =>
+                              handleUpdateBulkAparRow(row.outletId, {
+                                expDate: e.target.value,
+                              })
+                            }
+                            className="w-full px-2.5 py-1.5 text-xs font-semibold border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500"
+                          />
+                        </td>
+                        <td className="py-2 px-3">
+                          <input
+                            type="text"
+                            list="apar-brand-presets"
+                            value={row.brand}
+                            onChange={(e) =>
+                              handleUpdateBulkAparRow(row.outletId, {
+                                brand: e.target.value,
+                              })
+                            }
+                            placeholder="Servvo / Gunnebo..."
+                            className="w-full px-2.5 py-1.5 text-xs font-semibold border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500"
+                          />
+                        </td>
+                        <td className="py-2 px-3">
+                          <input
+                            type="date"
+                            value={row.serviceDate}
+                            onChange={(e) =>
+                              handleUpdateBulkAparRow(row.outletId, {
+                                serviceDate: e.target.value,
+                              })
+                            }
+                            className="w-full px-2.5 py-1.5 text-xs border border-slate-200 rounded-lg text-slate-600 focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500"
+                          />
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="px-5 py-3.5 bg-slate-50 border-t border-slate-200 flex flex-wrap items-center justify-between gap-2 shrink-0">
+                <div className="text-[11px] font-semibold text-slate-600">
+                  Total terisi:{' '}
+                  <strong className="text-slate-900">
+                    {
+                      bulkAparRows.filter(
+                        (r) =>
+                          Number(r.qty) > 0 ||
+                          r.expDate.trim() ||
+                          r.brand.trim()
+                      ).length
+                    }
+                  </strong>{' '}
+                  / {bulkAparRows.length} outlet
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowBulkAparModal(false)}
+                    className="px-4 py-2 rounded-xl text-xs font-bold text-slate-600 bg-white border border-slate-200 hover:bg-slate-100 transition-colors cursor-pointer"
+                  >
+                    Batal
+                  </button>
+                  <button
+                    type="submit"
+                    className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-extrabold text-slate-950 bg-amber-400 hover:bg-amber-500 shadow-xs transition-colors cursor-pointer"
+                  >
+                    <Save className="w-3.5 h-3.5" />
+                    <span>Simpan Semua Data APAR</span>
+                  </button>
+                </div>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* Modal Berita Acara Pengajuan Pencucian Karpet / Kursi / Gabungan */}
       {beritaAcaraTarget &&

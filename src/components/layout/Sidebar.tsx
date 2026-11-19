@@ -33,6 +33,7 @@ import {
   Sun,
   MapPin,
   Thermometer,
+  Flame,
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -450,6 +451,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 {renderSubMenuItem('maintenance_karpet', 'Karpet', Layers, 1)}
                 {renderSubMenuItem('maintenance_filter_air', 'Filter Air', Droplets, 2)}
                 {renderSubMenuItem('maintenance_lampu_uv', 'Lampu Uv', Sun, 3)}
+                {renderSubMenuItem('maintenance_apar', 'APAR', Flame, 4)}
               </>
             ))}
 
