@@ -526,10 +526,20 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
     }
   }, [activeCategory, selectedYear]);
 
+  const isOutletScopedRole = useMemo(() => {
+    const roleStr = String(currentUser.role || '').toLowerCase();
+    return (
+      roleStr === 'manager' ||
+      roleStr === 'cleaner' ||
+      roleStr === 'outlet' ||
+      roleStr === 'outlet_manager'
+    );
+  }, [currentUser.role]);
+
   // Base outlets permitted by role (includes APAR_EXTRA_OUTLETS ONLY when activeCategory === 'apar')
   const roleAllowedOutlets = useMemo(() => {
     const sourceOutlets: Outlet[] = [...outlets];
-    if (activeCategory === 'apar') {
+    if (activeCategory === 'apar' && !isOutletScopedRole) {
       const existingNormalizedNames = new Set(
         outlets.map((o) => formatOutletDisplayName(o, 'apar'))
       );
@@ -544,16 +554,24 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
       if (activeCategory === 'apar' && isExcludedFromApar(o)) {
         return false;
       }
-      const roleStr = String(currentUser.role);
-      if ((roleStr === 'outlet' || roleStr === 'outlet_manager') && currentUser.outletId) {
-        return o.id === currentUser.outletId;
+      if (isOutletScopedRole) {
+        return Boolean(currentUser.outletId) && o.id === currentUser.outletId;
       }
-      if ((roleStr === 'area' || roleStr === 'area_manager') && currentUser.areaId) {
-        return o.areaId === currentUser.areaId;
+      const roleStr = String(currentUser.role || '').toLowerCase();
+      if (roleStr === 'area' || roleStr === 'area_manager') {
+        if (
+          Array.isArray(currentUser.assignedAreas) &&
+          currentUser.assignedAreas.length > 0
+        ) {
+          return currentUser.assignedAreas.includes(o.areaId);
+        }
+        if (currentUser.areaId) {
+          return o.areaId === currentUser.areaId;
+        }
       }
       return true;
     });
-  }, [outlets, currentUser, activeCategory]);
+  }, [outlets, currentUser, activeCategory, isOutletScopedRole]);
 
   // Counts per Area for APAR Area Filter dropdown
   const aparAreaCounts = useMemo(() => {
@@ -579,7 +597,7 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
   // Filter outlets by user role + APAR area filter, then sort alphabetically by displayName
   const visibleOutlets = useMemo(() => {
     const list = roleAllowedOutlets.filter((o) => {
-      if (activeCategory === 'apar') {
+      if (activeCategory === 'apar' && !isOutletScopedRole && !currentUser.areaId) {
         if (aparAreaFilter === 'area-bogor-1-depok') {
           return o.areaId === 'area-bogor-1-depok';
         }
@@ -602,7 +620,7 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
         outletClass: getOutletClass(outlet),
       }))
       .sort((a, b) => a.displayName.localeCompare(b.displayName));
-  }, [roleAllowedOutlets, activeCategory, aparAreaFilter]);
+  }, [roleAllowedOutlets, activeCategory, aparAreaFilter, isOutletScopedRole, currentUser.areaId]);
 
   // Compute status & monthly schedule per outlet
   const todayStr = getTodayDateStr();
@@ -1991,6 +2009,7 @@ export const MaintenanceScheduleView: React.FC<MaintenanceScheduleViewProps> = (
             {/* Search, APAR Area Filter & Row Limit Controls */}
             <div className="flex flex-wrap items-center gap-2.5 shrink-0">
               {activeCategory === 'apar' &&
+                !isOutletScopedRole &&
                 !currentUser.outletId &&
                 !currentUser.areaId && (
                   <div className="inline-flex items-center gap-1.5 bg-slate-50/80 border border-slate-200 rounded-xl px-3 py-1.5">
