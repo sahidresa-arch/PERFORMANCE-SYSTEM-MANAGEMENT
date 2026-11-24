@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { User, ToiletInspectionRecord, ToiletChecklist } from '../../types';
 import { StorageService } from '../../lib/storage';
 import { CHECKLIST_ITEMS } from '../../lib/constants';
+import { APAR_EXTRA_OUTLETS } from '../../lib/data/aparExtraOutlets';
 import {
   ClipboardCheck,
   Save,
@@ -35,6 +36,13 @@ import {
   Cpu,
   Leaf,
   CheckSquare,
+  MapPin,
+  ChevronLeft,
+  ChevronRight,
+  ChevronDown,
+  ChevronUp,
+  Search,
+  X,
 } from 'lucide-react';
 
 interface ToiletInspectionProps {
@@ -85,6 +93,12 @@ const DEFAULT_CHECKLIST: ToiletChecklist = {
   calfresh: '',
 };
 
+const normalizeOutletBaseName = (name: string) => {
+  const raw = (name || '').trim().toUpperCase();
+  if (raw === 'CAFE BTM XXI') return 'BTM XXI BOGOR';
+  return raw.replace(/^(?:CAFE|DELUXE)\s+/i, '').trim();
+};
+
 const isExcludedFromToiletInspection = (outlet: { id: string; name: string }) => {
   const upperName = (outlet.name || '').toUpperCase();
   return (
@@ -105,28 +119,104 @@ export const ToiletInspection: React.FC<ToiletInspectionProps> = ({
 }) => {
   const [viewMode, setViewMode] = useState<'dashboard' | 'form'>(initialMode);
   const areas = useMemo(() => StorageService.getAreas(), []);
-  const rawOutlets = useMemo(
-    () => StorageService.getOutlets().filter((o) => !isExcludedFromToiletInspection(o)),
-    []
+  const roleStr = String(currentUser?.role || '').toLowerCase();
+  const isManagerOrCleaner = Boolean(
+    (roleStr === 'manager' || roleStr === 'cleaner' || roleStr === 'outlet' || roleStr === 'outlet_manager') &&
+      currentUser?.outletId
   );
-  const isManagerOrCleaner =
-    (currentUser?.role === 'manager' || currentUser?.role === 'cleaner') && currentUser?.outletId;
-  const outlets = useMemo(
-    () =>
-      isManagerOrCleaner
-        ? rawOutlets.filter((o) => o.id === currentUser.outletId)
-        : rawOutlets,
-    [isManagerOrCleaner, rawOutlets, currentUser?.outletId]
+  const hasAssignedAreas =
+    Array.isArray(currentUser?.assignedAreas) &&
+    currentUser.assignedAreas.length > 0;
+  const isAreaScoped = Boolean(
+    (roleStr === 'area' || roleStr === 'area_manager') &&
+      (hasAssignedAreas || currentUser?.areaId)
   );
 
-  // Filters for dashboard
+  const rawOutlets = useMemo(() => {
+    const baseOutlets = StorageService.getOutlets().filter(
+      (o) => !isExcludedFromToiletInspection(o)
+    );
+    if (isManagerOrCleaner || isAreaScoped) {
+      return [...baseOutlets].sort((a, b) => a.name.localeCompare(b.name));
+    }
+    const merged = [...baseOutlets];
+    const existingNames = new Set<string>();
+    baseOutlets.forEach((o) => {
+      existingNames.add((o.name || '').trim().toUpperCase());
+      existingNames.add(normalizeOutletBaseName(o.name));
+    });
+    APAR_EXTRA_OUTLETS.forEach((extra) => {
+      const upper = extra.name.trim().toUpperCase();
+      if (!existingNames.has(upper) && !isExcludedFromToiletInspection(extra)) {
+        merged.push(extra);
+      }
+    });
+    return merged.sort((a, b) => a.name.localeCompare(b.name));
+  }, [isManagerOrCleaner, isAreaScoped]);
+
+  const outlets = useMemo(() => {
+    if (isManagerOrCleaner) {
+      return rawOutlets.filter((o) => o.id === currentUser?.outletId);
+    }
+    if (isAreaScoped) {
+      if (hasAssignedAreas && currentUser?.assignedAreas) {
+        return rawOutlets.filter((o) =>
+          currentUser.assignedAreas!.includes(o.areaId)
+        );
+      }
+      if (currentUser?.areaId) {
+        return rawOutlets.filter((o) => o.areaId === currentUser.areaId);
+      }
+    }
+    return rawOutlets;
+  }, [
+    isManagerOrCleaner,
+    isAreaScoped,
+    hasAssignedAreas,
+    rawOutlets,
+    currentUser?.outletId,
+    currentUser?.areaId,
+    currentUser?.assignedAreas,
+  ]);
+
+  // Counts per Area (sama seperti APAR: Semua Area, Area Bogor 1 & Depok, Area Bogor 2, Belum Masuk Area)
+  const areaCounts = useMemo(() => {
+    const knownAreaIds = new Set(areas.map((a) => a.id));
+    let unassigned = 0;
+    const byAreaId: Record<string, number> = {};
+    areas.forEach((a) => {
+      byAreaId[a.id] = 0;
+    });
+    outlets.forEach((o) => {
+      if (o.areaId && knownAreaIds.has(o.areaId)) {
+        byAreaId[o.areaId] = (byAreaId[o.areaId] || 0) + 1;
+      } else {
+        unassigned += 1;
+      }
+    });
+    return {
+      all: outlets.length,
+      byAreaId,
+      unassigned,
+    };
+  }, [outlets, areas]);
+
+  // Filters for dashboard & form
   const [selectedAreaId, setSelectedAreaId] = useState<string>('');
   const [selectedOutletFilter, setSelectedOutletFilter] = useState<string>(
-    isManagerOrCleaner ? currentUser.outletId! : ''
+    isManagerOrCleaner ? currentUser!.outletId! : ''
   );
+  const [dashboardPage, setDashboardPage] = useState<number>(1);
+  const [dashboardPageSize, setDashboardPageSize] = useState<number>(20);
+  const [formAreaFilter, setFormAreaFilter] = useState<string>('');
 
-  // Tab for Notification Outlet Status
-  const [notifTab, setNotifTab] = useState<'pending' | 'partial' | 'complete'>('pending');
+  // Tab for Notification Outlet Status (default null / tertutup agar dashboard tetap ringkas)
+  const [notifTab, setNotifTab] = useState<'pending' | 'partial' | 'complete' | null>(null);
+  const [notifSearch, setNotifSearch] = useState<string>('');
+
+  // Tab & search untuk pengelompokan Temuan Kerusakan Point R (default null / tertutup)
+  const [selectedDamageGroup, setSelectedDamageGroup] = useState<string | null>(null);
+  const [damageSearch, setDamageSearch] = useState<string>('');
 
   // Form State
   const defaultOutletId =
@@ -135,6 +225,17 @@ export const ToiletInspection: React.FC<ToiletInspectionProps> = ({
       : '') || (outlets.length > 0 ? outlets[0].id : '');
   const [formOutletId, setFormOutletId] = useState<string>(defaultOutletId);
   const [formToiletType, setFormToiletType] = useState<'Pria' | 'Wanita'>('Pria');
+
+  const formFilteredOutlets = useMemo(() => {
+    const knownAreaIds = new Set(areas.map((a) => a.id));
+    if (!formAreaFilter || isManagerOrCleaner || isAreaScoped) {
+      return outlets;
+    }
+    if (formAreaFilter === 'unassigned') {
+      return outlets.filter((o) => !o.areaId || !knownAreaIds.has(o.areaId));
+    }
+    return outlets.filter((o) => o.areaId === formAreaFilter);
+  }, [outlets, areas, formAreaFilter, isManagerOrCleaner, isAreaScoped]);
 
   // Track if user explicitly clicked an already-completed Show to review/edit it
   const manualShowRef = React.useRef<string | null>(null);
@@ -558,20 +659,53 @@ export const ToiletInspection: React.FC<ToiletInspectionProps> = ({
     }, 4000);
   };
 
+  const areaScopedOutlets = useMemo(() => {
+    const knownAreaIds = new Set(areas.map((a) => a.id));
+    if (!selectedAreaId) return outlets;
+    if (selectedAreaId === 'unassigned') {
+      return outlets.filter((o) => !o.areaId || !knownAreaIds.has(o.areaId));
+    }
+    return outlets.filter((o) => o.areaId === selectedAreaId);
+  }, [outlets, areas, selectedAreaId]);
+
   const filteredOutlets = useMemo(
     () =>
-      outlets.filter((o) => {
-        const matchArea = selectedAreaId ? o.areaId === selectedAreaId : true;
+      areaScopedOutlets.filter((o) => {
         const matchOutlet = selectedOutletFilter ? o.id === selectedOutletFilter : true;
-        return matchArea && matchOutlet;
+        return matchOutlet;
       }),
-    [outlets, selectedAreaId, selectedOutletFilter]
+    [areaScopedOutlets, selectedOutletFilter]
   );
 
-  // Calculate detailed compliance per outlet (memoized so typing/clicking in form does zero work)
+  useEffect(() => {
+    setDashboardPage(1);
+  }, [selectedAreaId, selectedOutletFilter, dashboardPageSize]);
+
+  const dashboardTotalPages = Math.max(
+    1,
+    Math.ceil(filteredOutlets.length / dashboardPageSize)
+  );
+  const safeDashboardPage = Math.min(dashboardPage, dashboardTotalPages);
+  const dashboardStartIndex = (safeDashboardPage - 1) * dashboardPageSize;
+  const paginatedDashboardOutlets = useMemo(
+    () =>
+      filteredOutlets.slice(
+        dashboardStartIndex,
+        dashboardStartIndex + dashboardPageSize
+      ),
+    [filteredOutlets, dashboardStartIndex, dashboardPageSize]
+  );
+
+  const selectedAreaLabel = useMemo(() => {
+    if (!selectedAreaId) return 'Semua Area';
+    if (selectedAreaId === 'unassigned') return 'Belum Masuk Area';
+    return areas.find((a) => a.id === selectedAreaId)?.name || 'Area Terpilih';
+  }, [selectedAreaId, areas]);
+
+  // Calculate detailed compliance per outlet (mengikuti Filter Area / Outlet yang sedang aktif)
   const outletsCompliance = useMemo(
     () =>
-      outlets.map((o) => {
+      filteredOutlets.map((o) => {
         const outletInspections = inspections.filter((ins) => ins.outletId === o.id);
         const completedShowsPria = [1, 2, 3, 4, 5].filter((sNum) =>
           outletInspections.some((ins) => ins.type === 'Pria' && ins.showNumber === sNum)
@@ -602,7 +736,7 @@ export const ToiletInspection: React.FC<ToiletInspectionProps> = ({
           isComplete: uniqueShowsSubmitted === 5,
         };
       }),
-    [outlets, inspections]
+    [filteredOutlets, inspections]
   );
 
   const unreportedList = useMemo(
@@ -619,7 +753,7 @@ export const ToiletInspection: React.FC<ToiletInspectionProps> = ({
   );
 
   const compliancePercentage = Math.round(
-    ((outlets.length - unreportedList.length) / (outlets.length || 1)) * 100
+    ((filteredOutlets.length - unreportedList.length) / (filteredOutlets.length || 1)) * 100
   );
 
   // Filter laporan sesuai hak akses outlet (khusus Manager/Cleaner hanya menampilkan outlet masing-masing)
@@ -663,12 +797,56 @@ export const ToiletInspection: React.FC<ToiletInspectionProps> = ({
     };
   }, [scopedInspections]);
 
+  // Pengelompokan Point R (Rusak) berdasarkan jenis/kualifikasi item kerusakan
+  const damageQualificationGroups = useMemo(() => {
+    const groupMap = new Map<
+      string,
+      {
+        key: string;
+        label: string;
+        iconKey: string;
+        records: ToiletInspectionRecord[];
+      }
+    >();
+
+    reportsWithR.forEach((rRecord) => {
+      CHECKLIST_ITEMS.forEach((ci) => {
+        if (rRecord.checklist?.[ci.key as keyof ToiletChecklist] !== 'R') {
+          return;
+        }
+        const isFemaleDispenser =
+          ci.key === 'urinoir' && rRecord.type === 'Wanita';
+        const groupKey = isFemaleDispenser ? 'dispenser_fhu' : ci.key;
+        const groupLabel = isFemaleDispenser ? 'Dispenser FHU' : ci.label;
+        const existing = groupMap.get(groupKey);
+        if (existing) {
+          existing.records.push(rRecord);
+        } else {
+          groupMap.set(groupKey, {
+            key: groupKey,
+            label: groupLabel,
+            iconKey: ci.key,
+            records: [rRecord],
+          });
+        }
+      });
+    });
+
+    return Array.from(groupMap.values()).sort(
+      (a, b) =>
+        b.records.length - a.records.length || a.label.localeCompare(b.label)
+    );
+  }, [reportsWithR]);
+
   // Function to navigate directly to form with selected outlet (automatically picks valid sequential show)
   const handleDirectInspect = (
     outletId: string,
     preferredShow?: number,
     toiletType: 'Pria' | 'Wanita' = formToiletType
   ) => {
+    if (!formFilteredOutlets.some((o) => o.id === outletId)) {
+      setFormAreaFilter('');
+    }
     setFormOutletId(outletId);
     setFormToiletType(toiletType);
     const firstIncomplete = getFirstIncompleteShow(outletId, toiletType);
@@ -848,7 +1026,55 @@ export const ToiletInspection: React.FC<ToiletInspectionProps> = ({
           <div className="p-6 sm:p-8 rounded-3xl border border-slate-200/90 bg-white text-slate-800 shadow-sm transition">
             <form onSubmit={handleSaveInspection} className="space-y-6">
               {/* Form Metadata Selection Grid */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 p-5 rounded-2xl bg-amber-50/50 border border-amber-200/80">
+              <div
+                className={`grid grid-cols-1 sm:grid-cols-2 ${
+                  !isManagerOrCleaner && !isAreaScoped ? 'lg:grid-cols-5' : 'lg:grid-cols-4'
+                } gap-4 p-5 rounded-2xl bg-amber-50/50 border border-amber-200/80`}
+              >
+                {!isManagerOrCleaner && !isAreaScoped && (
+                  <div>
+                    <label className="text-[10px] font-extrabold text-slate-600 uppercase block mb-1.5 flex items-center space-x-1">
+                      <MapPin className="w-3 h-3 text-rose-500" />
+                      <span>FILTER AREA</span>
+                    </label>
+                    <select
+                      value={formAreaFilter}
+                      onChange={(e) => {
+                        const nextArea = e.target.value;
+                        setFormAreaFilter(nextArea);
+                        const knownAreaIds = new Set(areas.map((a) => a.id));
+                        const nextList = !nextArea
+                          ? outlets
+                          : nextArea === 'unassigned'
+                          ? outlets.filter((o) => !o.areaId || !knownAreaIds.has(o.areaId))
+                          : outlets.filter((o) => o.areaId === nextArea);
+                        if (
+                          nextList.length > 0 &&
+                          !nextList.some((o) => o.id === formOutletId)
+                        ) {
+                          const nextOutlet = nextList[0].id;
+                          manualShowRef.current = null;
+                          setFormOutletId(nextOutlet);
+                          setFormShowNumber(
+                            getFirstIncompleteShow(nextOutlet, formToiletType)
+                          );
+                        }
+                      }}
+                      className="w-full text-xs font-bold px-3 py-2.5 rounded-xl border border-slate-300 bg-white text-slate-900 focus:border-amber-500 focus:ring-1 focus:ring-amber-500 shadow-xs"
+                    >
+                      <option value="">Semua Area ({areaCounts.all})</option>
+                      {areas.map((a) => (
+                        <option key={a.id} value={a.id}>
+                          {a.name} ({areaCounts.byAreaId[a.id] || 0})
+                        </option>
+                      ))}
+                      <option value="unassigned">
+                        Belum Masuk Area ({areaCounts.unassigned})
+                      </option>
+                    </select>
+                  </div>
+                )}
+
                 <div>
                   <label className="text-[10px] font-extrabold text-slate-600 uppercase block mb-1.5 flex items-center space-x-1">
                     <Building2 className="w-3 h-3 text-amber-600" />
@@ -862,9 +1088,10 @@ export const ToiletInspection: React.FC<ToiletInspectionProps> = ({
                       setFormOutletId(nextOutlet);
                       setFormShowNumber(getFirstIncompleteShow(nextOutlet, formToiletType));
                     }}
-                    className="w-full text-xs font-bold px-3 py-2.5 rounded-xl border border-slate-300 bg-white text-slate-900 focus:border-amber-500 focus:ring-1 focus:ring-amber-500 shadow-xs"
+                    disabled={Boolean(isManagerOrCleaner)}
+                    className="w-full text-xs font-bold px-3 py-2.5 rounded-xl border border-slate-300 bg-white text-slate-900 focus:border-amber-500 focus:ring-1 focus:ring-amber-500 shadow-xs disabled:bg-slate-100 disabled:text-slate-600"
                   >
-                    {outlets.map((o) => (
+                    {formFilteredOutlets.map((o) => (
                       <option key={o.id} value={o.id}>
                         {o.name}
                       </option>
@@ -1244,8 +1471,9 @@ export const ToiletInspection: React.FC<ToiletInspectionProps> = ({
                     </div>
                     <p className="text-xs text-slate-600 font-medium mt-0.5">
                       Tanggal Laporan:{' '}
-                      <strong className="text-slate-900 font-extrabold">{selectedDate}</strong> &bull; Total
-                      Jaringan: <strong>{outlets.length} Outlet</strong>
+                      <strong className="text-slate-900 font-extrabold">{selectedDate}</strong> &bull; Filter Area:{' '}
+                      <strong>{selectedAreaLabel}</strong> &bull; Total:{' '}
+                      <strong>{filteredOutlets.length} Outlet</strong>
                     </p>
                   </div>
                 </div>
@@ -1257,7 +1485,7 @@ export const ToiletInspection: React.FC<ToiletInspectionProps> = ({
                       Tingkat Kepatuhan Area
                     </span>
                     <span className="text-xs font-black text-slate-900">
-                      {outlets.length - unreportedList.length} dari {outlets.length} Outlet ({compliancePercentage}%)
+                      {filteredOutlets.length - unreportedList.length} dari {filteredOutlets.length} Outlet ({compliancePercentage}%)
                     </span>
                   </div>
                   <div
@@ -1294,165 +1522,233 @@ export const ToiletInspection: React.FC<ToiletInspectionProps> = ({
                 </div>
               </div>
 
-              {/* Filter Subtabs for Notification Section */}
-              <div className="flex items-center space-x-2 pt-1 overflow-x-auto">
-                <button
-                  type="button"
-                  onClick={() => setNotifTab('pending')}
-                  className={`px-3.5 py-1.5 rounded-xl text-xs font-extrabold transition cursor-pointer flex items-center space-x-1.5 ${
-                    notifTab === 'pending'
-                      ? 'bg-amber-600 text-white shadow-xs'
-                      : 'bg-white text-slate-700 hover:bg-slate-100 border border-slate-200'
-                  }`}
-                >
-                  <AlertCircle className="w-3.5 h-3.5" />
-                  <span>Belum Ada Laporan ({unreportedList.length})</span>
-                </button>
+              {/* Filter Subtabs for Notification Section (klik untuk buka/tutup daftar outlet) */}
+              <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setNotifSearch('');
+                      setNotifTab((prev) => (prev === 'pending' ? null : 'pending'));
+                    }}
+                    className={`px-3.5 py-1.5 rounded-xl text-xs font-extrabold transition cursor-pointer flex items-center space-x-1.5 ${
+                      notifTab === 'pending'
+                        ? 'bg-amber-600 text-white shadow-xs'
+                        : 'bg-white text-slate-700 hover:bg-slate-100 border border-slate-200'
+                    }`}
+                  >
+                    <AlertCircle className="w-3.5 h-3.5" />
+                    <span>Belum Ada Laporan ({unreportedList.length})</span>
+                    {notifTab === 'pending' ? (
+                      <ChevronUp className="w-3.5 h-3.5 opacity-90" />
+                    ) : (
+                      <ChevronDown className="w-3.5 h-3.5 opacity-70" />
+                    )}
+                  </button>
 
-                <button
-                  type="button"
-                  onClick={() => setNotifTab('partial')}
-                  className={`px-3.5 py-1.5 rounded-xl text-xs font-extrabold transition cursor-pointer flex items-center space-x-1.5 ${
-                    notifTab === 'partial'
-                      ? 'bg-amber-600 text-white shadow-xs'
-                      : 'bg-white text-slate-700 hover:bg-slate-100 border border-slate-200'
-                  }`}
-                >
-                  <Clock className="w-3.5 h-3.5" />
-                  <span>Laporan Sebagian ({partialList.length})</span>
-                </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setNotifSearch('');
+                      setNotifTab((prev) => (prev === 'partial' ? null : 'partial'));
+                    }}
+                    className={`px-3.5 py-1.5 rounded-xl text-xs font-extrabold transition cursor-pointer flex items-center space-x-1.5 ${
+                      notifTab === 'partial'
+                        ? 'bg-amber-600 text-white shadow-xs'
+                        : 'bg-white text-slate-700 hover:bg-slate-100 border border-slate-200'
+                    }`}
+                  >
+                    <Clock className="w-3.5 h-3.5" />
+                    <span>Laporan Sebagian ({partialList.length})</span>
+                    {notifTab === 'partial' ? (
+                      <ChevronUp className="w-3.5 h-3.5 opacity-90" />
+                    ) : (
+                      <ChevronDown className="w-3.5 h-3.5 opacity-70" />
+                    )}
+                  </button>
 
-                <button
-                  type="button"
-                  onClick={() => setNotifTab('complete')}
-                  className={`px-3.5 py-1.5 rounded-xl text-xs font-extrabold transition cursor-pointer flex items-center space-x-1.5 ${
-                    notifTab === 'complete'
-                      ? 'bg-amber-600 text-white shadow-xs'
-                      : 'bg-white text-slate-700 hover:bg-slate-100 border border-slate-200'
-                  }`}
-                >
-                  <CheckCircle2 className="w-3.5 h-3.5" />
-                  <span>Lengkap 5 Show ({completeList.length})</span>
-                </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setNotifSearch('');
+                      setNotifTab((prev) => (prev === 'complete' ? null : 'complete'));
+                    }}
+                    className={`px-3.5 py-1.5 rounded-xl text-xs font-extrabold transition cursor-pointer flex items-center space-x-1.5 ${
+                      notifTab === 'complete'
+                        ? 'bg-emerald-600 text-white shadow-xs'
+                        : 'bg-white text-slate-700 hover:bg-slate-100 border border-slate-200'
+                    }`}
+                  >
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    <span>Lengkap 5 Show ({completeList.length})</span>
+                    {notifTab === 'complete' ? (
+                      <ChevronUp className="w-3.5 h-3.5 opacity-90" />
+                    ) : (
+                      <ChevronDown className="w-3.5 h-3.5 opacity-70" />
+                    )}
+                  </button>
+                </div>
+
+                {notifTab !== null ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setNotifTab(null);
+                      setNotifSearch('');
+                    }}
+                    className="px-2.5 py-1.5 rounded-xl text-[11px] font-bold text-slate-600 hover:text-slate-900 bg-white hover:bg-slate-100 border border-slate-200 transition cursor-pointer flex items-center space-x-1"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                    <span>Tutup Daftar</span>
+                  </button>
+                ) : (
+                  <span className="text-[11px] font-semibold text-amber-800/80">
+                    Klik tombol status di sebelah kiri untuk melihat daftar outlet
+                  </span>
+                )}
               </div>
 
-              {/* Grid Cards for Selected Filter Tab - Clean & Bordered */}
-              {notifTab === 'pending' && (
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 pt-1">
-                  {unreportedList.length === 0 ? (
-                    <div className="col-span-full p-4 rounded-2xl bg-emerald-50 border border-emerald-200 text-emerald-900 text-xs font-bold flex items-center justify-center space-x-2 text-center">
-                      <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                      <span>Hebat! Tidak ada outlet yang belum melapor sama sekali hari ini.</span>
-                    </div>
-                  ) : (
-                    unreportedList.map((item) => {
-                      const areaName = areas.find((a) => a.id === item.outlet.areaId)?.name || 'Area XXI';
-                      return (
-                        <div
-                          key={item.outlet.id}
-                          onClick={() => handleDirectInspect(item.outlet.id, 1)}
-                          className="p-3.5 rounded-2xl bg-white border border-slate-200 hover:border-amber-500 hover:shadow-xs transition cursor-pointer flex items-center justify-between gap-3 group"
-                          title="Klik untuk langsung mengisi ceklis outlet ini"
-                        >
-                          <div className="min-w-0 flex-1">
-                            <h5 className="font-extrabold text-slate-900 text-xs truncate group-hover:text-amber-700 transition">
-                              {item.outlet.name}
-                            </h5>
-                            <span className="text-[10px] text-slate-500 font-semibold block mt-0.5 truncate">
-                              {areaName}
-                            </span>
-                          </div>
-                          <div className="flex items-center space-x-2 shrink-0">
-                            <span className="px-2.5 py-1 rounded-xl bg-rose-50 text-rose-700 border border-rose-200 text-[10px] font-black">
-                              0 / 5 Show
-                            </span>
-                            <span className="p-1.5 rounded-lg bg-amber-500 text-white group-hover:scale-105 transition">
-                              <ArrowRight className="w-3.5 h-3.5" />
-                            </span>
-                          </div>
-                        </div>
-                      );
-                    })
-                  )}
-                </div>
-              )}
+              {/* Grid Cards for Selected Filter Tab (hanya tampil ketika salah satu tombol diklik) */}
+              {notifTab !== null && (() => {
+                const q = notifSearch.trim().toLowerCase();
+                const activeList =
+                  notifTab === 'pending'
+                    ? unreportedList
+                    : notifTab === 'partial'
+                    ? partialList
+                    : completeList;
+                const filteredActiveList = q
+                  ? activeList.filter((item) =>
+                      item.outlet.name.toLowerCase().includes(q)
+                    )
+                  : activeList;
 
-              {notifTab === 'partial' && (
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 pt-1">
-                  {partialList.length === 0 ? (
-                    <div className="col-span-full p-4 rounded-2xl bg-amber-50 border border-amber-200 text-amber-900 text-xs font-bold text-center">
-                      Tidak ada outlet dengan status laporan sebagian.
-                    </div>
-                  ) : (
-                    partialList.map((item) => {
-                      const areaName = areas.find((a) => a.id === item.outlet.areaId)?.name || 'Area XXI';
-                      const nextPendingShow = Math.min(item.uniqueShowsSubmitted + 1, 5);
-                      return (
-                        <div
-                          key={item.outlet.id}
-                          onClick={() => handleDirectInspect(item.outlet.id, nextPendingShow)}
-                          className="p-3.5 rounded-2xl bg-white border border-amber-200 hover:border-amber-500 hover:shadow-xs transition cursor-pointer flex items-center justify-between gap-3 group"
-                          title={`Klik untuk melanjutkan Show ${nextPendingShow}`}
-                        >
-                          <div className="min-w-0 flex-1">
-                            <h5 className="font-extrabold text-slate-900 text-xs truncate group-hover:text-amber-700 transition">
-                              {item.outlet.name}
-                            </h5>
-                            <span className="text-[10px] text-slate-500 font-semibold block mt-0.5 truncate">
-                              {areaName}
-                            </span>
-                          </div>
-                          <div className="flex items-center space-x-2 shrink-0">
-                            <span className="px-2.5 py-1 rounded-xl bg-amber-100 text-amber-900 border border-amber-300 text-[10px] font-black">
-                              {item.uniqueShowsSubmitted} / 5 Show
-                            </span>
-                            <span className="p-1.5 rounded-lg bg-slate-800 text-white group-hover:scale-105 transition">
-                              <ArrowRight className="w-3.5 h-3.5" />
-                            </span>
-                          </div>
+                return (
+                  <div className="pt-2 border-t border-amber-200/70 space-y-3 animate-in fade-in duration-150">
+                    {activeList.length > 0 && (
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="relative w-full sm:w-64">
+                          <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                          <input
+                            type="text"
+                            value={notifSearch}
+                            onChange={(e) => setNotifSearch(e.target.value)}
+                            placeholder="Cari nama outlet di daftar ini..."
+                            className="w-full pl-8 pr-7 py-1.5 text-xs font-semibold bg-white border border-amber-200 rounded-xl text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500"
+                          />
+                          {notifSearch && (
+                            <button
+                              type="button"
+                              onClick={() => setNotifSearch('')}
+                              className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
+                            >
+                              <X className="w-3 h-3" />
+                            </button>
+                          )}
                         </div>
-                      );
-                    })
-                  )}
-                </div>
-              )}
+                        <span className="text-[11px] font-bold text-slate-600">
+                          Menampilkan {filteredActiveList.length} dari {activeList.length} Outlet
+                        </span>
+                      </div>
+                    )}
 
-              {notifTab === 'complete' && (
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 pt-1">
-                  {completeList.length === 0 ? (
-                    <div className="col-span-full p-4 rounded-2xl bg-slate-50 border border-slate-200 text-slate-600 text-xs font-bold text-center">
-                      Belum ada outlet yang menyelesaikan seluruh 5 show hari ini.
-                    </div>
-                  ) : (
-                    completeList.map((item) => {
-                      const areaName = areas.find((a) => a.id === item.outlet.areaId)?.name || 'Area XXI';
-                      return (
-                        <div
-                          key={item.outlet.id}
-                          onClick={() => handleDirectInspect(item.outlet.id, 5)}
-                          className="p-3.5 rounded-2xl bg-emerald-50/40 border border-emerald-200 hover:border-emerald-400 hover:shadow-xs transition cursor-pointer flex items-center justify-between gap-3 group"
-                          title="Klik untuk melihat data laporan outlet ini"
-                        >
-                          <div className="min-w-0 flex-1">
-                            <h5 className="font-extrabold text-slate-900 text-xs truncate group-hover:text-emerald-800 transition">
-                              {item.outlet.name}
-                            </h5>
-                            <span className="text-[10px] text-slate-500 font-semibold block mt-0.5 truncate">
-                              {areaName}
-                            </span>
-                          </div>
-                          <div className="flex items-center space-x-2 shrink-0">
-                            <span className="px-2.5 py-1 rounded-xl bg-emerald-100 text-emerald-800 border border-emerald-300 text-[10px] font-black flex items-center space-x-1">
-                              <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-                              <span>5 / 5 Show</span>
-                            </span>
-                          </div>
+                    <div className="max-h-[340px] overflow-y-auto pr-1 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+                      {filteredActiveList.length === 0 ? (
+                        <div className="col-span-full p-4 rounded-2xl bg-white/80 border border-amber-200 text-slate-700 text-xs font-bold flex items-center justify-center space-x-2 text-center">
+                          <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                          <span>
+                            {q
+                              ? `Tidak ada outlet yang cocok dengan "${notifSearch}".`
+                              : notifTab === 'pending'
+                              ? 'Hebat! Tidak ada outlet yang belum melapor sama sekali hari ini.'
+                              : notifTab === 'partial'
+                              ? 'Tidak ada outlet dengan status laporan sebagian.'
+                              : 'Belum ada outlet yang menyelesaikan seluruh 5 show hari ini.'}
+                          </span>
                         </div>
-                      );
-                    })
-                  )}
-                </div>
-              )}
+                      ) : (
+                        filteredActiveList.map((item) => {
+                          const areaName =
+                            areas.find((a) => a.id === item.outlet.areaId)?.name ||
+                            'Belum Masuk Area';
+                          const nextPendingShow =
+                            notifTab === 'pending'
+                              ? 1
+                              : notifTab === 'partial'
+                              ? Math.min(item.uniqueShowsSubmitted + 1, 5)
+                              : 5;
+
+                          return (
+                            <div
+                              key={item.outlet.id}
+                              onClick={() =>
+                                handleDirectInspect(item.outlet.id, nextPendingShow)
+                              }
+                              className={`p-3.5 rounded-2xl transition cursor-pointer flex items-center justify-between gap-3 group ${
+                                notifTab === 'complete'
+                                  ? 'bg-emerald-50/60 border border-emerald-200 hover:border-emerald-400 hover:shadow-xs'
+                                  : notifTab === 'partial'
+                                  ? 'bg-white border border-amber-200 hover:border-amber-500 hover:shadow-xs'
+                                  : 'bg-white border border-slate-200 hover:border-amber-500 hover:shadow-xs'
+                              }`}
+                              title={
+                                notifTab === 'complete'
+                                  ? 'Klik untuk melihat data laporan outlet ini'
+                                  : notifTab === 'partial'
+                                  ? `Klik untuk melanjutkan Show ${nextPendingShow}`
+                                  : 'Klik untuk langsung mengisi ceklis outlet ini'
+                              }
+                            >
+                              <div className="min-w-0 flex-1">
+                                <h5
+                                  className={`font-extrabold text-slate-900 text-xs truncate transition ${
+                                    notifTab === 'complete'
+                                      ? 'group-hover:text-emerald-800'
+                                      : 'group-hover:text-amber-700'
+                                  }`}
+                                >
+                                  {item.outlet.name}
+                                </h5>
+                                <span className="text-[10px] text-slate-500 font-semibold block mt-0.5 truncate">
+                                  {areaName}
+                                </span>
+                              </div>
+                              <div className="flex items-center space-x-2 shrink-0">
+                                {notifTab === 'pending' && (
+                                  <>
+                                    <span className="px-2.5 py-1 rounded-xl bg-rose-50 text-rose-700 border border-rose-200 text-[10px] font-black">
+                                      0 / 5 Show
+                                    </span>
+                                    <span className="p-1.5 rounded-lg bg-amber-500 text-white group-hover:scale-105 transition">
+                                      <ArrowRight className="w-3.5 h-3.5" />
+                                    </span>
+                                  </>
+                                )}
+                                {notifTab === 'partial' && (
+                                  <>
+                                    <span className="px-2.5 py-1 rounded-xl bg-amber-100 text-amber-900 border border-amber-300 text-[10px] font-black">
+                                      {item.uniqueShowsSubmitted} / 5 Show
+                                    </span>
+                                    <span className="p-1.5 rounded-lg bg-slate-800 text-white group-hover:scale-105 transition">
+                                      <ArrowRight className="w-3.5 h-3.5" />
+                                    </span>
+                                  </>
+                                )}
+                                {notifTab === 'complete' && (
+                                  <span className="px-2.5 py-1 rounded-xl bg-emerald-100 text-emerald-800 border border-emerald-300 text-[10px] font-black flex items-center space-x-1">
+                                    <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                                    <span>5 / 5 Show</span>
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
           ) : (
             /* Celebration Banner when 100% of Outlets have Completed Inspection */
@@ -1471,7 +1767,7 @@ export const ToiletInspection: React.FC<ToiletInspectionProps> = ({
                     </span>
                   </div>
                   <p className="text-xs text-emerald-800 mt-1 font-medium">
-                    Seluruh <strong>{outlets.length} outlet</strong> di Area Bogor 1, Bogor 2 &amp; Depok
+                    Seluruh <strong>{filteredOutlets.length} outlet</strong> ({selectedAreaLabel})
                     telah menyelesaikan laporan inspeksi toilet pada tanggal <strong>{selectedDate}</strong>.
                   </p>
                 </div>
@@ -1524,54 +1820,226 @@ export const ToiletInspection: React.FC<ToiletInspectionProps> = ({
             </div>
           </div>
 
-          {/* Warning Error Banner if any checklist item has 'R' (Rusak) */}
+          {/* Warning Error Banner if any checklist item has 'R' (Rusak) — Terkelompok & Buka/Tutup */}
           {reportsWithR.length > 0 && (
-            <div className="p-5 rounded-2xl bg-rose-50 border-2 border-rose-300 text-rose-900 shadow-sm animate-in fade-in space-y-3">
-              <div className="flex items-center space-x-2.5 text-rose-800 font-extrabold text-xs uppercase tracking-wide">
-                <AlertTriangle className="w-5 h-5 text-rose-600 shrink-0" />
-                <span>⚠️ LAPORAN TEMUAN KERUSAKAN (POINT R - RUSAK) ({reportsWithR.length} SESI SHOW)</span>
+            <div className="p-5 rounded-2xl bg-rose-50 border-2 border-rose-300 text-rose-900 shadow-sm animate-in fade-in space-y-3.5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center space-x-2.5 text-rose-800 font-extrabold text-xs uppercase tracking-wide">
+                  <AlertTriangle className="w-5 h-5 text-rose-600 shrink-0" />
+                  <span>⚠️ LAPORAN TEMUAN KERUSAKAN (POINT R - RUSAK)</span>
+                  <span className="px-2.5 py-0.5 rounded-full bg-rose-200 text-rose-900 text-[11px] font-black border border-rose-300">
+                    {reportsWithR.length} SESI SHOW
+                  </span>
+                </div>
+                {selectedDamageGroup !== null ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedDamageGroup(null);
+                      setDamageSearch('');
+                    }}
+                    className="px-2.5 py-1 rounded-xl text-[11px] font-bold text-rose-800 hover:text-rose-950 bg-white hover:bg-rose-100 border border-rose-200 transition cursor-pointer flex items-center space-x-1"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                    <span>Tutup Daftar</span>
+                  </button>
+                ) : (
+                  <span className="text-[11px] font-semibold text-rose-700/90">
+                    Klik kualifikasi item di bawah untuk melihat daftar outlet yang rusak
+                  </span>
+                )}
               </div>
-              <p className="text-xs text-rose-700 font-medium">
-                Admin / Management Alert: Ditemukan peralatan/kondisi toilet bermasalah yang membutuhkan perbaikan segera.
-              </p>
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 pt-1">
-                {reportsWithR.map((rRecord) => {
-                  const outletName = outlets.find((o) => o.id === rRecord.outletId)?.name || rRecord.outletId;
-                  const damagedItems = CHECKLIST_ITEMS.filter(
-                    (ci) => rRecord.checklist?.[ci.key as keyof ToiletChecklist] === 'R'
-                  ).map((ci) => (ci.key === 'urinoir' && rRecord.type === 'Wanita' ? 'Dispenser FHU' : ci.label));
 
+              <p className="text-xs text-rose-700 font-medium">
+                Admin / Management Alert: Ditemukan peralatan/kondisi toilet bermasalah yang dikelompokkan berdasarkan jenis item agar perbaikan lebih terarah.
+              </p>
+
+              {/* Tombol Kualifikasi Kerusakan (klik untuk buka/tutup) */}
+              <div className="flex flex-wrap items-center gap-2 pt-0.5">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDamageSearch('');
+                    setSelectedDamageGroup((prev) =>
+                      prev === '__all__' ? null : '__all__'
+                    );
+                  }}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-extrabold transition cursor-pointer flex items-center space-x-1.5 ${
+                    selectedDamageGroup === '__all__'
+                      ? 'bg-rose-600 text-white shadow-xs'
+                      : 'bg-white text-rose-900 hover:bg-rose-100/80 border border-rose-200'
+                  }`}
+                >
+                  <AlertTriangle
+                    className={`w-3.5 h-3.5 ${
+                      selectedDamageGroup === '__all__' ? 'text-white' : 'text-rose-600'
+                    }`}
+                  />
+                  <span>Semua Temuan ({reportsWithR.length})</span>
+                  {selectedDamageGroup === '__all__' ? (
+                    <ChevronUp className="w-3.5 h-3.5 opacity-90" />
+                  ) : (
+                    <ChevronDown className="w-3.5 h-3.5 opacity-70" />
+                  )}
+                </button>
+
+                {damageQualificationGroups.map((grp) => {
+                  const isActive = selectedDamageGroup === grp.key;
                   return (
-                    <div
-                      key={rRecord.id}
-                      className="p-3.5 rounded-xl bg-white border border-rose-200 text-xs shadow-2xs space-y-1.5"
+                    <button
+                      key={grp.key}
+                      type="button"
+                      onClick={() => {
+                        setDamageSearch('');
+                        setSelectedDamageGroup((prev) =>
+                          prev === grp.key ? null : grp.key
+                        );
+                      }}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-extrabold transition cursor-pointer flex items-center space-x-1.5 ${
+                        isActive
+                          ? 'bg-rose-600 text-white shadow-xs'
+                          : 'bg-white text-slate-800 hover:bg-rose-100/70 border border-rose-200'
+                      }`}
                     >
-                      <div className="flex items-center justify-between font-black text-slate-900">
-                        <span>
-                          {outletName} ({rRecord.type === 'Pria' ? '🚹 Pria' : '🚺 Wanita'})
-                        </span>
-                        <span className="px-2 py-0.5 rounded-md bg-rose-100 text-rose-800 text-[10px] font-black border border-rose-300">
-                          Show {rRecord.showNumber}
-                        </span>
-                      </div>
-                      <div className="text-slate-700">
-                        <span className="font-bold text-rose-700">Point Rusak (R): </span>
-                        <span className="font-extrabold text-rose-900 underline">
-                          {damagedItems.join(', ') || 'Item Terkait'}
-                        </span>
-                      </div>
-                      {rRecord.notes && (
-                        <p className="text-slate-500 text-[11px] italic bg-slate-50 p-1.5 rounded-lg border border-slate-100">
-                          Catatan: &quot;{rRecord.notes}&quot;
-                        </p>
+                      <span
+                        className={`inline-flex items-center justify-center rounded-md p-0.5 ${
+                          isActive ? 'bg-white/95' : ''
+                        }`}
+                      >
+                        {getChecklistIcon(grp.iconKey)}
+                      </span>
+                      <span>
+                        {grp.label} ({grp.records.length})
+                      </span>
+                      {isActive ? (
+                        <ChevronUp className="w-3.5 h-3.5 opacity-90" />
+                      ) : (
+                        <ChevronDown className="w-3.5 h-3.5 opacity-70" />
                       )}
-                      <p className="text-[10px] text-slate-400 text-right">
-                        Pelapor: {rRecord.inspectorName} ({rRecord.time || '10:00'})
-                      </p>
-                    </div>
+                    </button>
                   );
                 })}
               </div>
+
+              {/* Daftar Kartu Temuan (hanya terbuka saat kualifikasi dipilih) */}
+              {selectedDamageGroup !== null && (() => {
+                const activeGroupObj =
+                  selectedDamageGroup === '__all__'
+                    ? null
+                    : damageQualificationGroups.find(
+                        (g) => g.key === selectedDamageGroup
+                      );
+                const sourceRecords = activeGroupObj
+                  ? activeGroupObj.records
+                  : reportsWithR;
+                const q = damageSearch.trim().toLowerCase();
+                const filteredDamageRecords = q
+                  ? sourceRecords.filter((rec) => {
+                      const oName = (
+                        outlets.find((o) => o.id === rec.outletId)?.name ||
+                        rec.outletId
+                      ).toLowerCase();
+                      return oName.includes(q);
+                    })
+                  : sourceRecords;
+
+                return (
+                  <div className="pt-3 border-t border-rose-200 space-y-3 animate-in fade-in duration-150">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="relative w-full sm:w-64">
+                        <Search className="w-3.5 h-3.5 text-rose-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                        <input
+                          type="text"
+                          value={damageSearch}
+                          onChange={(e) => setDamageSearch(e.target.value)}
+                          placeholder="Cari nama outlet di temuan ini..."
+                          className="w-full pl-8 pr-7 py-1.5 text-xs font-semibold bg-white border border-rose-200 rounded-xl text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-rose-500/30 focus:border-rose-500"
+                        />
+                        {damageSearch && (
+                          <button
+                            type="button"
+                            onClick={() => setDamageSearch('')}
+                            className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
+                          >
+                            <X className="w-3 h-3" />
+                          </button>
+                        )}
+                      </div>
+                      <span className="text-[11px] font-bold text-rose-800">
+                        {activeGroupObj ? `Kategori: ${activeGroupObj.label} • ` : ''}
+                        Menampilkan {filteredDamageRecords.length} dari {sourceRecords.length}{' '}
+                        Sesi Show
+                      </span>
+                    </div>
+
+                    <div className="max-h-[340px] overflow-y-auto pr-1 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                      {filteredDamageRecords.length === 0 ? (
+                        <div className="col-span-full p-4 rounded-xl bg-white border border-rose-200 text-rose-800 text-xs font-bold text-center">
+                          Tidak ada outlet temuan rusak yang cocok dengan &quot;{damageSearch}&quot;.
+                        </div>
+                      ) : (
+                        filteredDamageRecords.map((rRecord) => {
+                          const outletObj = outlets.find((o) => o.id === rRecord.outletId);
+                          const outletName = outletObj?.name || rRecord.outletId;
+                          const areaName =
+                            areas.find((a) => a.id === outletObj?.areaId)?.name ||
+                            'Belum Masuk Area';
+                          const damagedItems = CHECKLIST_ITEMS.filter(
+                            (ci) => rRecord.checklist?.[ci.key as keyof ToiletChecklist] === 'R'
+                          ).map((ci) =>
+                            ci.key === 'urinoir' && rRecord.type === 'Wanita'
+                              ? 'Dispenser FHU'
+                              : ci.label
+                          );
+
+                          return (
+                            <div
+                              key={`${selectedDamageGroup}_${rRecord.id}`}
+                              onClick={() =>
+                                handleDirectInspect(
+                                  rRecord.outletId,
+                                  rRecord.showNumber,
+                                  rRecord.type
+                                )
+                              }
+                              className="p-3.5 rounded-xl bg-white border border-rose-200 hover:border-rose-400 hover:shadow-xs text-xs shadow-2xs space-y-1.5 transition cursor-pointer group"
+                              title="Klik untuk membuka/mengedit laporan Show ini"
+                            >
+                              <div className="flex items-start justify-between gap-2 font-black text-slate-900">
+                                <div className="min-w-0">
+                                  <div className="truncate group-hover:text-rose-700 transition">
+                                    {outletName} ({rRecord.type === 'Pria' ? '🚹 Pria' : '🚺 Wanita'})
+                                  </div>
+                                  <div className="text-[10px] font-semibold text-slate-500 truncate">
+                                    {areaName}
+                                  </div>
+                                </div>
+                                <span className="px-2 py-0.5 rounded-md bg-rose-100 text-rose-800 text-[10px] font-black border border-rose-300 shrink-0">
+                                  Show {rRecord.showNumber}
+                                </span>
+                              </div>
+                              <div className="text-slate-700">
+                                <span className="font-bold text-rose-700">Point Rusak (R): </span>
+                                <span className="font-extrabold text-rose-900 underline">
+                                  {damagedItems.join(', ') || 'Item Terkait'}
+                                </span>
+                              </div>
+                              {rRecord.notes && (
+                                <p className="text-slate-500 text-[11px] italic bg-slate-50 p-1.5 rounded-lg border border-slate-100">
+                                  Catatan: &quot;{rRecord.notes}&quot;
+                                </p>
+                              )}
+                              <p className="text-[10px] text-slate-400 text-right">
+                                Pelapor: {rRecord.inspectorName} ({rRecord.time || '10:00'})
+                              </p>
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
           )}
 
@@ -1584,16 +2052,36 @@ export const ToiletInspection: React.FC<ToiletInspectionProps> = ({
                 </label>
                 <select
                   value={selectedAreaId}
-                  onChange={(e) => setSelectedAreaId(e.target.value)}
-                  disabled={Boolean(isManagerOrCleaner)}
+                  onChange={(e) => {
+                    const nextArea = e.target.value;
+                    setSelectedAreaId(nextArea);
+                    if (selectedOutletFilter) {
+                      const outletObj = outlets.find((o) => o.id === selectedOutletFilter);
+                      const knownAreaIds = new Set(areas.map((a) => a.id));
+                      const stillInArea =
+                        !nextArea ||
+                        (nextArea === 'unassigned'
+                          ? !outletObj?.areaId || !knownAreaIds.has(outletObj.areaId)
+                          : outletObj?.areaId === nextArea);
+                      if (!stillInArea) {
+                        setSelectedOutletFilter('');
+                      }
+                    }
+                  }}
+                  disabled={Boolean(isManagerOrCleaner || isAreaScoped)}
                   className="w-full text-xs font-bold px-3 py-2 rounded-xl border border-slate-300 bg-white text-slate-800 focus:border-amber-400 disabled:bg-slate-100 disabled:text-slate-500"
                 >
-                  <option value="">Semua Area</option>
+                  <option value="">Semua Area ({areaCounts.all})</option>
                   {areas.map((a) => (
                     <option key={a.id} value={a.id}>
-                      {a.name}
+                      {a.name} ({areaCounts.byAreaId[a.id] || 0})
                     </option>
                   ))}
+                  {!isAreaScoped && (
+                    <option value="unassigned">
+                      Belum Masuk Area ({areaCounts.unassigned})
+                    </option>
+                  )}
                 </select>
               </div>
 
@@ -1607,8 +2095,10 @@ export const ToiletInspection: React.FC<ToiletInspectionProps> = ({
                   disabled={Boolean(isManagerOrCleaner)}
                   className="w-full text-xs font-bold px-3 py-2 rounded-xl border border-slate-300 bg-white text-slate-800 focus:border-amber-400 disabled:bg-slate-100 disabled:text-slate-500"
                 >
-                  {!isManagerOrCleaner && <option value="">Semua Outlet</option>}
-                  {outlets.map((o) => (
+                  {!isManagerOrCleaner && (
+                    <option value="">Semua Outlet ({areaScopedOutlets.length})</option>
+                  )}
+                  {areaScopedOutlets.map((o) => (
                     <option key={o.id} value={o.id}>
                       {o.name}
                     </option>
@@ -1633,7 +2123,7 @@ export const ToiletInspection: React.FC<ToiletInspectionProps> = ({
                   type="button"
                   onClick={() => {
                     setSelectedAreaId('');
-                    setSelectedOutletFilter(isManagerOrCleaner ? currentUser.outletId! : '');
+                    setSelectedOutletFilter(isManagerOrCleaner ? currentUser!.outletId! : '');
                   }}
                   className="w-full py-2 px-3 rounded-xl border border-slate-300 text-xs font-bold text-slate-600 hover:text-slate-900 hover:bg-slate-50 transition cursor-pointer"
                 >
@@ -1645,13 +2135,31 @@ export const ToiletInspection: React.FC<ToiletInspectionProps> = ({
 
           {/* Table */}
           <div className="p-6 rounded-3xl border border-slate-200/90 bg-white shadow-xs overflow-hidden">
-            <div className="flex items-center space-x-2 mb-4">
-              <span className="p-1.5 rounded-lg bg-amber-100 text-amber-800 border border-amber-300">
-                <ClipboardCheck className="w-4 h-4" />
-              </span>
-              <h3 className="font-black text-sm uppercase tracking-wider text-slate-900">
-                HASIL MONITORING LAPORAN INSPEKSI TOILET PER SHOW
-              </h3>
+            <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+              <div className="flex items-center space-x-2">
+                <span className="p-1.5 rounded-lg bg-amber-100 text-amber-800 border border-amber-300">
+                  <ClipboardCheck className="w-4 h-4" />
+                </span>
+                <h3 className="font-black text-sm uppercase tracking-wider text-slate-900">
+                  HASIL MONITORING LAPORAN INSPEKSI TOILET PER SHOW
+                </h3>
+              </div>
+
+              <div className="inline-flex items-center gap-1.5 bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5">
+                <span className="text-[10px] font-bold uppercase text-slate-500">
+                  TAMPILKAN:
+                </span>
+                <select
+                  value={dashboardPageSize}
+                  onChange={(e) => setDashboardPageSize(Number(e.target.value))}
+                  className="text-xs font-extrabold text-slate-800 bg-transparent focus:outline-none cursor-pointer"
+                >
+                  <option value={20}>20 Outlet</option>
+                  <option value={50}>50 Outlet</option>
+                  <option value={100}>100 Outlet</option>
+                  <option value={9999}>Semua ({filteredOutlets.length})</option>
+                </select>
+              </div>
             </div>
 
             <div className="overflow-x-auto">
@@ -1672,8 +2180,9 @@ export const ToiletInspection: React.FC<ToiletInspectionProps> = ({
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 font-medium">
-                  {filteredOutlets.map((o) => {
-                    const areaName = areas.find((a) => a.id === o.areaId)?.name || o.areaId;
+                  {paginatedDashboardOutlets.map((o) => {
+                    const areaName =
+                      areas.find((a) => a.id === o.areaId)?.name || 'Belum Masuk Area';
                     return (['Pria', 'Wanita'] as const).map((toiletType) => {
                       // Calculate completed show count (out of 5)
                       const completedShowsCount = [1, 2, 3, 4, 5].filter((sNum) =>
@@ -1794,6 +2303,47 @@ export const ToiletInspection: React.FC<ToiletInspectionProps> = ({
                   })}
                 </tbody>
               </table>
+            </div>
+
+            {/* Table Footer Pagination */}
+            <div className="pt-4 mt-2 border-t border-slate-100 flex flex-wrap items-center justify-between gap-3">
+              <div className="text-[11px] text-slate-500 font-medium">
+                Menampilkan{' '}
+                <span className="font-bold text-slate-800">
+                  {filteredOutlets.length === 0 ? 0 : dashboardStartIndex + 1}
+                </span>{' '}
+                sampai{' '}
+                <span className="font-bold text-slate-800">
+                  {Math.min(dashboardStartIndex + dashboardPageSize, filteredOutlets.length)}
+                </span>{' '}
+                dari{' '}
+                <span className="font-bold text-slate-800">{filteredOutlets.length}</span>{' '}
+                Outlet
+              </div>
+
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  disabled={safeDashboardPage <= 1}
+                  onClick={() => setDashboardPage((p) => Math.max(1, p - 1))}
+                  className="w-7 h-7 rounded-lg border border-slate-200 flex items-center justify-center text-slate-500 hover:bg-slate-50 disabled:opacity-40 disabled:pointer-events-none cursor-pointer"
+                >
+                  <ChevronLeft className="w-3.5 h-3.5" />
+                </button>
+                <span className="text-[11px] font-bold text-slate-600 px-1.5 tabular-nums">
+                  Hal {safeDashboardPage} / {dashboardTotalPages}
+                </span>
+                <button
+                  type="button"
+                  disabled={safeDashboardPage >= dashboardTotalPages}
+                  onClick={() =>
+                    setDashboardPage((p) => Math.min(dashboardTotalPages, p + 1))
+                  }
+                  className="w-7 h-7 rounded-lg border border-slate-200 flex items-center justify-center text-slate-500 hover:bg-slate-50 disabled:opacity-40 disabled:pointer-events-none cursor-pointer"
+                >
+                  <ChevronRight className="w-3.5 h-3.5" />
+                </button>
+              </div>
             </div>
           </div>
         </div>

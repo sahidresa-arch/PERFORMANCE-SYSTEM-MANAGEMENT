@@ -347,6 +347,7 @@ export interface AparUnitEntry {
   mediaType?: string; // Jenis media (ABC Powder, CO2, Foam, Clean Agent)
   location?: string; // Lokasi penempatan (Lobi, Ruang Projector, Server, Cafe, Studio)
   qty: number; // Jumlah tabung
+  expDate?: string; // YYYY-MM-DD (Tanggal expired khusus baris ini)
 }
 
 export interface MaintenanceMonthEntry {
