@@ -54,10 +54,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onToggleCollapse,
 }) => {
   const isCleaner = currentUser?.role === 'cleaner';
+  const isQualityControl = currentUser?.role === 'quality_control';
   const isAdmin = currentUser?.role === 'admin';
 
   const getGroupForMenu = (menu: string): string | null => {
     if (isCleaner) return 'inspection';
+    if (isQualityControl) {
+      if (menu.startsWith('maintenance_')) return 'maintenance';
+      return 'inspection';
+    }
     if (menu.startsWith('sales_')) return 'sales';
     if (menu.startsWith('sdm_')) return 'sdm';
     if (menu.startsWith('occupancy_')) return 'occupancy';
@@ -78,7 +83,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     if (targetGroup) {
       setOpenGroup(targetGroup);
     }
-  }, [activeMenu, isCleaner]);
+  }, [activeMenu, isCleaner, isQualityControl]);
 
   const toggleGroup = (groupName: string) => {
     setOpenGroup((prev) => (prev === groupName ? null : groupName));
@@ -103,6 +108,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
         return 'Manager Outlet';
       case 'cleaner':
         return 'Cleaner Staff';
+      case 'quality_control':
+        return 'Quality Control';
       default:
         return 'XXI User';
     }
@@ -385,6 +392,33 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <ClipboardCheck className="w-4 h-4 shrink-0 transition-transform duration-200 group-hover:scale-110" />
               {!collapsed && <span className="truncate font-semibold">Dashboard Higienitas</span>}
             </button>
+          </div>
+        ) : isQualityControl ? (
+          <div className="space-y-1.5">
+            {!collapsed && (
+              <span className="px-3 text-[10px] font-bold text-[#6D28D9] uppercase tracking-wider block mb-1">
+                Akses Quality Control
+              </span>
+            )}
+
+            {/* CARD INSPECTION ACCORDION */}
+            {renderAccordionSection('inspection', 'Card Inspection', ClipboardCheck, isInspectionActive, (
+              <>
+                {renderSubMenuItem('inspection_dashboard', 'Dashboard Higienitas', LayoutDashboard, 0)}
+                {renderSubMenuItem('inspection_form', 'Form Inspeksi Toilet', CheckSquare, 1)}
+              </>
+            ))}
+
+            {/* MAINTENANCE ACCORDION */}
+            {renderAccordionSection('maintenance', 'Maintenance', Wrench, isMaintenanceActive, (
+              <>
+                {renderSubMenuItem('maintenance_kursi', 'Kursi Studio', Armchair, 0)}
+                {renderSubMenuItem('maintenance_karpet', 'Karpet', Layers, 1)}
+                {renderSubMenuItem('maintenance_filter_air', 'Filter Air', Droplets, 2)}
+                {renderSubMenuItem('maintenance_lampu_uv', 'Lampu Uv', Sun, 3)}
+                {renderSubMenuItem('maintenance_apar', 'APAR', Flame, 4)}
+              </>
+            ))}
           </div>
         ) : (
           <>

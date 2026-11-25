@@ -2,7 +2,7 @@ export interface User {
   id: string;
   username: string;
   name: string;
-  role: 'admin' | 'area_manager' | 'manager' | 'cleaner';
+  role: 'admin' | 'area_manager' | 'manager' | 'cleaner' | 'quality_control';
   outletId?: string; // If manager or cleaner, restricted to this outlet
   areaId?: string; // If area_manager, restricted to this area
   assignedAreas?: string[]; // Optional array of area IDs

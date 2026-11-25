@@ -21,6 +21,8 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({ user, onComplete }) 
         return 'Manager Outlet • Cinema Access';
       case 'cleaner':
         return 'Cleaner Staff • Hygiene Access';
+      case 'quality_control':
+        return 'Quality Control • Inspection & Maintenance';
       default:
         return 'XXI VIP Member';
     }
@@ -160,7 +162,13 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({ user, onComplete }) 
             <div className="flex items-center justify-between text-[10px] text-purple-200/80 font-semibold px-1">
               <span className="flex items-center space-x-1">
                 <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
-                <span>Menyiapkan Dashboard Eksekutif...</span>
+                <span>
+                  {user.role === 'quality_control'
+                    ? 'Menyiapkan Card Inspection & Maintenance...'
+                    : user.role === 'cleaner'
+                    ? 'Menyiapkan Form Inspeksi Toilet...'
+                    : 'Menyiapkan Dashboard Eksekutif...'}
+                </span>
               </span>
               <button
                 type="button"

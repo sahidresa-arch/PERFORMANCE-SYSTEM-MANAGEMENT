@@ -938,6 +938,15 @@ export const INITIAL_USERS: User[] = [
     password: 'admin123',
     isActive: true,
   },
+  {
+    id: 'user-quality-control',
+    username: 'Quality_control',
+    name: 'Quality Control XXI',
+    role: 'quality_control',
+    class: '-',
+    password: 'admin123',
+    isActive: true,
+  },
 
 ];
 

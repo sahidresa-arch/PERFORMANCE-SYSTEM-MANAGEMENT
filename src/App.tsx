@@ -38,13 +38,30 @@ function getTodayDateString(): string {
   return `${year}-${month}-${day}`;
 }
 
+function getDefaultMenuForRole(role?: User['role']): string {
+  if (role === 'cleaner') return 'inspection_form';
+  if (role === 'quality_control') return 'inspection_dashboard';
+  return 'dashboard';
+}
+
+function isMenuAllowedForUser(user: User | null, menu: string): boolean {
+  if (!user) return false;
+  if (user.role === 'cleaner') return menu.startsWith('inspection_');
+  if (user.role === 'quality_control') {
+    return menu.startsWith('inspection_') || menu.startsWith('maintenance_');
+  }
+  return true;
+}
+
 export default function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(() => {
     return StorageService.getCurrentUser();
   });
   const [showSplash, setShowSplash] = useState(false);
   const [selectedDate, setSelectedDate] = useState(() => getTodayDateString());
-  const [activeMenu, setActiveMenu] = useState('dashboard');
+  const [activeMenu, setActiveMenu] = useState(() =>
+    getDefaultMenuForRole(StorageService.getCurrentUser()?.role)
+  );
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isMapsQuotaExceeded, setIsMapsQuotaExceeded] = useState(false);
   const [collapsed, setCollapsed] = useState<boolean>(() => {
@@ -79,10 +96,10 @@ export default function App() {
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
-  // Guard for cleaner role: redirect automatically to inspection form
+  // Guard for restricted roles (cleaner & quality_control)
   useEffect(() => {
-    if (currentUser?.role === 'cleaner' && !activeMenu.startsWith('inspection_')) {
-      setActiveMenu('inspection_form');
+    if (currentUser && !isMenuAllowedForUser(currentUser, activeMenu)) {
+      setActiveMenu(getDefaultMenuForRole(currentUser.role));
     }
   }, [currentUser, activeMenu]);
 
@@ -166,6 +183,9 @@ export default function App() {
   };
 
   const handleMenuChange = (newMenu: string) => {
+    if (currentUser && !isMenuAllowedForUser(currentUser, newMenu)) {
+      return;
+    }
     setActiveMenu(newMenu);
     setSelectedDate(getTodayDateString());
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -178,7 +198,7 @@ export default function App() {
         onLoginSuccess={(user) => {
           setCurrentUser(user);
           setSelectedDate(getTodayDateString());
-          setActiveMenu('dashboard');
+          setActiveMenu(getDefaultMenuForRole(user.role));
           setShowSplash(true);
         }}
       />
@@ -270,7 +290,7 @@ export default function App() {
               className="w-full max-w-full"
             >
               {/* Dashboard */}
-              {activeMenu === 'dashboard' && (
+              {activeMenu === 'dashboard' && isMenuAllowedForUser(currentUser, 'dashboard') && (
                 <ExecutiveDashboard
                   currentUser={currentUser}
                   selectedDate={selectedDate}
@@ -280,7 +300,7 @@ export default function App() {
               )}
 
               {/* Sales System Submenus */}
-              {activeMenu === 'sales_input' && (
+              {activeMenu === 'sales_input' && isMenuAllowedForUser(currentUser, 'sales_input') && (
                 <InputDataSales
                   currentUser={currentUser}
                   selectedDate={selectedDate}
@@ -288,7 +308,7 @@ export default function App() {
                 />
               )}
 
-              {activeMenu === 'sales_rekap_daily' && (
+              {activeMenu === 'sales_rekap_daily' && isMenuAllowedForUser(currentUser, 'sales_rekap_daily') && (
                 <TabelRekapDaily
                   currentUser={currentUser}
                   selectedDate={selectedDate}
@@ -296,7 +316,7 @@ export default function App() {
                 />
               )}
 
-              {activeMenu === 'sales_performance' && (
+              {activeMenu === 'sales_performance' && isMenuAllowedForUser(currentUser, 'sales_performance') && (
                 <PerformanceDashboard
                   currentUser={currentUser}
                   selectedDate={selectedDate}
@@ -304,14 +324,14 @@ export default function App() {
                 />
               )}
 
-              {activeMenu === 'sales_baking' && (
+              {activeMenu === 'sales_baking' && isMenuAllowedForUser(currentUser, 'sales_baking') && (
                 <PenjualanBaking
                   currentUser={currentUser}
                   selectedDate={selectedDate}
                 />
               )}
 
-              {activeMenu === 'sales_kpi_summary' && (
+              {activeMenu === 'sales_kpi_summary' && isMenuAllowedForUser(currentUser, 'sales_kpi_summary') && (
                 <KPISummary
                   currentUser={currentUser}
                   selectedDate={selectedDate}
@@ -319,7 +339,7 @@ export default function App() {
                 />
               )}
 
-              {activeMenu === 'sales_google_slide' && (
+              {activeMenu === 'sales_google_slide' && isMenuAllowedForUser(currentUser, 'sales_google_slide') && (
                 <GoogleSlideKPI
                   selectedDate={selectedDate}
                   onDateChange={setSelectedDate}
@@ -327,7 +347,7 @@ export default function App() {
               )}
 
               {/* Performance SDM Submenus */}
-              {activeMenu === 'sdm_input' && (
+              {activeMenu === 'sdm_input' && isMenuAllowedForUser(currentUser, 'sdm_input') && (
                 <CashierPerformanceInput
                   currentUser={currentUser}
                   selectedDate={selectedDate}
@@ -336,7 +356,7 @@ export default function App() {
                 />
               )}
 
-              {activeMenu === 'sdm_leaderboard' && (
+              {activeMenu === 'sdm_leaderboard' && isMenuAllowedForUser(currentUser, 'sdm_leaderboard') && (
                 <CashierLeaderboard
                   currentUser={currentUser}
                   selectedDate={selectedDate}
@@ -345,7 +365,7 @@ export default function App() {
                 />
               )}
 
-              {activeMenu === 'sdm_beverage_category' && (
+              {activeMenu === 'sdm_beverage_category' && isMenuAllowedForUser(currentUser, 'sdm_beverage_category') && (
                 <CashierBeverageCategoryView
                   currentUser={currentUser}
                   selectedDate={selectedDate}
@@ -355,7 +375,7 @@ export default function App() {
               )}
 
               {/* Okupansi Rate Submenus */}
-              {activeMenu === 'occupancy_rekap' && (
+              {activeMenu === 'occupancy_rekap' && isMenuAllowedForUser(currentUser, 'occupancy_rekap') && (
                 <RekapOkupansi
                   currentUser={currentUser}
                   selectedDate={selectedDate}
@@ -363,16 +383,16 @@ export default function App() {
                 />
               )}
 
-              {activeMenu === 'occupancy_market_intel' && (
+              {activeMenu === 'occupancy_market_intel' && isMenuAllowedForUser(currentUser, 'occupancy_market_intel') && (
                 <MarketIntelligence currentUser={currentUser} />
               )}
 
-              {activeMenu === 'occupancy_movie_history' && (
+              {activeMenu === 'occupancy_movie_history' && isMenuAllowedForUser(currentUser, 'occupancy_movie_history') && (
                 <HistoryRekapFilm currentUser={currentUser} />
               )}
 
               {/* Card Inspection Submenus */}
-              {activeMenu === 'inspection_dashboard' && (
+              {activeMenu === 'inspection_dashboard' && isMenuAllowedForUser(currentUser, 'inspection_dashboard') && (
                 <ToiletInspection
                   currentUser={currentUser}
                   selectedDate={selectedDate}
@@ -381,7 +401,7 @@ export default function App() {
                 />
               )}
 
-              {activeMenu === 'inspection_form' && (
+              {activeMenu === 'inspection_form' && isMenuAllowedForUser(currentUser, 'inspection_form') && (
                 <ToiletInspection
                   currentUser={currentUser}
                   selectedDate={selectedDate}
@@ -391,7 +411,7 @@ export default function App() {
               )}
 
               {/* Accounting Submenus */}
-              {activeMenu === 'accounting_bopo' && (
+              {activeMenu === 'accounting_bopo' && isMenuAllowedForUser(currentUser, 'accounting_bopo') && (
                 <BopoView
                   currentUser={currentUser}
                   selectedDate={selectedDate}
@@ -399,14 +419,14 @@ export default function App() {
               )}
 
               {/* HC Area Submenus */}
-              {activeMenu === 'hc_employees' && (
+              {activeMenu === 'hc_employees' && isMenuAllowedForUser(currentUser, 'hc_employees') && (
                 <EmployeesView
                   currentUser={currentUser}
                   selectedDate={selectedDate}
                 />
               )}
 
-              {activeMenu === 'hc_kpi' && (
+              {activeMenu === 'hc_kpi' && isMenuAllowedForUser(currentUser, 'hc_kpi') && (
                 <KpiKaryawanView
                   currentUser={currentUser}
                   selectedDate={selectedDate}
@@ -414,33 +434,33 @@ export default function App() {
               )}
 
               {/* Maintenance Submenus */}
-              {activeMenu.startsWith('maintenance_') && (
+              {activeMenu.startsWith('maintenance_') && isMenuAllowedForUser(currentUser, activeMenu) && (
                 <MaintenanceScheduleView
                   currentUser={currentUser}
                   activeMenu={activeMenu}
                 />
               )}
 
-              {activeMenu === 'iot_monitoring' && (
+              {activeMenu === 'iot_monitoring' && isMenuAllowedForUser(currentUser, 'iot_monitoring') && (
                 <MonitoringSuhuView
                   currentUser={currentUser}
                   selectedDate={selectedDate}
                 />
               )}
 
-              {activeMenu === 'lost_and_found' && (
+              {activeMenu === 'lost_and_found' && isMenuAllowedForUser(currentUser, 'lost_and_found') && (
                 <LostAndFoundView
                   currentUser={currentUser}
                   selectedDate={selectedDate}
                 />
               )}
 
-              {activeMenu === 'google_review' && (
+              {activeMenu === 'google_review' && isMenuAllowedForUser(currentUser, 'google_review') && (
                 <GoogleReviewView currentUser={currentUser} />
               )}
 
               {/* Admin Management */}
-              {activeMenu === 'admin_users_outlets' && (
+              {activeMenu === 'admin_users_outlets' && isMenuAllowedForUser(currentUser, 'admin_users_outlets') && (
                 <UserOutletManagement
                   currentUser={currentUser}
                   onSessionReset={handleLogout}

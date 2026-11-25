@@ -72,10 +72,10 @@ export const UserOutletManagement: React.FC<UserOutletManagementProps> = ({
   const [newAreaName, setNewAreaName] = useState('');
   const [newAreaTarget, setNewAreaTarget] = useState<number>(25000);
 
-  // New User Form (Multi-role: admin, area_manager, manager, cleaner)
+  // New User Form (Multi-role: admin, area_manager, manager, cleaner, quality_control)
   const [newUsername, setNewUsername] = useState('');
   const [newUserName, setNewUserName] = useState('');
-  const [newUserRole, setNewUserRole] = useState<'admin' | 'area_manager' | 'manager' | 'cleaner'>('manager');
+  const [newUserRole, setNewUserRole] = useState<'admin' | 'area_manager' | 'manager' | 'cleaner' | 'quality_control'>('manager');
   const [newUserOutletId, setNewUserOutletId] = useState(outlets[0]?.id || '');
   const [newUserClass, setNewUserClass] = useState<string>(outlets[0]?.class || 'B');
   const [newUserAreaId, setNewUserAreaId] = useState(areas[0]?.id || '');
@@ -83,7 +83,7 @@ export const UserOutletManagement: React.FC<UserOutletManagementProps> = ({
   const [newUserPassword, setNewUserPassword] = useState('admin123');
 
   // User Role Filter State
-  const [selectedRoleFilter, setSelectedRoleFilter] = useState<'all' | 'admin' | 'area_manager' | 'manager' | 'cleaner'>('all');
+  const [selectedRoleFilter, setSelectedRoleFilter] = useState<'all' | 'admin' | 'area_manager' | 'manager' | 'cleaner' | 'quality_control'>('all');
   const [userSearchQuery, setUserSearchQuery] = useState('');
 
   // Reset Password State
@@ -94,7 +94,7 @@ export const UserOutletManagement: React.FC<UserOutletManagementProps> = ({
   const [editingUser, setEditingUser] = useState<User | null>(null);
   const [editUsername, setEditUsername] = useState('');
   const [editName, setEditName] = useState('');
-  const [editRole, setEditRole] = useState<'admin' | 'area_manager' | 'manager' | 'cleaner'>('manager');
+  const [editRole, setEditRole] = useState<'admin' | 'area_manager' | 'manager' | 'cleaner' | 'quality_control'>('manager');
   const [editOutletId, setEditOutletId] = useState('');
   const [editClass, setEditClass] = useState<string>('');
   const [editAreaId, setEditAreaId] = useState('');
@@ -394,6 +394,9 @@ export const UserOutletManagement: React.FC<UserOutletManagementProps> = ({
       } else if (u.role === 'manager' || u.role === 'cleaner') {
         scopeText = assignedOutlet?.name || u.outletId || '-';
         areaText = assignedArea?.name || '-';
+      } else if (u.role === 'quality_control') {
+        scopeText = 'Card Inspection & Maintenance (Semua Outlet)';
+        areaText = 'Semua Area';
       }
 
       return {
@@ -446,6 +449,8 @@ export const UserOutletManagement: React.FC<UserOutletManagementProps> = ({
         return 'Manager Outlet';
       case 'cleaner':
         return 'Cleaner (Toilet)';
+      case 'quality_control':
+        return 'Quality Control';
       default:
         return role;
     }
@@ -461,6 +466,8 @@ export const UserOutletManagement: React.FC<UserOutletManagementProps> = ({
         return 'bg-emerald-100 text-emerald-800 border-emerald-300';
       case 'cleaner':
         return 'bg-amber-100 text-amber-800 border-amber-300';
+      case 'quality_control':
+        return 'bg-cyan-100 text-cyan-800 border-cyan-300';
       default:
         return 'bg-slate-100 text-slate-800 border-slate-300';
     }
@@ -484,6 +491,7 @@ export const UserOutletManagement: React.FC<UserOutletManagementProps> = ({
   const countAreaManager = users.filter((u) => u.role === 'area_manager').length;
   const countManager = users.filter((u) => u.role === 'manager').length;
   const countCleaner = users.filter((u) => u.role === 'cleaner').length;
+  const countQualityControl = users.filter((u) => u.role === 'quality_control').length;
 
   return (
     <div className="space-y-6">
@@ -672,7 +680,7 @@ export const UserOutletManagement: React.FC<UserOutletManagementProps> = ({
                   onChange={(e) => {
                     const r = e.target.value as any;
                     setNewUserRole(r);
-                    if (r === 'admin' || r === 'area_manager') {
+                    if (r === 'admin' || r === 'area_manager' || r === 'quality_control') {
                       setNewUserClass('-');
                     } else {
                       const o = outlets.find((item) => item.id === newUserOutletId);
@@ -684,6 +692,7 @@ export const UserOutletManagement: React.FC<UserOutletManagementProps> = ({
                   <option value="manager">Manager (Akses Per Outlet)</option>
                   <option value="area_manager">Area Manager (Akses Per Area)</option>
                   <option value="cleaner">Cleaner (Akses Card Inspection)</option>
+                  <option value="quality_control">Quality Control (Inspection &amp; Maintenance)</option>
                   <option value="admin">Administrator (Akses Penuh System)</option>
                 </select>
               </div>
@@ -983,6 +992,20 @@ export const UserOutletManagement: React.FC<UserOutletManagementProps> = ({
               {countCleaner}
             </span>
           </button>
+
+          <button
+            onClick={() => setSelectedRoleFilter('quality_control')}
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center space-x-1.5 cursor-pointer ${
+              selectedRoleFilter === 'quality_control'
+                ? 'bg-cyan-600 text-white shadow-xs'
+                : 'bg-cyan-50 text-cyan-800 border border-cyan-200 hover:bg-cyan-100'
+            }`}
+          >
+            <span>Quality Control</span>
+            <span className={`px-1.5 py-0.2 rounded-full text-[10px] ${selectedRoleFilter === 'quality_control' ? 'bg-cyan-800 text-white' : 'bg-cyan-200 text-cyan-900'}`}>
+              {countQualityControl}
+            </span>
+          </button>
         </div>
 
         <div className="overflow-x-auto">
@@ -1029,6 +1052,8 @@ export const UserOutletManagement: React.FC<UserOutletManagementProps> = ({
                     }
                   } else if (u.role === 'manager' || u.role === 'cleaner') {
                     scopeText = `Outlet: ${assignedOutlet?.name || u.outletId || '-'}`;
+                  } else if (u.role === 'quality_control') {
+                    scopeText = 'Card Inspection & Maintenance (Semua Outlet)';
                   }
 
                   return (
@@ -1249,12 +1274,19 @@ export const UserOutletManagement: React.FC<UserOutletManagementProps> = ({
                 </label>
                 <select
                   value={editRole}
-                  onChange={(e) => setEditRole(e.target.value as any)}
+                  onChange={(e) => {
+                    const r = e.target.value as any;
+                    setEditRole(r);
+                    if (r === 'admin' || r === 'area_manager' || r === 'quality_control') {
+                      setEditClass('-');
+                    }
+                  }}
                   className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-[#faf9f6] text-slate-900 font-bold focus:border-purple-500 focus:bg-white"
                 >
                   <option value="manager">Manager (Akses Per Outlet)</option>
                   <option value="area_manager">Area Manager (Akses Per Area)</option>
                   <option value="cleaner">Cleaner (Akses Card Inspection)</option>
+                  <option value="quality_control">Quality Control (Inspection &amp; Maintenance)</option>
                   <option value="admin">Administrator (Akses Penuh System)</option>
                 </select>
               </div>
